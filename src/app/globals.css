@@ -20,6 +20,13 @@
   --tag-cyan: 185 70% 55%;
 }
 
+/* Fix Syne font descender clipping on page titles */
+h1 {
+  line-height: 1.4 !important;
+  overflow: visible !important;
+  padding-bottom: 0.05em;
+}
+
 /* Prose styles for blog posts */
 .prose {
   color: theme('colors.zinc.300');

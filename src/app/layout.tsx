@@ -1,10 +1,10 @@
 import type { Metadata } from 'next';
-import { Syne, JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { Outfit, JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 
-const syne = Syne({
+const outfit = Outfit({
   subsets: ['latin'],
   variable: '--font-display',
   weight: ['400', '600', '700', '800'],
@@ -58,7 +58,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${syne.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
+    <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
       <body className="min-h-screen bg-zinc-950 text-zinc-300 font-sans antialiased selection:bg-green-400/20 selection:text-green-300">
         <Navbar />
         <main className="mx-auto max-w-5xl px-6 py-12">{children}</main>
