@@ -54,11 +54,12 @@
 .prose code {
   font-family: var(--font-mono);
   font-size: 0.825em;
-  color: theme('colors.green.400');
-  background-color: theme('colors.green.400/8');
-  padding: 0.15em 0.4em;
+  color: theme('colors.zinc.200');
+  background-color: theme('colors.zinc.800');
+  padding: 0.15em 0.45em;
   border-radius: 0.25rem;
-  border: 1px solid theme('colors.green.400/15');
+  border: 1px solid theme('colors.zinc.700');
+  white-space: nowrap;
 }
 
 .prose pre {
@@ -71,11 +72,12 @@
 }
 
 .prose pre code {
-  background: none;
-  border: none;
-  padding: 0;
-  color: theme('colors.zinc.200');
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  color: theme('colors.zinc.200') !important;
   font-size: 0.85em;
+  white-space: pre;
 }
 
 .prose blockquote {
