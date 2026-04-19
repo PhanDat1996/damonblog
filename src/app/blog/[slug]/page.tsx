@@ -7,7 +7,7 @@ import TagBadge from '@/components/TagBadge';
 import ReadingProgress from '@/components/ReadingProgress';
 
 interface Props {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }
 
 export async function generateStaticParams() {
@@ -15,7 +15,8 @@ export async function generateStaticParams() {
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const post = await getPostWithHtml(params.slug);
+  const { slug } = await params;
+  const post = await getPostWithHtml(slug);
   if (!post) return {};
   return {
     title: post.title,
@@ -36,11 +37,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function BlogPostPage({ params }: Props) {
-  const post = await getPostWithHtml(params.slug);
+  const { slug } = await params;
+  const post = await getPostWithHtml(slug);
   if (!post) notFound();
 
   const allPosts = getAllPosts();
-  const currentIndex = allPosts.findIndex((p) => p.slug === params.slug);
+  const currentIndex = allPosts.findIndex((p) => p.slug === slug);
   const prev = currentIndex < allPosts.length - 1 ? allPosts[currentIndex + 1] : null;
   const next = currentIndex > 0 ? allPosts[currentIndex - 1] : null;
 

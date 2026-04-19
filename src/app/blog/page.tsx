@@ -9,11 +9,12 @@ export const metadata: Metadata = {
 };
 
 interface Props {
-  searchParams: { tag?: string };
+  searchParams: Promise<{ tag?: string }>;
 }
 
-export default function BlogPage({ searchParams }: Props) {
-  const activeTag = searchParams.tag ?? '';
+export default async function BlogPage({ searchParams }: Props) {
+  const { tag } = await searchParams;
+  const activeTag = tag ?? '';
   const allPosts = getAllPosts();
   const allTags = getAllTags();
 
