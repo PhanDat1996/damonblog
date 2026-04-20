@@ -5,22 +5,29 @@ import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { WebsiteJsonLd } from '@/components/JsonLd';
 
+// display: swap prevents invisible text while font loads
 const outfit = Outfit({
   subsets: ['latin'],
   variable: '--font-display',
   weight: ['400', '600', '700', '800'],
+  display: 'swap',
+  preload: true,
 });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-mono',
-  weight: ['300', '400', '500', '600'],
+  weight: ['400', '500', '600'],  // removed 300 — unused weight
+  display: 'swap',
+  preload: false,  // mono font is not above-the-fold critical
 });
 
 const ibmPlexSans = IBM_Plex_Sans({
   subsets: ['latin'],
   variable: '--font-sans',
-  weight: ['300', '400', '500', '600'],
+  weight: ['400', '500', '600'],  // removed 300 — unused weight
+  display: 'swap',
+  preload: false,
 });
 
 export const metadata: Metadata = {
@@ -42,7 +49,7 @@ export const metadata: Metadata = {
     'time_wait',
     'security operations',
   ],
-  authors: [{ name: 'Damon', url: 'https://damonsec.com/about' }],
+  authors: [{ name: 'Damon', url: 'https://www.damonsec.com/about' }],
   creator: 'Damon',
   icons: {
     icon: '/favicon.svg',
@@ -51,7 +58,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://damonsec.com',
+    url: 'https://www.damonsec.com',
     siteName: 'damonsec.com',
     title: 'Damon — DevOps, NGINX & Linux Troubleshooting',
     description:
@@ -65,7 +72,7 @@ export const metadata: Metadata = {
     creator: '@damonsec',
   },
   alternates: {
-    canonical: 'https://damonsec.com',
+    canonical: 'https://www.damonsec.com',
   },
   robots: {
     index: true,
@@ -83,6 +90,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
+      <head>
+        {/* Preconnect to Google Fonts to reduce latency */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+      </head>
       <body className="min-h-screen bg-zinc-950 text-zinc-300 font-sans antialiased selection:bg-green-400/20 selection:text-green-300">
         <WebsiteJsonLd />
         <Navbar />

@@ -11,7 +11,7 @@ const config: Config = {
       fontFamily: {
         mono: ['var(--font-mono)', 'JetBrains Mono', 'Fira Code', 'monospace'],
         sans: ['var(--font-sans)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
-        display: ['var(--font-display)', 'Syne', 'sans-serif'],
+        display: ['var(--font-display)', 'Outfit Fallback', 'Arial', 'sans-serif'],
       },
       colors: {
         background: 'hsl(var(--background))',

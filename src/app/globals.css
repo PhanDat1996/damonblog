@@ -179,3 +179,13 @@ html { scroll-behavior: smooth; }
 ::-webkit-scrollbar-track { background: theme('colors.zinc.950'); }
 ::-webkit-scrollbar-thumb { background: theme('colors.zinc.700'); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: theme('colors.zinc.500'); }
+
+/* Performance: reduce LCP by hinting browser about font size */
+@font-face {
+  font-family: 'Outfit Fallback';
+  src: local('Arial');
+  size-adjust: 103%;
+  ascent-override: 95%;
+  descent-override: normal;
+  line-gap-override: normal;
+}
