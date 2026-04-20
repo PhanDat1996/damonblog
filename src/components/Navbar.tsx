@@ -41,7 +41,7 @@ export default function Navbar() {
                     'px-4 py-2 rounded-md font-mono text-sm transition-all duration-200',
                     active
                       ? 'text-green-400 bg-green-400/10'
-                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                      : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
                   )}
                 >
                   {label}

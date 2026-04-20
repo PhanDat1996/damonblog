@@ -22,7 +22,7 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
               Featured
             </span>
             <span className="text-zinc-700">·</span>
-            <span className="font-mono text-[10px] text-zinc-500">{post.readingTime}</span>
+            <span className="font-mono text-[10px] text-zinc-400">{post.readingTime}</span>
           </div>
 
           <h2 className="mb-3 text-xl font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200 line-clamp-2">

@@ -90,11 +90,6 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
-      <head>
-        {/* Preconnect to Google Fonts to reduce latency */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-      </head>
       <body className="min-h-screen bg-zinc-950 text-zinc-200 font-sans antialiased selection:bg-green-400/20 selection:text-green-300">
         <WebsiteJsonLd />
         <Navbar />

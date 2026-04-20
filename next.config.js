@@ -2,8 +2,6 @@
 const nextConfig = {
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
-  // Target modern browsers — eliminates legacy JS polyfills (saves ~12KB)
-  // Array.at, Object.fromEntries, etc. are native in all modern browsers
   experimental: {
     optimizePackageImports: ['@/components'],
   },
@@ -22,8 +20,7 @@ const nextConfig = {
         ],
       },
       {
-        // Aggressive caching for static assets
-        source: '/(.*)\\.(svg|ico|png|jpg|jpeg|webp|woff|woff2|js|css)',
+        source: '/(.*)\\.(svg|ico|png|jpg|jpeg|webp|woff|woff2)',
         headers: [
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],

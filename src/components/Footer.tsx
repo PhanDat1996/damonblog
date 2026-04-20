@@ -24,7 +24,7 @@ export default function Footer() {
               <Link
                 key={href}
                 href={href}
-                className="font-mono text-xs text-zinc-500 hover:text-green-400 transition-colors"
+                className="font-mono text-xs text-zinc-400 hover:text-green-400 transition-colors"
               >
                 {label}
               </Link>

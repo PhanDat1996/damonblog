@@ -137,7 +137,7 @@ export default function AboutPage() {
           <h2 className="font-display text-xl font-bold text-white mb-1">
             What This Blog Is About
           </h2>
-          <p className="text-zinc-500 text-sm">
+          <p className="text-zinc-400 text-sm">
             Infrastructure troubleshooting, Linux systems, networking behavior, and production debugging.
           </p>
         </div>

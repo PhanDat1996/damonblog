@@ -93,7 +93,7 @@ export default async function BlogPostPage({ params }: Props) {
 
           <p className="text-lg text-zinc-400 leading-relaxed">{post.excerpt}</p>
 
-          <div className="flex items-center gap-4 font-mono text-xs text-zinc-500 border-t border-b border-zinc-800 py-4">
+          <div className="flex items-center gap-4 font-mono text-xs text-zinc-400 border-t border-b border-zinc-800 py-4">
             <span>{formatDate(post.date)}</span>
             <span className="text-zinc-700">·</span>
             <span>{post.readingTime}</span>
@@ -125,7 +125,7 @@ export default async function BlogPostPage({ params }: Props) {
               href={`/blog/${prev.slug}`}
               className="group rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 transition-all"
             >
-              <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-2">← Previous</p>
+              <p className="font-mono text-[10px] text-zinc-400 uppercase tracking-widest mb-2">← Previous</p>
               <p className="text-sm font-semibold text-white group-hover:text-green-400 transition-colors line-clamp-2">
                 {prev.title}
               </p>
@@ -136,7 +136,7 @@ export default async function BlogPostPage({ params }: Props) {
               href={`/blog/${next.slug}`}
               className="group rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 transition-all sm:text-right"
             >
-              <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-2">Next →</p>
+              <p className="font-mono text-[10px] text-zinc-400 uppercase tracking-widest mb-2">Next →</p>
               <p className="text-sm font-semibold text-white group-hover:text-green-400 transition-colors line-clamp-2">
                 {next.title}
               </p>

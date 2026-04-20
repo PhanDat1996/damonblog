@@ -42,7 +42,7 @@ export default async function BlogPage({ searchParams }: Props) {
 
       {/* Tag filters */}
       <div>
-        <p className="font-mono text-xs text-zinc-500 mb-3 uppercase tracking-widest">Filter by topic</p>
+        <p className="font-mono text-xs text-zinc-400 mb-3 uppercase tracking-widest">Filter by topic</p>
         <div className="flex flex-wrap gap-2">
           <a
             href="/blog"

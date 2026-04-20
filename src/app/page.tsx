@@ -133,7 +133,7 @@ export default function HomePage() {
         </div>
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">
-          <p className="font-mono text-xs text-zinc-500 uppercase tracking-widest">About Damon</p>
+          <p className="font-mono text-xs text-zinc-400 uppercase tracking-widest">About Damon</p>
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold text-white">Senior Technical Support Engineer</p>
           </div>
@@ -164,7 +164,7 @@ export default function HomePage() {
             <h2 className="font-display text-2xl font-bold text-white">
               Featured Articles
             </h2>
-            <p className="text-zinc-500 text-sm mt-1">
+            <p className="text-zinc-400 text-sm mt-1">
               In-depth guides on NGINX troubleshooting, Linux networking, and production debugging
             </p>
           </div>
@@ -193,7 +193,7 @@ export default function HomePage() {
               <p className="text-xs text-zinc-400 leading-relaxed flex-1">
                 {article.description}
               </p>
-              <span className="font-mono text-xs text-zinc-600 group-hover:text-green-400 transition-colors">
+              <span className="font-mono text-xs text-zinc-400 group-hover:text-green-400 transition-colors">
                 Read article →
               </span>
             </Link>
@@ -239,7 +239,7 @@ export default function HomePage() {
             <h2 className="font-display text-2xl font-bold text-white">
               Latest Articles
             </h2>
-            <p className="text-zinc-500 text-sm mt-1">
+            <p className="text-zinc-400 text-sm mt-1">
               Most recent posts on DevOps, Linux, NGINX, and production debugging
             </p>
           </div>
@@ -270,7 +270,7 @@ export default function HomePage() {
                     <TagBadge key={tag} tag={tag} linked={false} size="sm" />
                   ))}
                 </div>
-                <span className="font-mono text-xs text-zinc-600 group-hover:text-green-400 transition-colors whitespace-nowrap">
+                <span className="font-mono text-xs text-zinc-400 group-hover:text-green-400 transition-colors whitespace-nowrap">
                   {post.readingTime}
                 </span>
               </div>
