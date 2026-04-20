@@ -24,7 +24,7 @@ const ibmPlexSans = IBM_Plex_Sans({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://damonsec.com'),
+  metadataBase: new URL('https://www.damonsec.com'),
   title: {
     default: 'Damon — DevOps, NGINX & Linux Troubleshooting',
     template: '%s | damonsec.com',
