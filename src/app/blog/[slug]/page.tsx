@@ -50,7 +50,7 @@ export default async function BlogPostPage({ params }: Props) {
     <>
       <ReadingProgress />
 
-      <article className="mx-auto max-w-2xl overflow-visible">
+      <article className="mx-auto max-w-2xl">
         {/* Back link */}
         <div className="mb-10">
           <Link
@@ -62,14 +62,14 @@ export default async function BlogPostPage({ params }: Props) {
         </div>
 
         {/* Post header */}
-        <header className="mb-10 space-y-5 overflow-visible">
+        <header className="mb-10 space-y-5">
           <div className="flex flex-wrap gap-1.5">
             {post.tags.map((tag) => (
               <TagBadge key={tag} tag={tag} size="md" />
             ))}
           </div>
 
-          <h1 className="font-display text-2xl md:text-4xl font-bold leading-tight tracking-tight text-white break-words overflow-visible">
+          <h1 className="font-display text-3xl md:text-4xl font-bold leading-[1.15] tracking-tight text-white">
             {post.title}
           </h1>
 
