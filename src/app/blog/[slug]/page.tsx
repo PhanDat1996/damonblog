@@ -5,6 +5,9 @@ import { getAllSlugs, getPostWithHtml, getAllPosts } from '@/lib/posts';
 import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
 import ReadingProgress from '@/components/ReadingProgress';
+import { BlogPostJsonLd } from '@/components/JsonLd';
+
+const BASE_URL = 'https://damonsec.com';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -18,20 +21,33 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const post = await getPostWithHtml(slug);
   if (!post) return {};
+
+  const url = `${BASE_URL}/blog/${slug}`;
+
   return {
     title: post.title,
     description: post.excerpt,
+    keywords: post.tags,
+    authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],
+    alternates: {
+      canonical: url,
+    },
     openGraph: {
       title: post.title,
       description: post.excerpt,
       type: 'article',
+      url,
       publishedTime: post.date,
+      modifiedTime: post.date,
+      authors: [`${BASE_URL}/about`],
       tags: post.tags,
+      siteName: 'damonsec.com',
     },
     twitter: {
       card: 'summary_large_image',
       title: post.title,
       description: post.excerpt,
+      creator: '@damonsec',
     },
   };
 }
@@ -41,6 +57,7 @@ export default async function BlogPostPage({ params }: Props) {
   const post = await getPostWithHtml(slug);
   if (!post) notFound();
 
+  const url = `${BASE_URL}/blog/${slug}`;
   const allPosts = getAllPosts();
   const currentIndex = allPosts.findIndex((p) => p.slug === slug);
   const prev = currentIndex < allPosts.length - 1 ? allPosts[currentIndex + 1] : null;
@@ -49,6 +66,7 @@ export default async function BlogPostPage({ params }: Props) {
   return (
     <>
       <ReadingProgress />
+      <BlogPostJsonLd post={post} url={url} />
 
       <article className="mx-auto max-w-2xl">
         {/* Back link */}
@@ -69,7 +87,7 @@ export default async function BlogPostPage({ params }: Props) {
             ))}
           </div>
 
-          <h1 className="font-display text-3xl md:text-4xl font-bold leading-[1.15] tracking-tight text-white">
+          <h1 className="font-display text-2xl md:text-4xl font-bold leading-tight tracking-tight text-white break-words overflow-visible">
             {post.title}
           </h1>
 
@@ -80,7 +98,7 @@ export default async function BlogPostPage({ params }: Props) {
             <span className="text-zinc-700">·</span>
             <span>{post.readingTime}</span>
             <span className="text-zinc-700">·</span>
-            <span className="text-green-400">Damon</span>
+            <Link href="/about" className="text-green-400 hover:underline">Damon</Link>
           </div>
         </header>
 
@@ -90,7 +108,7 @@ export default async function BlogPostPage({ params }: Props) {
           dangerouslySetInnerHTML={{ __html: post.content ?? '' }}
         />
 
-        {/* Post footer */}
+        {/* Post footer tags */}
         <div className="mt-14 border-t border-zinc-800 pt-8 space-y-4">
           <p className="font-mono text-xs text-zinc-500 uppercase tracking-widest">Tags</p>
           <div className="flex flex-wrap gap-2">
@@ -101,7 +119,7 @@ export default async function BlogPostPage({ params }: Props) {
         </div>
 
         {/* Prev / Next navigation */}
-        <nav className="mt-10 grid sm:grid-cols-2 gap-4">
+        <nav className="mt-10 grid sm:grid-cols-2 gap-4" aria-label="Post navigation">
           {prev && (
             <Link
               href={`/blog/${prev.slug}`}
