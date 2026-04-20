@@ -23,35 +23,39 @@ const ibmPlexSans = IBM_Plex_Sans({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://damon.sec'),
+  metadataBase: new URL('https://damonsec.com'),
   title: {
-    default: 'damon.sec — Cybersecurity & Infrastructure',
-    template: '%s | damon.sec',
+    default: 'Damon — DevOps, NGINX & Linux Troubleshooting',
+    template: '%s | damonsec.com',
   },
   description:
-    'Technical writing on cybersecurity, infrastructure engineering, NGINX, Docker, production debugging, and security operations.',
+    'In-depth guides on NGINX 502 debugging, Linux TIME_WAIT exhaustion, Docker infrastructure, and production incident response. Written by a senior DevOps engineer from real-world systems.',
   keywords: [
-    'cybersecurity',
-    'security operations',
-    'nginx',
+    'nginx troubleshooting',
+    'linux debugging',
+    '502 bad gateway',
     'docker',
-    'linux',
-    'infrastructure',
-    'troubleshooting',
-    'production debugging',
+    'infrastructure debugging',
+    'production incidents',
+    'devops',
+    'security operations',
   ],
   authors: [{ name: 'Damon' }],
+  icons: {
+    icon: '/favicon.svg',
+    shortcut: '/favicon.svg',
+  },
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    siteName: 'damon.sec',
-    title: 'damon.sec — Cybersecurity & Infrastructure',
+    siteName: 'damonsec.com',
+    title: 'Damon — DevOps, NGINX & Linux Troubleshooting',
     description:
-      'Technical writing on cybersecurity, infrastructure engineering, NGINX, Docker, production debugging, and security operations.',
+      'In-depth guides on NGINX 502 debugging, Linux TIME_WAIT exhaustion, Docker infrastructure, and production incident response.',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'damon.sec — Cybersecurity & Infrastructure',
+    title: 'Damon — DevOps, NGINX & Linux Troubleshooting',
   },
   robots: { index: true, follow: true },
 };
