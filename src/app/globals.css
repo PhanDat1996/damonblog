@@ -29,7 +29,7 @@ h1 {
 
 /* Prose styles for blog posts */
 .prose {
-  color: theme('colors.zinc.300');
+  color: theme('colors.zinc.200');
   max-width: none;
 }
 

@@ -45,7 +45,7 @@ export default function TerminalHero() {
         <span className="h-3 w-3 rounded-full bg-red-500/70" />
         <span className="h-3 w-3 rounded-full bg-yellow-500/70" />
         <span className="h-3 w-3 rounded-full bg-green-500/70" />
-        <span className="ml-3 font-mono text-xs text-zinc-500">bash — damon@sec-lab</span>
+        <span className="ml-3 font-mono text-xs text-zinc-400">bash — damon@sec-lab</span>
       </div>
       <div className="p-5 font-mono text-sm min-h-[200px]">
         {visibleLines.map((line, idx) => {
