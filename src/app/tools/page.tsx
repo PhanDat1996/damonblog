@@ -14,7 +14,15 @@ const TOOLS: Tool[] = [
     description: 'Crawls your site from sitemap, checks on-page SEO — title, meta, canonical, OG tags, JSON-LD, missing alt — and optionally pulls Lighthouse scores via PageSpeed Insights API. Outputs scored HTML + JSON reports.',
     tags: ['seo', 'python', 'cli', 'devops'],
     status: 'stable',
-    href: 'https://github.com/TÊN_CỦA_MAY/seo-pro-audit',
+    href: 'https://github.com/PhanDat1996/seo-pro-audit',
+  },
+  {
+    name: 'sys-monitor',
+    tagline: 'top-like system monitor in pure Bash with log output',
+    description: 'Live system stats in the terminal — CPU per-core, RAM, swap, disk per mount, network I/O, and top processes by CPU. No dependencies beyond standard coreutils. Writes every snapshot to a log file. Runs as a systemd service.',
+    tags: ['bash', 'linux', 'monitoring', 'sysadmin'],
+    status: 'stable',
+    href: 'https://github.com/PhanDat1996/sys_monitor',
   },
 ];
 
