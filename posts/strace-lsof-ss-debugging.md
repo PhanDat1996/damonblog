@@ -208,3 +208,120 @@ Now you have a definitive answer: the application is opening DB connections and 
 | `ss -tn state time-wait` | TIME-WAIT buildup (connection exhaustion) |
 
 These three tools won't give you application-level visibility — for that you need traces and metrics. But they will tell you exactly what the OS sees a process doing, which cuts through a huge amount of guesswork.
+
+---
+
+## Three More Real Scenarios
+
+### Scenario 2: Process Consuming CPU But Logs Are Silent
+
+A service is at 80% CPU. No application errors. No business logic issues visible.
+
+```bash
+# Step 1: summary mode — identify which syscall category dominates
+strace -c -p <pid>
+# Press Ctrl+C after 30 seconds
+
+# If futex dominates with high time:
+# → Thread contention / deadlock. One thread holds a lock, others wait.
+strace -f -p <pid> -e trace=futex 2>&1 | grep "FUTEX_WAIT" | head -20
+
+# If read/write dominates with high call count:
+# → Many small I/O operations — check lsof for what it is writing to
+lsof -p <pid> | grep -E "REG|CHR"
+
+# If no syscalls dominate but CPU is still high:
+# → Pure user-space compute. No syscall-level fix.
+# Use perf or a profiler instead.
+cat /proc/<pid>/wchan  # should show 'schedule' for CPU-bound
+```
+
+### Scenario 3: Intermittent Connection Failures to a Service
+
+A service fails to connect to a backend every 30 minutes or so, recovers, then fails again.
+
+```bash
+# Watch connection state continuously
+watch -n 2 'ss -tnp | grep <backend_port>'
+
+# When it fails, capture state immediately
+# Better: background monitor
+while true; do
+  TIMESTAMP=$(date '+%H:%M:%S')
+  COUNT=$(ss -tnp state established dport :<port> | wc -l)
+  echo "$TIMESTAMP established: $COUNT"
+  ss -s | grep -i time-wait >> /tmp/tw_monitor.log
+  sleep 5
+done
+
+# Look for TIME-WAIT spike before connection failures
+# Correlate timestamp of spike with application error log timestamp
+```
+
+### Scenario 4: File Descriptor Leak Detection Over Time
+
+You suspect a process is leaking FDs but it is slow — hard to catch in the act.
+
+```bash
+PID=4521
+
+# Track FD count every minute
+while true; do
+  FD_COUNT=$(ls /proc/$PID/fd 2>/dev/null | wc -l)
+  echo "$(date '+%H:%M:%S') FDs: $FD_COUNT"
+  sleep 60
+done | tee /tmp/fd_track.log
+
+# If FD count grows past ~500, check what type is leaking
+lsof -p $PID | awk '{print $5}' | sort | uniq -c | sort -rn
+# TYPE counts: REG (files), IPv4 (sockets), FIFO (pipes)
+# Growing IPv4 count = socket leak
+# Growing REG count = file handle leak
+```
+
+---
+
+## Combining All Three: The Full Investigation Workflow
+
+```
+Process is misbehaving
+│
+├─ Is it consuming unexpected resources?
+│   strace -c -p <pid>   → identifies syscall category
+│
+├─ Is it stuck or hung?
+│   strace -p <pid>      → shows current syscall
+│   cat /proc/<pid>/wchan → kernel wait channel
+│
+├─ Network connections wrong?
+│   lsof -p <pid> -i     → open sockets + state
+│   ss -tnp | grep <pid> → connection states
+│
+├─ File access wrong?
+│   strace -e trace=file -p <pid> 2>&1 | grep "= -1"  → failed opens
+│   lsof -p <pid> | grep REG                           → open files
+│
+└─ Growing over time?
+    watch -n 5 'lsof -p <pid> | wc -l'  → FD count trend
+    watch -n 5 'ss -tnp | grep <pid> | wc -l'  → connection count trend
+```
+
+---
+
+## FAQ
+
+**When should I use strace vs lsof?**
+Use `strace` when you need to see what a process is *doing* — the sequence of operations, what it is trying to open, what it is waiting on. Use `lsof` when you need to see the current *state* — what files and sockets are open right now. `strace` has overhead; `lsof` is essentially free. Use `lsof` for quick checks, `strace` for deeper investigation.
+
+**Will strace affect my production service?**
+Yes. The `ptrace` mechanism strace uses stops the process on every system call. On a busy process making thousands of syscalls per second, this can slow it by 50–100%. Use `-c` (summary mode) or `-e trace=` (filtered mode) to minimize impact. Always have a way to Ctrl+C.
+
+**Can I use these on containers?**
+Yes for `lsof` and `ss` — both work normally inside a container. `strace` requires `SYS_PTRACE` capability, which many container runtimes disable by default. In Docker: `docker run --cap-add SYS_PTRACE`. In Kubernetes: add `securityContext.capabilities.add: [SYS_PTRACE]` to the pod spec.
+
+**What is the difference between ss and netstat?**
+Both show socket information. `ss` reads directly from the kernel and is faster and more accurate. `netstat` reads from `/proc/net/` and is deprecated on modern Linux but still widely available. Use `ss`. The equivalent of `netstat -tlnp` is `ss -tlnp`.
+
+---
+
+*Related reading: [strace Tutorial: Debug Linux Processes Like a Pro](/blog/strace-tutorial-linux-debugging) — full strace guide with 5 real scenarios. [Check Open Ports in Linux: ss vs netstat Explained](/blog/check-open-ports-linux-ss-netstat) — deeper ss usage for port investigation. [Linux Log Analysis: How to Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — correlating tool output with logs.*

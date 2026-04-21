@@ -173,3 +173,97 @@ Or use the `loki` driver if you're in the Grafana ecosystem. Central log aggrega
 | Ongoing monitoring | Script + cron or Prometheus node exporter |
 
 Don't wait for 3am to learn this one.
+
+---
+
+## Centralized Log Collection: The Right Long-Term Fix
+
+`json-file` with rotation is a band-aid. For production Docker fleets, you want logs shipped off the host entirely — no local disk pressure, queryable history, retention policies enforced centrally.
+
+### Option 1: Fluentd / Fluent Bit
+
+```json
+{
+  "log-driver": "fluentd",
+  "log-opts": {
+    "fluentd-address": "localhost:24224",
+    "fluentd-async": "true",
+    "tag": "docker.{{.Name}}"
+  }
+}
+```
+
+Fluent Bit is lighter than Fluentd — use it as a DaemonSet on Kubernetes or as a sidecar on each Docker host.
+
+### Option 2: Grafana Loki
+
+```json
+{
+  "log-driver": "loki",
+  "log-opts": {
+    "loki-url": "http://loki:3100/loki/api/v1/push",
+    "loki-external-labels": "host={{.Host}},container={{.Name}}"
+  }
+}
+```
+
+Requires the Loki Docker driver plugin:
+```bash
+docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions
+```
+
+### Option 3: AWS CloudWatch (for ECS/EC2)
+
+```json
+{
+  "log-driver": "awslogs",
+  "log-opts": {
+    "awslogs-group": "/docker/myapp",
+    "awslogs-region": "us-east-1",
+    "awslogs-stream": "{{.Name}}"
+  }
+}
+```
+
+### Monitoring Log Size in Production
+
+Add this to your monitoring regardless of which driver you use:
+
+```bash
+#!/bin/bash
+# /usr/local/bin/docker-log-monitor.sh
+THRESHOLD_GB=2
+
+docker ps -q | while read cid; do
+  NAME=$(docker inspect --format='{{.Name}}' "$cid" | tr -d '/')
+  LOG_PATH=$(docker inspect --format='{{.LogPath}}' "$cid")
+  if [ -f "$LOG_PATH" ]; then
+    SIZE_MB=$(du -m "$LOG_PATH" | cut -f1)
+    if [ "$SIZE_MB" -gt $((THRESHOLD_GB * 1024)) ]; then
+      echo "ALERT: Container $NAME log is ${SIZE_MB}MB"
+    fi
+  fi
+done
+```
+
+Run from cron every 15 minutes. Alert before the disk fills — not after.
+
+---
+
+## FAQ
+
+**Does `max-size` apply to existing containers?**
+No. Log driver options apply at container creation time. You must recreate existing containers for the new limits to take effect. For `docker-compose`, run `docker-compose down && docker-compose up -d` after updating `logging:` config.
+
+**What happens if I truncate a log file while Docker is running?**
+`truncate -s 0 /path/to/container.log` frees disk space immediately — Docker keeps the file handle open and continues writing. The next write goes to offset 0. This is safe as an emergency fix. The permanent fix is rotation configuration.
+
+**Can I set different log limits for different services in Compose?**
+Yes — per-service `logging:` blocks override the global `daemon.json` defaults. See the "Per-Container Override in Compose" section above.
+
+**What is the difference between `json-file` and `local` log driver?**
+`local` is a newer driver that uses a more efficient binary format and automatically compresses rotated files. It has less tooling support (you cannot `docker logs` rotated files). Use `json-file` with rotation for most cases — it is more portable and compatible with log shipping tools.
+
+---
+
+*Related reading: [Linux Log Analysis: How to Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — once logs are centralized, how to query them effectively. [Linux Debugging Tools Every Engineer Should Know](/blog/linux-debugging-tools-guide) — broader debugging toolkit.*

@@ -5,9 +5,9 @@ import { getAllSlugs, getPostWithHtml, getAllPosts } from '@/lib/posts';
 import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
 import ReadingProgress from '@/components/ReadingProgress';
-import { BlogPostJsonLd } from '@/components/JsonLd';
+import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
 
-const BASE_URL = 'https://damonsec.com';
+const BASE_URL = 'https://www.damonsec.com';
 
 interface Props {
   params: Promise<{ slug: string }>;
@@ -29,16 +29,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     description: post.excerpt,
     keywords: post.tags,
     authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],
-    alternates: {
-      canonical: url,
-    },
+    alternates: { canonical: url },
     openGraph: {
       title: post.title,
       description: post.excerpt,
       type: 'article',
       url,
-      publishedTime: post.date,
-      modifiedTime: post.date,
+      publishedTime: new Date(post.date).toISOString(),
+      modifiedTime: new Date(post.date).toISOString(),
       authors: [`${BASE_URL}/about`],
       tags: post.tags,
       siteName: 'damonsec.com',
@@ -63,10 +61,16 @@ export default async function BlogPostPage({ params }: Props) {
   const prev = currentIndex < allPosts.length - 1 ? allPosts[currentIndex + 1] : null;
   const next = currentIndex > 0 ? allPosts[currentIndex - 1] : null;
 
+  // Fix #3: extract FAQ items and word count for schema
+  const faqItems = post.content ? extractFaqFromHtml(post.content) : [];
+  const wordCount = post.content
+    ? post.content.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length
+    : undefined;
+
   return (
     <>
       <ReadingProgress />
-      <BlogPostJsonLd post={post} url={url} />
+      <BlogPostJsonLd post={post} url={url} wordCount={wordCount} faqItems={faqItems} />
 
       <article className="mx-auto max-w-2xl">
         {/* Back link */}

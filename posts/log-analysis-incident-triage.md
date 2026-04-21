@@ -165,3 +165,101 @@ A timeline like this turns chaos into a story. It also becomes the foundation fo
 Logs are a crime scene. You're not looking for everything — you're looking for the **first anomaly** before things got bad. Work backwards from the visible symptom. Find the thread. Pull it.
 
 The engineers who are fastest at incident triage aren't the ones who read the most logs. They're the ones who ask the best questions.
+
+---
+
+## Advanced Techniques
+
+### Build a Log Correlation Script
+
+When you need to correlate timestamps across multiple log files during an incident:
+
+```bash
+#!/bin/bash
+# correlate-logs.sh — find events across services in a time window
+# Usage: ./correlate-logs.sh "2026-04-20 14:20" "2026-04-20 14:30"
+
+START=$1
+END=$2
+
+echo "=== SYSTEM JOURNAL (errors) ==="
+journalctl -p err --since "$START" --until "$END" --no-pager | head -20
+
+echo ""
+echo "=== NGINX ERROR LOG ==="
+awk -v s="$START" -v e="$END" '$0 >= s && $0 <= e' /var/log/nginx/error.log | head -20
+
+echo ""
+echo "=== AUTH LOG ==="
+awk -v s="$START" -v e="$END" '$0 >= s && $0 <= e' /var/log/auth.log | head -20
+```
+
+### journalctl Deep Dive
+
+```bash
+# Find the exact second a service crashed
+journalctl -u myapp --since "1 hour ago" | grep -iE "killed|crash|exit|error" | tail -5
+
+# Get previous boot's logs (useful after a crash-reboot)
+journalctl -b -1 -u myapp | tail -50
+
+# Export logs for sharing
+journalctl -u myapp --since "2 hours ago" --no-pager > /tmp/myapp_logs.txt
+
+# Real-time monitoring with priority filter
+journalctl -f -p warning  # only warning and above, all services
+
+# Check which units generated the most errors
+journalctl -p err --since "1 hour ago" | awk '{print $5}' | sort | uniq -c | sort -rn | head
+```
+
+### grep Patterns for Common Incidents
+
+```bash
+# Find the first occurrence of an error (to anchor timeline)
+grep -m 1 "ERROR" /var/log/app.log
+
+# Count errors per minute
+grep "ERROR" /var/log/app.log | awk '{print substr($2,1,5)}' | sort | uniq -c
+
+# Find errors with context (stack traces)
+grep -A 10 "FATAL\|Exception\|Traceback" /var/log/app.log | head -60
+
+# Find slowest API endpoints (if response time is logged)
+awk '$NF > 2.0 {print $7, $NF}' /var/log/nginx/access.log | sort -k2 -rn | head -10
+
+# Find which IPs hit 500 errors
+awk '$9 == "500" {print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head
+```
+
+### Log Rotation Traps
+
+Two common mistakes that cause gaps in log analysis:
+
+```bash
+# Problem 1: Log was rotated mid-incident — need to check rotated files
+ls -lath /var/log/nginx/
+grep "ERROR" /var/log/nginx/error.log /var/log/nginx/error.log.1 /var/log/nginx/error.log.2.gz
+
+# Problem 2: journald ran out of space and dropped logs
+journalctl --disk-usage
+# If close to limit, old logs are dropped
+# Check: journalctl --verify  (verifies journal integrity)
+```
+
+---
+
+## FAQ
+
+**What is the difference between journalctl and /var/log?**
+On systemd systems, `journalctl` reads from the binary journal (stored in `/var/log/journal/`). Applications that use systemd's logging go here automatically. Applications that write their own log files (NGINX, PostgreSQL, custom apps) write to `/var/log/<appname>/`. In a modern RHEL/Ubuntu environment, you need both: `journalctl` for service startup/crash events and systemd-managed services, flat files for application-specific logs.
+
+**How do I search logs from before the last reboot?**
+`journalctl -b -1` shows the previous boot's logs. `-b -2` is two boots ago. For flat log files, check rotated copies (`error.log.1`, `error.log.2.gz`).
+
+**How do I avoid missing logs when they rotate mid-incident?**
+Always check rotated files when investigating: `grep "pattern" /var/log/nginx/error.log*`. The `*` glob covers the current file and all rotated copies. For gzipped logs: `zgrep "pattern" /var/log/nginx/error.log.2.gz`.
+
+---
+
+*Related reading: [Linux Log Analysis: How to Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — full journalctl and grep guide. [Linux Debugging Tools Every Engineer Should Know](/blog/linux-debugging-tools-guide) — the full toolkit including dmesg.*

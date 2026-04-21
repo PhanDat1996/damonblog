@@ -2,10 +2,53 @@ import type { Metadata } from 'next';
 import { getAllPosts, getAllTags } from '@/lib/posts';
 import PostCard from '@/components/PostCard';
 
-export const metadata: Metadata = {
-  title: 'Blog',
-  description: 'Technical writing on cybersecurity, NGINX, Docker, logs, infrastructure, and production debugging.',
-};
+const BASE_URL = 'https://www.damonsec.com';
+
+// Fix #1: keyword-rich metadata
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ tag?: string; page?: string }>;
+}): Promise<Metadata> {
+  const { tag, page } = await searchParams;
+  const currentPage = parseInt(page ?? '1', 10);
+
+  const title = tag
+    ? `#${tag} Articles — Linux & DevOps Troubleshooting`
+    : currentPage > 1
+    ? `Blog — Page ${currentPage} | Linux & DevOps Troubleshooting`
+    : 'Linux & DevOps Troubleshooting Blog — Production Guides';
+
+  const description = tag
+    ? `All articles tagged #${tag} on damonsec.com — practical Linux and DevOps troubleshooting guides from production experience.`
+    : 'Practical guides for Linux engineers — NGINX debugging, process troubleshooting, CIS hardening, and production incident response.';
+
+  return {
+    title,
+    description,
+    // Fix #2: canonical + noindex for tag/page URLs to avoid duplicate content
+    alternates: {
+      canonical: tag
+        ? `${BASE_URL}/blog` // tag pages canonicalize to /blog
+        : currentPage > 1
+        ? `${BASE_URL}/blog?page=${currentPage}`
+        : `${BASE_URL}/blog`,
+    },
+    robots: tag
+      ? { index: false, follow: true } // noindex tag filter pages
+      : { index: true, follow: true },
+    // Fix #2b: prev/next for pagination
+    ...(currentPage > 1 && !tag
+      ? {
+          openGraph: {
+            title,
+            description,
+            url: `${BASE_URL}/blog?page=${currentPage}`,
+          },
+        }
+      : {}),
+  };
+}
 
 const POSTS_PER_PAGE = 9;
 
@@ -21,14 +64,12 @@ export default async function BlogPage({ searchParams }: Props) {
   const allPosts = getAllPosts();
   const allTags = getAllTags();
 
-  // Filter by tag if active
   const filtered = activeTag
     ? allPosts.filter((p) =>
         p.tags.map((t) => t.toLowerCase()).includes(activeTag.toLowerCase())
       )
     : allPosts;
 
-  // Paginate
   const totalPosts = filtered.length;
   const totalPages = Math.ceil(totalPosts / POSTS_PER_PAGE);
   const posts = filtered.slice(
@@ -36,7 +77,6 @@ export default async function BlogPage({ searchParams }: Props) {
     currentPage * POSTS_PER_PAGE
   );
 
-  // Build pagination URL helper
   const pageUrl = (p: number) => {
     const params = new URLSearchParams();
     if (activeTag) params.set('tag', activeTag);
@@ -47,29 +87,33 @@ export default async function BlogPage({ searchParams }: Props) {
 
   return (
     <div className="space-y-12">
-      {/* Header */}
+      {/* Fix #2b: pagination link hints for Google */}
+      {!activeTag && totalPages > 1 && (
+        <>
+          {currentPage > 1 && (
+            <link rel="prev" href={`${BASE_URL}${pageUrl(currentPage - 1)}`} />
+          )}
+          {currentPage < totalPages && (
+            <link rel="next" href={`${BASE_URL}${pageUrl(currentPage + 1)}`} />
+          )}
+        </>
+      )}
+
+      {/* Header — Fix #1: keyword-rich H1 */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">
         <div className="flex items-center gap-2 font-mono text-xs text-green-400">
           <span>~/blog</span>
         </div>
         <h1 className="font-display text-4xl font-bold tracking-tight text-white">
-          The Blog
+          {activeTag
+            ? `#${activeTag}`
+            : 'Linux & DevOps Troubleshooting Blog'}
         </h1>
         <p className="text-zinc-400 max-w-xl leading-relaxed">
-          Field notes from the trenches — real incidents, hard-won debugging sessions,
-          and practical guides for security &amp; infrastructure engineers.
+          {activeTag
+            ? `All articles tagged #${activeTag} — practical guides from production experience.`
+            : 'Practical guides for Linux engineers — NGINX debugging, process troubleshooting, CIS hardening, and production incident response.'}
         </p>
-
-        {/* TODO: Add search box here when post count exceeds ~50
-        <div className="relative max-w-sm">
-          <input
-            type="search"
-            placeholder="Search articles..."
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 pr-10 font-mono text-sm text-zinc-200 placeholder-zinc-500 focus:border-green-500/50 focus:outline-none"
-          />
-          <span className="absolute right-3 top-2.5 text-zinc-500 text-sm">⌕</span>
-        </div>
-        */}
       </div>
 
       {/* Tag filters */}
@@ -125,7 +169,6 @@ export default async function BlogPage({ searchParams }: Props) {
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 pt-4">
-              {/* Prev */}
               {currentPage > 1 ? (
                 <a
                   href={pageUrl(currentPage - 1)}
@@ -139,7 +182,6 @@ export default async function BlogPage({ searchParams }: Props) {
                 </span>
               )}
 
-              {/* Page numbers */}
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
                 <a
                   key={p}
@@ -154,7 +196,6 @@ export default async function BlogPage({ searchParams }: Props) {
                 </a>
               ))}
 
-              {/* Next */}
               {currentPage < totalPages ? (
                 <a
                   href={pageUrl(currentPage + 1)}
