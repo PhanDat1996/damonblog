@@ -7,8 +7,6 @@ featured: false
 slug: "ps-command-linux-troubleshooting-guide"
 ---
 
-# ps Command Linux: The Engineer's Troubleshooting Guide
-
 ## Introduction: Why Process Visibility Saves Production Systems
 
 A service is down. Alerts are firing. Users are complaining. You SSH in and the first question is always the same: **what is actually running on this system right now?**

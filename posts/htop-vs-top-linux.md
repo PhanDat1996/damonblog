@@ -7,8 +7,6 @@ featured: false
 slug: "htop-vs-top-linux-comparison"
 ---
 
-# htop vs top: Which Should You Use in Production?
-
 ## TL;DR
 
 - **`top`** is available on every Linux system by default — no install needed

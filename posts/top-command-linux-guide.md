@@ -7,8 +7,6 @@ featured: false
 slug: "top-command-linux-guide"
 ---
 
-# top Command Linux: Real-World Guide to CPU and Process Monitoring
-
 ## TL;DR
 
 - **`top`** shows a live, auto-refreshing view of CPU, memory, and running processes

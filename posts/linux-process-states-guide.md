@@ -7,8 +7,6 @@ featured: false
 slug: "linux-process-states-guide"
 ---
 
-# Linux Process States Explained: R, S, D, Z and What They Mean for Troubleshooting
-
 ## TL;DR
 
 - **`R`** — Running or runnable. Process is on the CPU or waiting for a CPU slot. Normal.
