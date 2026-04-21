@@ -8,16 +8,14 @@ export const metadata: Metadata = {
 
 // Add your tools here as you build them
 const TOOLS: Tool[] = [
-  // Example — uncomment and fill in when you have a real tool:
-  // {
-  //   name: 'nginx-checker',
-  //   tagline: 'Validate NGINX configs before reload',
-  //   description: 'A CLI tool that validates NGINX configurations, checks upstream health, and reports common misconfigurations before you reload in production.',
-  //   tags: ['nginx', 'cli', 'devops'],
-  //   status: 'stable',
-  //   href: 'https://github.com/damonsec/nginx-checker',
-  //   docs: '/tools/nginx-checker',
-  // },
+  {
+    name: 'seo-pro-audit',
+    tagline: 'CLI tool to audit website SEO with optional Google PageSpeed integration',
+    description: 'Crawls your site from sitemap, checks on-page SEO — title, meta, canonical, OG tags, JSON-LD, missing alt — and optionally pulls Lighthouse scores via PageSpeed Insights API. Outputs scored HTML + JSON reports.',
+    tags: ['seo', 'python', 'cli', 'devops'],
+    status: 'stable',
+    href: 'https://github.com/TÊN_CỦA_MAY/seo-pro-audit',
+  },
 ];
 
 type ToolStatus = 'stable' | 'beta' | 'wip';
