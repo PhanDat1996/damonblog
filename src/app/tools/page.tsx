@@ -6,7 +6,6 @@ export const metadata: Metadata = {
   description: 'Open-source tools and utilities built by Damon for DevOps, security operations, and infrastructure engineering.',
 };
 
-// Add your tools here as you build them
 const TOOLS: Tool[] = [
   {
     name: 'seo-pro-audit',
@@ -24,6 +23,14 @@ const TOOLS: Tool[] = [
     status: 'stable',
     href: 'https://github.com/PhanDat1996/sys_monitor',
   },
+  {
+    name: 'tcp-port-checker',
+    tagline: 'Fast threaded TCP port scanner — pure Python, no dependencies',
+    description: 'Scan one or more hosts across port lists or ranges. Reports open/closed/timeout with latency, optional banner grabbing, and CSV/JSON export. Built for quick network audits and connectivity checks in production.',
+    tags: ['python', 'networking', 'security', 'cli', 'devops'],
+    status: 'stable',
+    href: 'https://github.com/PhanDat1996/tcp-port-checker',
+  },
 ];
 
 type ToolStatus = 'stable' | 'beta' | 'wip';
@@ -34,8 +41,8 @@ interface Tool {
   description: string;
   tags: string[];
   status: ToolStatus;
-  href?: string;   // external link (GitHub, etc.)
-  docs?: string;   // internal docs page
+  href?: string;
+  docs?: string;
 }
 
 const STATUS_STYLES: Record<ToolStatus, string> = {
