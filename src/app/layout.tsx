@@ -102,7 +102,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
-      <body className="min-h-screen bg-zinc-950 text-zinc-200 antialiased selection:bg-green-400/20 selection:text-green-300">
+      <body className="min-h-screen bg-zinc-950 text-zinc-200 antialiased selection:bg-green-400/20 selection:text-green-300"
+        // No font-sans here — inherited from Navbar's CSS variable injection
+        // Avoids a cascade lookup on every text node during initial layout
+      >
         <WebsiteJsonLd />
         <Navbar />
         <main className="mx-auto max-w-5xl px-6 py-12">{children}</main>

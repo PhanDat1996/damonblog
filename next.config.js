@@ -2,34 +2,33 @@
 const nextConfig = {
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
-  // ── Fix #2: Reduce legacy JavaScript ──────────────────────────────────────
+  // ── Legacy JS fix ─────────────────────────────────────────────────────────
+  // The polyfills Lighthouse reports (Array.prototype.at, Array.prototype.flat,
+  // Array.prototype.flatMap, Object.fromEntries, Object.hasOwn,
+  // String.prototype.trimEnd, String.prototype.trimStart) come from
+  // Next.js's bundled polyfill layer — NOT from SWC transforms.
   //
-  // Next.js 15 uses SWC compiler by default. These options tell SWC to target
-  // modern browsers only (matching our browserslist in package.json).
-  // Result: no async/await polyfills, no optional chaining transforms,
-  // no nullish coalescing rewrites. Saves ~10-12KB on the JS bundle.
+  // Next.js 13+ auto-injects polyfills via `@next/polyfill-module` based on
+  // the target browsers. The fix is to declare targets explicitly so Next.js
+  // knows it doesn't need to inject those polyfills at all.
+  //
+  // This is controlled by .browserslistrc (added to root), which Next.js
+  // reads at build time to determine the polyfill set.
+  //
+  // Additionally, `transpilePackages` is intentionally empty — we have no
+  // ESM-only packages that need transpilation, so no extra transforms run.
   compiler: {
-    // Remove console.log in production — reduces bundle and avoids
-    // accidental information disclosure
     removeConsole: process.env.NODE_ENV === 'production'
       ? { exclude: ['error', 'warn'] }
       : false,
   },
 
-  // ── Fix #2: Experimental optimizations ────────────────────────────────────
   experimental: {
-    // Tree-shake component imports — prevents barrel file imports from
-    // pulling in unused components
     optimizePackageImports: ['@/components', '@/lib'],
-
-    // Inline CSS for above-the-fold content into the HTML response.
-    // This is the direct fix for the render-blocking CSS issue.
-    // Next.js 15 can inline critical CSS automatically when this is enabled.
-    // Result: browser renders the first paint without waiting for CSS file fetch.
     inlineCss: true,
   },
 
-  // ── Security + performance headers ────────────────────────────────────────
+  // ── Security + cache headers ───────────────────────────────────────────────
   async headers() {
     return [
       {
@@ -43,15 +42,12 @@ const nextConfig = {
         ],
       },
       {
-        // Long-term cache for immutable assets (fonts, images, icons)
-        // next/font adds content hashes to filenames so this is safe
         source: '/(.*)\\.(svg|ico|png|jpg|jpeg|webp|woff|woff2)',
         headers: [
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
       {
-        // Cache static JS/CSS chunks — Next.js hashes these filenames
         source: '/_next/static/(.*)',
         headers: [
           { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },

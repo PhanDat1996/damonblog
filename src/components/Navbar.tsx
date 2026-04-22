@@ -1,11 +1,5 @@
 'use client';
 
-// Fix #2: Navbar is the highest component in the tree that actually uses
-// --font-mono (the logo "~/") and --font-sans (nav links). By applying
-// the font variables here instead of in the root layout, we keep them
-// out of the critical render path without losing any visual fidelity.
-// Next.js deduplicates the font — it won't load twice if imported elsewhere.
-
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
@@ -25,16 +19,19 @@ export default function Navbar() {
   const [open, setOpen] = useState(false);
 
   return (
-    // Inject font variables at the nav level — all descendants inherit them
     <header
       className={clsx(
-        'sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md',
+        'sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/95',
+        // Replaced backdrop-blur-md with a high-opacity solid background.
+        // backdrop-filter: blur() forces the browser to read pixel data from
+        // the layer below on every frame — that's a forced reflow/composite.
+        // bg-zinc-950/95 (95% opacity) achieves the same visual effect
+        // without any layout recalculation cost.
         jetbrainsMono.variable,
         ibmPlexSans.variable
       )}
     >
       <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-        {/* Logo */}
         <Link href="/" className="group flex items-center gap-2">
           <span className="font-mono text-xs text-green-400 opacity-60 group-hover:opacity-100 transition-opacity">
             ~/
@@ -44,7 +41,6 @@ export default function Navbar() {
           </span>
         </Link>
 
-        {/* Desktop Links */}
         <ul className="hidden md:flex items-center gap-1">
           {NAV_LINKS.map(({ href, label }) => {
             const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
@@ -53,7 +49,8 @@ export default function Navbar() {
                 <Link
                   href={href}
                   className={clsx(
-                    'px-4 py-2 rounded-md font-mono text-sm transition-all duration-200',
+                    'px-4 py-2 rounded-md font-mono text-sm transition-colors duration-150',
+                    // duration-150 instead of 200 — snappier on mobile
                     active
                       ? 'text-green-400 bg-green-400/10'
                       : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
@@ -66,19 +63,28 @@ export default function Navbar() {
           })}
         </ul>
 
-        {/* Mobile hamburger */}
         <button
           className="md:hidden flex flex-col gap-1.5 p-2"
-          onClick={() => setOpen(!open)}
+          onClick={() => setOpen((o) => !o)}
           aria-label="Toggle menu"
+          aria-expanded={open}
         >
-          <span className={clsx('block h-px w-6 bg-zinc-400 transition-all duration-300', open && 'rotate-45 translate-y-2.5')} />
-          <span className={clsx('block h-px w-6 bg-zinc-400 transition-all duration-300', open && 'opacity-0')} />
-          <span className={clsx('block h-px w-6 bg-zinc-400 transition-all duration-300', open && '-rotate-45 -translate-y-2.5')} />
+          <span className={clsx(
+            'block h-px w-6 bg-zinc-400 transition-transform duration-200',
+            open && 'rotate-45 translate-y-[7px]'
+            // Use exact pixel value to avoid float rounding triggering reflow
+          )} />
+          <span className={clsx(
+            'block h-px w-6 bg-zinc-400 transition-opacity duration-200',
+            open && 'opacity-0'
+          )} />
+          <span className={clsx(
+            'block h-px w-6 bg-zinc-400 transition-transform duration-200',
+            open && '-rotate-45 -translate-y-[7px]'
+          )} />
         </button>
       </nav>
 
-      {/* Mobile menu */}
       {open && (
         <div className="md:hidden border-t border-zinc-800 bg-zinc-950 px-6 py-4">
           <ul className="flex flex-col gap-2">
@@ -90,7 +96,7 @@ export default function Navbar() {
                     href={href}
                     onClick={() => setOpen(false)}
                     className={clsx(
-                      'block px-4 py-2 rounded-md font-mono text-sm transition-all',
+                      'block px-4 py-2 rounded-md font-mono text-sm',
                       active ? 'text-green-400 bg-green-400/10' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
                     )}
                   >

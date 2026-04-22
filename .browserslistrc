@@ -1,0 +1,11 @@
+# Target modern browsers only — tells SWC/babel/postcss to NOT emit polyfills
+# for Array.at, Array.flat, Object.fromEntries, Object.hasOwn, String.trimEnd, etc.
+# All supported since Chrome 85+, Firefox 79+, Safari 14+
+
+chrome >= 90
+firefox >= 90
+safari >= 14
+edge >= 90
+not dead
+not ie 11
+not op_mini all
