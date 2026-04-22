@@ -241,7 +241,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Topic Clusters ────────────────────────────────────── */}
-      <section>
+      <section className="cv-auto">
         <div className="mb-6">
           <h2 className="font-display text-2xl font-bold text-white">
             Browse by Topic
@@ -281,7 +281,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Tag cloud ─────────────────────────────────────────── */}
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-8">
+      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 cv-auto">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
           <div>
             <h2 className="font-display text-lg font-bold text-white">
@@ -312,7 +312,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Latest Articles ──────────────────────────────────── */}
-      <section>
+      <section className="cv-auto">
         <div className="mb-6 flex items-center justify-between">
           <div>
             <h2 className="font-display text-2xl font-bold text-white">
@@ -368,7 +368,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Resources / Soft monetization ─────────────────────── */}
-      <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-8">
+      <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-8 cv-auto">
         <h2 className="font-display text-lg font-bold text-white mb-1">
           Tools &amp; Resources
         </h2>

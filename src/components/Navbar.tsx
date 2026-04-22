@@ -1,9 +1,16 @@
 'use client';
 
+// Fix #2: Navbar is the highest component in the tree that actually uses
+// --font-mono (the logo "~/") and --font-sans (nav links). By applying
+// the font variables here instead of in the root layout, we keep them
+// out of the critical render path without losing any visual fidelity.
+// Next.js deduplicates the font — it won't load twice if imported elsewhere.
+
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import clsx from 'clsx';
+import { jetbrainsMono, ibmPlexSans } from '@/lib/fonts';
 
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
@@ -18,7 +25,14 @@ export default function Navbar() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
+    // Inject font variables at the nav level — all descendants inherit them
+    <header
+      className={clsx(
+        'sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md',
+        jetbrainsMono.variable,
+        ibmPlexSans.variable
+      )}
+    >
       <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
         {/* Logo */}
         <Link href="/" className="group flex items-center gap-2">

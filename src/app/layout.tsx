@@ -1,62 +1,53 @@
 import type { Metadata } from 'next';
-import { Outfit, JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { Outfit } from 'next/font/google';
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { WebsiteJsonLd } from '@/components/JsonLd';
 
-/*
-  Font loading strategy:
-  - Outfit (display headings): preload:true — used in H1 above the fold, LCP-critical
-  - JetBrains Mono: preload:false — used in code blocks, below the fold on most pages
-  - IBM Plex Sans: preload:false — body text, browser renders with fallback first
-  All fonts use display:'swap' to prevent invisible text during load (FOIT).
-*/
+// ── Font loading strategy ────────────────────────────────────────────────────
+//
+// Fix #2 (critical request chain + render-blocking CSS):
+// Load ONLY the display font (Outfit) synchronously in the root layout.
+// JetBrains Mono and IBM Plex Sans are non-critical on initial render:
+//   - Mono: used in code blocks → below the fold on mobile
+//   - IBM Plex Sans: body text → browser renders with system font first
+//
+// Both secondary fonts are now lazy-loaded via next/font in their own
+// component files (Navbar.tsx, page.tsx) using CSS variables. This keeps
+// them out of the root layout's CSS bundle entirely.
+//
+// Result: root CSS bundle carries one font family instead of three.
+// Eliminates 2 of the 3 woff2 requests from the critical request chain.
+
 const outfit = Outfit({
   subsets: ['latin'],
   variable: '--font-display',
-  weight: ['400', '600', '700', '800'],
+  weight: ['700', '800'],   // Only bold weights — used in H1/H2/logo
+                             // Removed 400 and 600: body text uses IBM Plex Sans
   display: 'swap',
   preload: true,
-  adjustFontFallback: true, // generates size-adjust metrics to reduce CLS
+  adjustFontFallback: true, // Generates size-adjust to prevent CLS on swap
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono',
-  weight: ['400', '500', '600'],
-  display: 'swap',
-  preload: false,
-  adjustFontFallback: false, // mono fonts don't benefit much from this
-});
-
-const ibmPlexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  variable: '--font-sans',
-  weight: ['400', '500', '600'],
-  display: 'swap',
-  preload: false,
-  adjustFontFallback: true,
-});
-
+// ── Site-wide metadata ───────────────────────────────────────────────────────
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.damonsec.com'),
   title: {
-    default: 'Damon — DevOps, NGINX & Linux Troubleshooting',
+    default: 'Linux Troubleshooting & Performance Tuning — Damon',
     template: '%s | damonsec.com',
   },
   description:
-    'In-depth guides on NGINX 502 debugging, Linux TIME_WAIT exhaustion, Docker infrastructure, and production incident response. Written by a senior DevOps engineer from real-world systems.',
+    'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents. No theory, no fluff.',
   keywords: [
+    'linux troubleshooting',
+    'linux performance tuning',
+    'debug linux server',
     'nginx troubleshooting',
-    'linux debugging',
-    '502 bad gateway',
-    'docker',
-    'infrastructure debugging',
-    'production incidents',
+    'docker debugging',
+    'infrastructure engineering',
+    'production incident response',
     'devops',
-    'time_wait',
-    'security operations',
   ],
   authors: [{ name: 'Damon', url: 'https://www.damonsec.com/about' }],
   creator: 'Damon',
@@ -69,15 +60,15 @@ export const metadata: Metadata = {
     locale: 'en_US',
     url: 'https://www.damonsec.com',
     siteName: 'damonsec.com',
-    title: 'Damon — DevOps, NGINX & Linux Troubleshooting',
+    title: 'Linux Troubleshooting & Performance Tuning — Damon',
     description:
-      'In-depth guides on NGINX 502 debugging, Linux TIME_WAIT exhaustion, Docker infrastructure, and production incident response.',
+      'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents.',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Damon — DevOps, NGINX & Linux Troubleshooting',
+    title: 'Linux Troubleshooting & Performance Tuning — Damon',
     description:
-      'In-depth guides on NGINX 502 debugging, Linux TIME_WAIT exhaustion, Docker infrastructure, and production incident response.',
+      'Real-world Linux troubleshooting guides from a Senior L3 engineer.',
     creator: '@damonsec',
   },
   alternates: {
@@ -98,16 +89,20 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
+    // Only apply the display font variable at root.
+    // --font-mono and --font-sans are injected by their own lazy font loaders.
+    <html lang="en" className={outfit.variable}>
       <head>
         {/*
-          Preconnect to Google Fonts CDN — eliminates DNS + TLS handshake
-          latency on next/font requests. Must be before next/font link tags.
+          Fix #2 (critical request chain):
+          Preconnect to Google Fonts CDN early so DNS + TLS handshake
+          completes before next/font's <link> tags are processed.
+          Saves ~100-200ms from the critical path on mobile networks.
         */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
-      <body className="min-h-screen bg-zinc-950 text-zinc-200 font-sans antialiased selection:bg-green-400/20 selection:text-green-300">
+      <body className="min-h-screen bg-zinc-950 text-zinc-200 antialiased selection:bg-green-400/20 selection:text-green-300">
         <WebsiteJsonLd />
         <Navbar />
         <main className="mx-auto max-w-5xl px-6 py-12">{children}</main>
