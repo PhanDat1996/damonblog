@@ -52,8 +52,21 @@ export const metadata: Metadata = {
   authors: [{ name: 'Damon', url: 'https://www.damonsec.com/about' }],
   creator: 'Damon',
   icons: {
-    icon: '/favicon.svg',
-    shortcut: '/favicon.svg',
+    // favicon.ico — picked up by Google Search and all browsers automatically
+    icon: [
+      { url: '/favicon.ico',         sizes: 'any' },
+      { url: '/favicon-16x16.png',   sizes: '16x16',  type: 'image/png' },
+      { url: '/favicon-32x32.png',   sizes: '32x32',  type: 'image/png' },
+      { url: '/favicon-48x48.png',   sizes: '48x48',  type: 'image/png' },
+    ],
+    // Apple touch icon — home screen on iOS
+    apple: [
+      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+    ],
+    // Android / PWA
+    other: [
+      { rel: 'manifest', url: '/site.webmanifest' },
+    ],
   },
   openGraph: {
     type: 'website',
