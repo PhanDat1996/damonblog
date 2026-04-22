@@ -1,25 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
 import { getAllPosts } from '@/lib/posts';
 import PostCard from '@/components/PostCard';
 import TagBadge from '@/components/TagBadge';
-
-// Dynamic import: TerminalHero is a 'use client' component with animation JS.
-// Loading it lazily means its JS bundle is NOT included in the initial page
-// parse — removes it from the critical path entirely.
-// ssr:false because it uses IntersectionObserver and window — server can't render it.
-// The placeholder div reserves space so there's zero CLS when it hydrates.
-const TerminalHero = dynamic(() => import('@/components/TerminalHero'), {
-  ssr: false,
-  loading: () => (
-    <div
-      className="rounded-xl border border-zinc-800 bg-zinc-900/80 overflow-hidden"
-      style={{ minHeight: '220px' }}
-      aria-hidden="true"
-    />
-  ),
-});
+import TerminalHero from '@/components/TerminalHeroLazy';
 
 // SEO Fix: keyword-optimized title + meta description
 export const metadata: Metadata = {

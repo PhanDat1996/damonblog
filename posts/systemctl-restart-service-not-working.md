@@ -7,8 +7,6 @@ featured: false
 slug: "systemctl-restart-service-not-working-fix"
 ---
 
-# systemctl Restart Service Not Working: Fix Guide
-
 `systemctl restart myapp` returns no error but the service stays dead, or keeps crashing, or the command itself fails. Here's the diagnostic path to find and fix it.
 
 ---
