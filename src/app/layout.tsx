@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Outfit } from 'next/font/google';
+import { Inter } from 'next/font/google';
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
@@ -20,14 +20,15 @@ import { WebsiteJsonLd } from '@/components/JsonLd';
 // Result: root CSS bundle carries one font family instead of three.
 // Eliminates 2 of the 3 woff2 requests from the critical request chain.
 
-const outfit = Outfit({
+// Inter: sharp, modern sans-serif — headings and display text
+// Variable font covers all weights in one request
+const inter = Inter({
   subsets: ['latin'],
   variable: '--font-display',
-  weight: ['700', '800'],   // Only bold weights — used in H1/H2/logo
-                             // Removed 400 and 600: body text uses IBM Plex Sans
+  weight: ['600', '700', '800'],
   display: 'swap',
   preload: true,
-  adjustFontFallback: true, // Generates size-adjust to prevent CLS on swap
+  adjustFontFallback: true,
 });
 
 // ── Site-wide metadata ───────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     // Only apply the display font variable at root.
     // --font-mono and --font-sans are injected by their own lazy font loaders.
-    <html lang="en" className={outfit.variable}>
+    <html lang="en" className={inter.variable}>
       <head>
         {/*
           Fix #2 (critical request chain):

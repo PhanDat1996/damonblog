@@ -57,11 +57,12 @@ html { scroll-behavior: smooth; }
   System font fallback for Outfit — size-adjust prevents layout shift
   while the web font loads. Reduces CLS on initial render.
 */
+/* Inter fallback metrics — reduces CLS when web font swaps in */
 @font-face {
-  font-family: 'Outfit Fallback';
+  font-family: 'Inter Fallback';
   src: local('Arial');
-  size-adjust: 103%;
-  ascent-override: 95%;
+  size-adjust: 107%;
+  ascent-override: 90%;
   descent-override: normal;
   line-gap-override: normal;
 }

@@ -9,9 +9,9 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        mono: ['var(--font-mono)', 'JetBrains Mono', 'Fira Code', 'monospace'],
-        sans: ['var(--font-sans)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
-        display: ['var(--font-display)', 'Outfit Fallback', 'Arial', 'sans-serif'],
+        mono: ['var(--font-mono)', 'JetBrains Mono', 'Fira Code', 'ui-monospace', 'monospace'],
+        sans: ['var(--font-sans)', 'Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)', 'Inter', 'system-ui', 'sans-serif'],
       },
       colors: {
         background: 'hsl(var(--background))',
