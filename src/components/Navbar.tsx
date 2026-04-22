@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import clsx from 'clsx';
 import { jetbrainsMono, ibmPlexSans } from '@/lib/fonts';
 
@@ -17,16 +17,13 @@ const NAV_LINKS = [
 export default function Navbar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const toggle = useCallback(() => setOpen((o) => !o), []);
+  const close  = useCallback(() => setOpen(false), []);
 
   return (
     <header
       className={clsx(
         'sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/95',
-        // Replaced backdrop-blur-md with a high-opacity solid background.
-        // backdrop-filter: blur() forces the browser to read pixel data from
-        // the layer below on every frame — that's a forced reflow/composite.
-        // bg-zinc-950/95 (95% opacity) achieves the same visual effect
-        // without any layout recalculation cost.
         jetbrainsMono.variable,
         ibmPlexSans.variable
       )}
@@ -41,6 +38,7 @@ export default function Navbar() {
           </span>
         </Link>
 
+        {/* Desktop links — server-renderable, no JS needed */}
         <ul className="hidden md:flex items-center gap-1">
           {NAV_LINKS.map(({ href, label }) => {
             const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
@@ -50,7 +48,6 @@ export default function Navbar() {
                   href={href}
                   className={clsx(
                     'px-4 py-2 rounded-md font-mono text-sm transition-colors duration-150',
-                    // duration-150 instead of 200 — snappier on mobile
                     active
                       ? 'text-green-400 bg-green-400/10'
                       : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
@@ -63,51 +60,59 @@ export default function Navbar() {
           })}
         </ul>
 
+        {/* Mobile hamburger */}
         <button
-          className="md:hidden flex flex-col gap-1.5 p-2"
-          onClick={() => setOpen((o) => !o)}
+          className="md:hidden flex flex-col justify-center gap-1.5 p-2 w-10 h-10"
+          onClick={toggle}
           aria-label="Toggle menu"
           aria-expanded={open}
+          aria-controls="mobile-menu"
         >
           <span className={clsx(
-            'block h-px w-6 bg-zinc-400 transition-transform duration-200',
-            open && 'rotate-45 translate-y-[7px]'
-            // Use exact pixel value to avoid float rounding triggering reflow
+            'block h-px w-6 bg-zinc-400 transition-transform duration-200 origin-center',
+            open && 'rotate-45 translate-y-[3.5px]'
           )} />
           <span className={clsx(
             'block h-px w-6 bg-zinc-400 transition-opacity duration-200',
-            open && 'opacity-0'
+            open ? 'opacity-0' : 'opacity-100'
           )} />
           <span className={clsx(
-            'block h-px w-6 bg-zinc-400 transition-transform duration-200',
-            open && '-rotate-45 -translate-y-[7px]'
+            'block h-px w-6 bg-zinc-400 transition-transform duration-200 origin-center',
+            open && '-rotate-45 -translate-y-[3.5px]'
           )} />
         </button>
       </nav>
 
-      {open && (
-        <div className="md:hidden border-t border-zinc-800 bg-zinc-950 px-6 py-4">
-          <ul className="flex flex-col gap-2">
-            {NAV_LINKS.map(({ href, label }) => {
-              const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
-              return (
-                <li key={href}>
-                  <Link
-                    href={href}
-                    onClick={() => setOpen(false)}
-                    className={clsx(
-                      'block px-4 py-2 rounded-md font-mono text-sm',
-                      active ? 'text-green-400 bg-green-400/10' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-                    )}
-                  >
-                    {label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
+      {/* Mobile menu — hidden by default, no layout cost when closed */}
+      <div
+        id="mobile-menu"
+        className={clsx(
+          'md:hidden border-t border-zinc-800 bg-zinc-950 px-6 overflow-hidden transition-all duration-200',
+          open ? 'max-h-64 py-4' : 'max-h-0 py-0'
+          // max-h transition instead of conditional render —
+          // avoids mount/unmount layout recalculation on each toggle
+        )}
+      >
+        <ul className="flex flex-col gap-2">
+          {NAV_LINKS.map(({ href, label }) => {
+            const active = href === '/' ? pathname === '/' : pathname.startsWith(href);
+            return (
+              <li key={href}>
+                <Link
+                  href={href}
+                  onClick={close}
+                  className={clsx(
+                    'block px-4 py-2 rounded-md font-mono text-sm',
+                    active ? 'text-green-400 bg-green-400/10' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  )}
+                >
+                  {label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </header>
   );
 }

@@ -1,11 +1,17 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { getAllSlugs, getPostWithHtml, getAllPosts } from '@/lib/posts';
 import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
-import ReadingProgress from '@/components/ReadingProgress';
 import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
+
+// ReadingProgress uses scroll events + DOM refs — pure enhancement, not content.
+// Dynamic import keeps it out of the initial JS parse on mobile.
+const ReadingProgress = dynamic(() => import('@/components/ReadingProgress'), {
+  ssr: false,
+});
 
 const BASE_URL = 'https://www.damonsec.com';
 
