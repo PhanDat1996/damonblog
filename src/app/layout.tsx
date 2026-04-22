@@ -5,29 +5,38 @@ import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { WebsiteJsonLd } from '@/components/JsonLd';
 
-// display: swap prevents invisible text while font loads
+/*
+  Font loading strategy:
+  - Outfit (display headings): preload:true — used in H1 above the fold, LCP-critical
+  - JetBrains Mono: preload:false — used in code blocks, below the fold on most pages
+  - IBM Plex Sans: preload:false — body text, browser renders with fallback first
+  All fonts use display:'swap' to prevent invisible text during load (FOIT).
+*/
 const outfit = Outfit({
   subsets: ['latin'],
   variable: '--font-display',
   weight: ['400', '600', '700', '800'],
   display: 'swap',
   preload: true,
+  adjustFontFallback: true, // generates size-adjust metrics to reduce CLS
 });
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-mono',
-  weight: ['400', '500', '600'],  // removed 300 — unused weight
+  weight: ['400', '500', '600'],
   display: 'swap',
-  preload: false,  // mono font is not above-the-fold critical
+  preload: false,
+  adjustFontFallback: false, // mono fonts don't benefit much from this
 });
 
 const ibmPlexSans = IBM_Plex_Sans({
   subsets: ['latin'],
   variable: '--font-sans',
-  weight: ['400', '500', '600'],  // removed 300 — unused weight
+  weight: ['400', '500', '600'],
   display: 'swap',
   preload: false,
+  adjustFontFallback: true,
 });
 
 export const metadata: Metadata = {
@@ -90,6 +99,14 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${outfit.variable} ${jetbrainsMono.variable} ${ibmPlexSans.variable}`}>
+      <head>
+        {/*
+          Preconnect to Google Fonts CDN — eliminates DNS + TLS handshake
+          latency on next/font requests. Must be before next/font link tags.
+        */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+      </head>
       <body className="min-h-screen bg-zinc-950 text-zinc-200 font-sans antialiased selection:bg-green-400/20 selection:text-green-300">
         <WebsiteJsonLd />
         <Navbar />

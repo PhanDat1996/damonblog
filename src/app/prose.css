@@ -1,0 +1,134 @@
+/* Prose styles — loaded only on blog post pages (/blog/[slug]) */
+/* Splitting this out of globals.css reduces render-blocking CSS on all other pages */
+
+.prose {
+  color: theme('colors.zinc.200');
+  max-width: none;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  color: theme('colors.white');
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  scroll-margin-top: 5rem;
+}
+
+.prose h1 { font-size: 2rem; margin-top: 2.5rem; margin-bottom: 1rem; }
+.prose h2 { font-size: 1.5rem; margin-top: 2rem; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid theme('colors.zinc.800'); }
+.prose h3 { font-size: 1.25rem; margin-top: 1.75rem; margin-bottom: 0.5rem; }
+
+.prose p { line-height: 1.8; margin-bottom: 1.25rem; }
+
+.prose a {
+  color: theme('colors.green.400');
+  text-decoration: none;
+  border-bottom: 1px solid theme('colors.green.400/30');
+  transition: border-color 0.2s;
+}
+.prose a:hover { border-bottom-color: theme('colors.green.400'); }
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.825em;
+  color: theme('colors.zinc.200');
+  background-color: theme('colors.zinc.800');
+  padding: 0.15em 0.45em;
+  border-radius: 0.25rem;
+  border: 1px solid theme('colors.zinc.700');
+  white-space: nowrap;
+}
+
+.prose pre {
+  background-color: theme('colors.zinc.900') !important;
+  border: 1px solid theme('colors.zinc.800');
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.prose pre code {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  color: theme('colors.zinc.200') !important;
+  font-size: 0.85em;
+  white-space: pre;
+}
+
+.prose blockquote {
+  border-left: 3px solid theme('colors.green.500');
+  padding-left: 1.25rem;
+  margin: 1.5rem 0;
+  color: theme('colors.zinc.400');
+  font-style: italic;
+}
+
+.prose ul {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 1.25rem;
+}
+
+.prose ul li {
+  padding-left: 1.5rem;
+  position: relative;
+  margin-bottom: 0.4rem;
+}
+
+.prose ul li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: theme('colors.green.500');
+  font-size: 0.7em;
+  top: 0.3em;
+}
+
+.prose ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.prose ol li { margin-bottom: 0.4rem; }
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.875rem;
+}
+
+.prose table th {
+  background: theme('colors.zinc.900');
+  color: theme('colors.white');
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border: 1px solid theme('colors.zinc.800');
+}
+
+.prose table td {
+  padding: 0.65rem 1rem;
+  border: 1px solid theme('colors.zinc.800/60');
+}
+
+.prose table tr:nth-child(even) td {
+  background: theme('colors.zinc.900/30');
+}
+
+.prose hr {
+  border: none;
+  border-top: 1px solid theme('colors.zinc.800');
+  margin: 2.5rem 0;
+}
+
+.prose strong { color: theme('colors.white'); font-weight: 600; }
