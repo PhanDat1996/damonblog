@@ -7,8 +7,6 @@ featured: true
 slug: "linux-security-hardening-guide"
 ---
 
-# Linux Security Hardening Guide: CIS Benchmarks for Production
-
 ## TL;DR
 
 - **CIS Level 1** is the right baseline for production Linux servers — SOC 2, PCI-DSS, HIPAA all accept it

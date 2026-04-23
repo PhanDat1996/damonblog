@@ -7,8 +7,6 @@ featured: false
 slug: "check-disk-usage-linux-du-df"
 ---
 
-# Check Disk Usage in Linux: du vs df Explained
-
 Disk is filling up. Two tools give you different answers to different questions: `df` tells you how much space is left on each filesystem, `du` tells you how much each directory or file is consuming.
 
 ---

@@ -7,8 +7,6 @@ featured: false
 slug: "linux-kill-process-by-port"
 ---
 
-# Linux Kill Process by Port: Step-by-Step Guide
-
 Port is occupied and something won't start. You need to find what's using it and kill it. Here's every reliable way to do that.
 
 ---

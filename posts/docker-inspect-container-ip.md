@@ -7,8 +7,6 @@ featured: false
 slug: "docker-inspect-container-ip-address"
 ---
 
-# Docker Inspect Container IP Address: Step-by-Step
-
 Need the IP of a running container? There are several ways depending on whether you want just the IP, the full network config, or IPs across multiple networks.
 
 ---

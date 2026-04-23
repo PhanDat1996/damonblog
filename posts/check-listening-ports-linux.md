@@ -7,8 +7,6 @@ featured: false
 slug: "check-listening-ports-linux-guide"
 ---
 
-# How to Check Listening Ports in Linux (2026 Guide)
-
 A connection refused error. An unexpected service. A security audit question. All of them start the same way: which ports are listening, on which interface, and which process owns them?
 
 ---

@@ -7,8 +7,6 @@ featured: false
 slug: "restart-network-service-linux-guide"
 ---
 
-# How to Restart Network Service in Linux (All Distros)
-
 Network is flaky, an IP change didn't apply, or a config edit needs to take effect. The right command depends on your distro and network manager. Here's every way to do it.
 
 ---

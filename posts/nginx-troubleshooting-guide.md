@@ -7,8 +7,6 @@ featured: true
 slug: "nginx-troubleshooting-guide"
 ---
 
-# NGINX Troubleshooting Guide: Complete Production Reference
-
 ## TL;DR
 
 - **502 Bad Gateway** = NGINX cannot reach upstream. Check upstream health, then TIME-WAIT, then worker_connections

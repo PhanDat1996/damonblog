@@ -7,8 +7,6 @@ featured: true
 slug: "linux-performance-troubleshooting-guide"
 ---
 
-# Linux Performance Troubleshooting: Complete Engineer's Guide
-
 ## TL;DR
 
 - **Start with `top`** — get situational awareness in 30 seconds

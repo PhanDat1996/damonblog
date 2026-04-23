@@ -7,8 +7,6 @@ featured: false
 slug: "linux-find-file-by-name-size-guide"
 ---
 
-# Linux Find File by Name and Size: Real Examples
-
 The `find` command is one of the most powerful tools on Linux. Most engineers know the basics — here's how to actually use it in production for real search tasks.
 
 ---
