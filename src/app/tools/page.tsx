@@ -6,34 +6,8 @@ export const metadata: Metadata = {
   description: 'Open-source tools and utilities built by Damon for DevOps, security operations, and infrastructure engineering.',
 };
 
-const TOOLS: Tool[] = [
-  {
-    name: 'seo-pro-audit',
-    tagline: 'CLI tool to audit website SEO with optional Google PageSpeed integration',
-    description: 'Crawls your site from sitemap, checks on-page SEO — title, meta, canonical, OG tags, JSON-LD, missing alt — and optionally pulls Lighthouse scores via PageSpeed Insights API. Outputs scored HTML + JSON reports.',
-    tags: ['seo', 'python', 'cli', 'devops'],
-    status: 'stable',
-    href: 'https://github.com/PhanDat1996/seo-pro-audit',
-  },
-  {
-    name: 'sys-monitor',
-    tagline: 'top-like system monitor in pure Bash with log output',
-    description: 'Live system stats in the terminal — CPU per-core, RAM, swap, disk per mount, network I/O, and top processes by CPU. No dependencies beyond standard coreutils. Writes every snapshot to a log file. Runs as a systemd service.',
-    tags: ['bash', 'linux', 'monitoring', 'sysadmin'],
-    status: 'stable',
-    href: 'https://github.com/PhanDat1996/sys_monitor',
-  },
-  {
-    name: 'tcp-port-checker',
-    tagline: 'Fast threaded TCP port scanner — pure Python, no dependencies',
-    description: 'Scan one or more hosts across port lists or ranges. Reports open/closed/timeout with latency, optional banner grabbing, and CSV/JSON export. Built for quick network audits and connectivity checks in production.',
-    tags: ['python', 'networking', 'security', 'cli', 'devops'],
-    status: 'stable',
-    href: 'https://github.com/PhanDat1996/tcp-port-checker',
-  },
-];
-
 type ToolStatus = 'stable' | 'beta' | 'wip';
+type ToolType   = 'github' | 'web';
 
 interface Tool {
   name: string;
@@ -41,9 +15,53 @@ interface Tool {
   description: string;
   tags: string[];
   status: ToolStatus;
+  type?: ToolType;   // 'web' = internal page link, 'github' = external (default)
   href?: string;
   docs?: string;
 }
+
+const TOOLS: Tool[] = [
+  {
+    name: 'nginx-config-analyzer',
+    tagline: 'Detect security, performance, SEO, and proxy issues in any NGINX config',
+    description:
+      'Paste a server block, reverse proxy config, or full nginx.conf and get an instant scored report — missing security headers, TLS issues, rate limiting, gzip/brotli, proxy timeouts, HTTPS redirects, and more. Findings categorized by severity. Export as JSON. Runs entirely in-browser.',
+    tags: ['nginx', 'security', 'infrastructure', 'devops', 'web'],
+    status: 'stable',
+    type: 'web',
+    href: '/tools/nginx-config-analyzer',
+  },
+  {
+    name: 'seo-pro-audit',
+    tagline: 'CLI tool to audit website SEO with optional Google PageSpeed integration',
+    description:
+      'Crawls your site from sitemap, checks on-page SEO — title, meta, canonical, OG tags, JSON-LD, missing alt — and optionally pulls Lighthouse scores via PageSpeed Insights API. Outputs scored HTML + JSON reports.',
+    tags: ['seo', 'python', 'cli', 'devops'],
+    status: 'stable',
+    type: 'github',
+    href: 'https://github.com/PhanDat1996/seo-pro-audit',
+  },
+  {
+    name: 'sys-monitor',
+    tagline: 'top-like system monitor in pure Bash with log output',
+    description:
+      'Live system stats in the terminal — CPU per-core, RAM, swap, disk per mount, network I/O, and top processes by CPU. No dependencies beyond standard coreutils. Writes every snapshot to a log file. Runs as a systemd service.',
+    tags: ['bash', 'linux', 'monitoring', 'sysadmin'],
+    status: 'stable',
+    type: 'github',
+    href: 'https://github.com/PhanDat1996/sys_monitor',
+  },
+  {
+    name: 'tcp-port-checker',
+    tagline: 'Fast threaded TCP port scanner — pure Python, no dependencies',
+    description:
+      'Scan one or more hosts across port lists or ranges. Reports open/closed/timeout with latency, optional banner grabbing, and CSV/JSON export. Built for quick network audits and connectivity checks in production.',
+    tags: ['python', 'networking', 'security', 'cli', 'devops'],
+    status: 'stable',
+    type: 'github',
+    href: 'https://github.com/PhanDat1996/tcp-port-checker',
+  },
+];
 
 const STATUS_STYLES: Record<ToolStatus, string> = {
   stable: 'bg-green-900/40 text-green-400 border-green-800/60',
@@ -59,7 +77,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 
 export default function ToolsPage() {
   return (
-    <div className={"space-y-16"}>
+    <div className="space-y-16">
 
       {/* Header */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">
@@ -74,7 +92,7 @@ export default function ToolsPage() {
         </p>
       </div>
 
-      {/* Tools grid or empty state */}
+      {/* Tools grid */}
       {TOOLS.length > 0 ? (
         <section>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -88,9 +106,17 @@ export default function ToolsPage() {
                   <h2 className="font-mono text-base font-semibold text-white">
                     {tool.name}
                   </h2>
-                  <span className={`flex-shrink-0 inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-medium ${STATUS_STYLES[tool.status]}`}>
-                    {STATUS_LABEL[tool.status]}
-                  </span>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {/* Web badge for browser-based tools */}
+                    {tool.type === 'web' && (
+                      <span className="inline-flex items-center rounded border border-blue-800/60 bg-blue-900/40 px-2 py-0.5 font-mono text-[10px] font-medium text-blue-400">
+                        Web
+                      </span>
+                    )}
+                    <span className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-medium ${STATUS_STYLES[tool.status]}`}>
+                      {STATUS_LABEL[tool.status]}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Tagline */}
@@ -125,7 +151,15 @@ export default function ToolsPage() {
                       Docs →
                     </Link>
                   )}
-                  {tool.href && (
+                  {tool.href && tool.type === 'web' && (
+                    <Link
+                      href={tool.href}
+                      className="font-mono text-xs text-green-400 hover:underline"
+                    >
+                      Open tool →
+                    </Link>
+                  )}
+                  {tool.href && tool.type !== 'web' && (
                     <a
                       href={tool.href}
                       target="_blank"
