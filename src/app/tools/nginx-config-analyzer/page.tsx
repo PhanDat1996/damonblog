@@ -519,6 +519,274 @@ export default function NginxConfigAnalyzerPage() {
         </div>
       </div>
 
+      {/* ── Landing / SEO content ─────────────────────────────────────────── */}
+      <div className="mt-20 space-y-16">
+
+        <div className="border-t border-zinc-800" />
+
+        {/* Intro */}
+        <section className="max-w-3xl space-y-4">
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            Your app is behind NGINX. Requests are flowing. Everything <em>looks</em> fine.
+          </p>
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            Then a 413 error starts hitting your file upload endpoint because{" "}
+            <Code>client_max_body_size</Code> defaults to 1MB and nobody set it explicitly.
+            Or your backend logs show every request coming from <Code>127.0.0.1</Code> because{" "}
+            <Code>X-Forwarded-For</Code> was never forwarded. Or your monitoring flags that{" "}
+            <Code>server_tokens</Code> is still on and your NGINX version is leaking in every
+            response header — visible to any scanner on the internet.
+          </p>
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            None of these show up in <Code>nginx -t</Code>. The config is syntactically valid.
+            It&apos;s just wrong.
+          </p>
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            This is the gap the <strong className="text-zinc-200">NGINX Config Analyzer</strong> fills.
+            It&apos;s not a linter — it&apos;s a security and operational audit tool that checks
+            your config against real hardening standards, reverse proxy best practices, and
+            production-grade defaults. Paste the config, get findings in seconds, know exactly
+            what to fix before it becomes an incident.
+          </p>
+        </section>
+
+        {/* What this tool checks */}
+        <section className="space-y-6">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">What this tool checks</h2>
+          {([
+            { title: "Security", icon: "🛡", items: [
+              { label: "HSTS (Strict-Transport-Security)", desc: "Missing on most configs. Without it, browsers can be downgraded to HTTP even with a valid certificate." },
+              { label: "X-Frame-Options", desc: "Absence opens clickjacking vectors on any page that renders iframe-embeddable content." },
+              { label: "X-Content-Type-Options: nosniff", desc: "Prevents MIME-sniffing attacks in older and non-compliant browsers." },
+              { label: "Content-Security-Policy", desc: "Presence detected; policy quality is out of scope, but absence is flagged." },
+              { label: "TLS version enforcement", desc: "Checks for TLS 1.0 / 1.1 in ssl_protocols — deprecated by RFC, will fail PCI-DSS and SOC 2." },
+              { label: "server_tokens", desc: "Checks whether NGINX version disclosure is explicitly disabled." },
+              { label: "Rate limiting", desc: "Checks for limit_req_zone / limit_req on configs exposing login or API endpoints." },
+            ]},
+            { title: "Performance", icon: "⚡", items: [
+              { label: "Compression", desc: "Checks for gzip or brotli. Uncompressed text responses are a measurable cost on high-traffic sites." },
+              { label: "keepalive_timeout", desc: "Explicit tuning prevents resource waste (too high) and connection churn (not set at all)." },
+              { label: "client_max_body_size", desc: "Most common cause of silent 413 errors in production. Default is 1MB." },
+              { label: "Proxy timeouts", desc: "Missing proxy_read/connect/send_timeout means NGINX defaults may not match backend latency under load." },
+            ]},
+            { title: "SEO", icon: "🔍", items: [
+              { label: "HTTP → HTTPS redirect", desc: "listen 80 without return 301 splits crawl budget and dilutes link signals between HTTP and HTTPS." },
+              { label: "Canonical host enforcement", desc: "Serving www and non-www without a 301 creates duplicate content in Google's index." },
+            ]},
+            { title: "Reverse Proxy", icon: "📋", items: [
+              { label: "X-Forwarded-For", desc: "Without this, backend sees 127.0.0.1 for every request. IP-based rate limiting and geo logic break silently." },
+              { label: "X-Forwarded-Proto", desc: "Without this, apps don't know if the original request was HTTP or HTTPS — breaks redirects, CSRF tokens, and secure cookies." },
+            ]},
+          ] as { title: string; icon: string; items: { label: string; desc: string }[] }[]).map(({ title, icon, items }) => (
+            <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 space-y-4">
+              <h3 className="font-mono text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                <span>{icon}</span>{title}
+              </h3>
+              <ul className="space-y-2.5">
+                {items.map(({ label, desc }) => (
+                  <li key={label} className="flex gap-3 text-sm">
+                    <span className="text-green-400 font-mono mt-0.5 flex-shrink-0">—</span>
+                    <span>
+                      <span className="text-zinc-200 font-medium">{label}</span>
+                      <span className="text-zinc-500"> — {desc}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </section>
+
+        {/* Why dangerous */}
+        <section className="space-y-5">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">Why NGINX misconfiguration is dangerous</h2>
+          <div className="space-y-4 max-w-3xl">
+            {([
+              { h: "Missing security headers are exploitable.", b: "Clickjacking via missing X-Frame-Options, MIME confusion via missing X-Content-Type-Options, and SSL stripping via missing HSTS are real attack classes with documented CVEs. They're consistently the easiest findings on any external pentest — zero specialized knowledge required." },
+              { h: "Proxy header gaps corrupt application behavior.", b: "In a typical NGINX-in-front-of-Node.js/Django setup, the backend has no visibility into the real client IP unless NGINX forwards it. IP-based rate limiting, fraud detection, and geo-restriction all receive 127.0.0.1 for every request. The security control silently fails." },
+              { h: "Silent failures are the worst kind.", b: "A 413 error that only appears when users upload a file over 1MB doesn't fail at deployment — it fails in production, reported by a user, often months after launch. Same story for proxy timeouts that only surface under load." },
+              { h: "Legacy TLS fails compliance.", b: "TLS 1.0 and 1.1 were deprecated in RFC 8996 (2021). Any org running PCI-DSS, HIPAA, ISO 27001, or SOC 2 Type II will fail audit if they're reachable. The fix is one line." },
+              { h: "Version disclosure is free reconnaissance.", b: "server_tokens on (the default) appends the NGINX version to every error response and Server header. An attacker scanning for vulnerable versions doesn't need to guess — you're advertising it." },
+            ] as { h: string; b: string }[]).map(({ h, b }) => (
+              <p key={h} className="text-sm text-zinc-400 leading-relaxed">
+                <strong className="text-zinc-200">{h}</strong>{" "}{b}
+              </p>
+            ))}
+          </div>
+        </section>
+
+        {/* Common issues */}
+        <section className="space-y-5">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">Common issues found in real configs</h2>
+          <div className="space-y-4">
+            {([
+              { num: "01", title: "Missing HSTS header", sev: "HIGH",
+                body: "The most common high-severity finding. Nearly every config handling HTTPS is missing Strict-Transport-Security. Without it: MITM attackers can SSL-strip to HTTP, browsers won't cache the HTTPS preference, and subdomains stay unprotected.",
+                code: `add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;` },
+              { num: "02", title: "HTTP listener without HTTPS redirect", sev: "MEDIUM",
+                body: "listen 80 present, no return 301. Google indexes HTTP and HTTPS as separate URLs. Users without https:// land on an unencrypted connection. Secure cookies don't apply on HTTP requests.",
+                code: `server {\n    listen 80;\n    server_name example.com www.example.com;\n    return 301 https://$host$request_uri;\n}` },
+              { num: "03", title: "client_max_body_size not set", sev: "LOW",
+                body: "Default is 1MB. Any file upload endpoint returns 413 silently once a user exceeds it. The error appears as a generic failed request — no one thinks to check NGINX.",
+                code: `client_max_body_size 50M;` },
+              { num: "04", title: "Proxy headers not forwarded", sev: "MEDIUM",
+                body: "proxy_pass present, no X-Forwarded-For or X-Forwarded-Proto. Backend logs show 127.0.0.1 for everything. IP-based rate limiting, fraud detection, and $scheme logic all break silently.",
+                code: `proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;\nproxy_set_header X-Forwarded-Proto $scheme;` },
+              { num: "05", title: "Proxy timeouts not tuned", sev: "MEDIUM",
+                body: "NGINX default is 60s for all proxy timeouts. Long-running operations (report generation, exports) will 504 before completing regardless of whether the backend finished.",
+                code: `proxy_connect_timeout 10s;\nproxy_send_timeout    90s;\nproxy_read_timeout    90s;` },
+              { num: "06", title: "server_tokens not disabled", sev: "LOW",
+                body: "One line fix. Removes NGINX version from Server headers and error pages. Zero operational impact.",
+                code: `server_tokens off;` },
+              { num: "07", title: "No rate limiting", sev: "MEDIUM",
+                body: "No limit_req_zone or limit_req found. Every exposed endpoint — login, password reset, API — accepts unlimited requests per client with no throttle.",
+                code: `# http{} block\nlimit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;\n\n# location block\nlimit_req zone=api burst=20 nodelay;` },
+            ] as { num: string; title: string; sev: string; body: string; code: string }[]).map(({ num, title, sev, body, code }) => {
+              const sevStyle = sev === "HIGH"
+                ? "bg-red-500/10 text-red-400 border-red-500/20"
+                : sev === "MEDIUM"
+                ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                : "bg-zinc-700/60 text-zinc-400 border-zinc-600/40";
+              return (
+                <div key={num} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 md:p-6 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs text-zinc-600">{num}</span>
+                      <h3 className="font-mono text-sm font-semibold text-zinc-100">{title}</h3>
+                    </div>
+                    <span className={`font-mono text-[10px] font-bold tracking-wider px-2 py-0.5 rounded border flex-shrink-0 ${sevStyle}`}>
+                      {sev}
+                    </span>
+                  </div>
+                  <p className="text-sm text-zinc-400 leading-relaxed">{body}</p>
+                  <pre className="font-mono text-xs bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-green-400 overflow-x-auto leading-relaxed whitespace-pre">
+                    <code>{code}</code>
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* How to apply fixes */}
+        <section className="space-y-5">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">How to validate and apply fixes</h2>
+          <p className="text-sm text-zinc-400 leading-relaxed max-w-2xl">
+            After making changes, always validate syntax before reloading. Never use{" "}
+            <Code>systemctl restart nginx</Code> for config changes in production — it drops
+            active connections. <Code>reload</Code> sends SIGHUP and drains existing connections
+            gracefully.
+          </p>
+          <pre className="font-mono text-xs bg-zinc-950 border border-zinc-800 rounded-xl p-5 text-green-400 overflow-x-auto leading-relaxed whitespace-pre">
+            <code>{`# Test config syntax
+nginx -t
+
+# If output is "syntax is ok" and "test is successful":
+systemctl reload nginx
+
+# Verify changes applied
+nginx -T | grep server_tokens
+nginx -T | grep Strict-Transport-Security
+
+# Verify headers are being served
+curl -I https://yourdomain.com | grep -E "Strict-Transport|X-Frame|X-Content-Type|Content-Security"
+
+# Confirm real IPs in backend logs after fixing X-Forwarded-For
+tail -f /var/log/app/access.log | grep -v "127.0.0.1"`}</code>
+          </pre>
+        </section>
+
+        {/* Real production scenarios */}
+        <section className="space-y-5">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">Real production scenarios</h2>
+          <div className="space-y-4 max-w-3xl">
+            {([
+              { label: "Financial services / banking portals",
+                body: "Every external pentest of a regulated web app checks for security headers in the first five minutes. Missing HSTS, X-Frame-Options, and X-Content-Type-Options appear on every report. In one case a bank's payment portal was flagged for leaking its NGINX version via server_tokens and serving TLS 1.0 — both caught by static config analysis before the pentest ran a single active scan." },
+              { label: "SaaS platforms with file upload features",
+                body: "A SaaS app handles document uploads fine in staging because test files are small. In production, a customer uploads a 12MB PDF. NGINX returns 413. The customer reports 'the upload is broken.' The team checks application logs — nothing there, because NGINX rejected the request before it reached the app. Twenty minutes of debugging later, someone remembers client_max_body_size." },
+              { label: "E-commerce behind a reverse proxy",
+                body: "An e-commerce platform running NGINX in front of Django. After a deployment, the fraud detection system stopped triggering on high-risk IPs. Root cause: a config change removed proxy_set_header X-Forwarded-For. The app received every request from 127.0.0.1, so all IP-based rules evaluated against localhost. The fraud detection system was silently disabled for three days." },
+              { label: "Microservice API gateways",
+                body: "NGINX routing /api/v1/users to one service, /api/v1/orders to another. Without per-location timeout tuning, a slow upstream (p99 latency ~45s) causes NGINX to return 504 on every request exceeding the 60s default — even when the upstream successfully completes. The symptom looks like an application bug; the root cause is in NGINX config." },
+            ] as { label: string; body: string }[]).map(({ label, body }) => (
+              <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-2">
+                <div className="font-mono text-xs font-semibold text-green-400">{label}</div>
+                <p className="text-sm text-zinc-400 leading-relaxed">{body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Related */}
+        <section className="space-y-4">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">Related</h2>
+          <ul className="space-y-2">
+            {([
+              { label: "NGINX Security Hardening Guide: Headers, TLS, and Rate Limiting", href: "" },
+              { label: "How to Fix 413 Request Entity Too Large in NGINX", href: "" },
+              { label: "Check Open Ports in Linux: ss vs netstat", href: "https://www.damonsec.com/blog/check-open-ports-linux-ss-netstat-guide" },
+              { label: "systemctl Restart Service Not Working: Fix Guide", href: "https://www.damonsec.com/blog/systemctl-restart-service-not-working-fix" },
+            ] as { label: string; href: string }[]).map(({ label, href }) =>
+              href ? (
+                <li key={label}>
+                  <a href={href} className="font-mono text-sm text-green-400 hover:underline">→ {label}</a>
+                </li>
+              ) : (
+                <li key={label} className="flex items-center gap-2">
+                  <span className="font-mono text-sm text-zinc-600">→ {label}</span>
+                  <span className="font-mono text-xs text-zinc-700">(coming soon)</span>
+                </li>
+              )
+            )}
+          </ul>
+        </section>
+
+        {/* FAQ */}
+        <section className="space-y-4">
+          <h2 className="font-mono text-xl font-bold text-zinc-100">FAQ</h2>
+          <div className="space-y-3">
+            {([
+              { q: "What is the NGINX Config Analyzer?",
+                a: "A browser-based static analysis tool that parses your NGINX configuration and checks it against a rule set covering security hardening, performance tuning, SEO redirects, and reverse proxy best practices. It produces a scored report with categorized findings — each with the directive that triggered it, why it matters, and the exact fix. It is not a connectivity tester or live scanner." },
+              { q: "Is it safe to paste my NGINX config here?",
+                a: "Yes. The entire analysis runs in JavaScript inside your browser. No config data is transmitted to any server — no API calls, no logging, no backend. Verify it yourself: open DevTools → Network tab before pasting and you'll see zero outbound requests." },
+              { q: "Why is HTTPS redirect important for SEO?",
+                a: "Google treats http://example.com and https://example.com as separate URLs unless one redirects to the other with a 301. If both are reachable, backlinks and crawl budget split between them. A return 301 https://$host$request_uri; in the HTTP server block costs nothing operationally and eliminates the ambiguity immediately." },
+              { q: "What are the most dangerous NGINX misconfigurations?",
+                a: "Ranked by impact: (1) TLS 1.0/1.1 enabled — fails compliance, allows downgrade attacks; (2) Missing HSTS — enables SSL stripping even with a valid cert; (3) X-Forwarded-For not forwarded — silently breaks all IP-based security controls in the app layer; (4) No rate limiting on auth endpoints; (5) server_tokens on — free version fingerprinting. All five are fixed with one or two config lines." },
+              { q: "Can this tool detect all NGINX issues?",
+                a: "No. Static config analysis can't test actual connectivity, verify TLS certificate validity, check upstream health, or evaluate CSP policy quality. It catches structural and configurational issues — the class of bugs nginx -t accepts but that cause real problems. For a complete picture, pair it with Mozilla Observatory, testssl.sh, and nginx -T to verify the full compiled config." },
+              { q: "Does it support multi-file configs with include directives?",
+                a: "Not yet. The analyzer evaluates the pasted text as a single unit. If your config uses include directives, paste the specific server or location block you want to audit, or manually concatenate the relevant files. Include-aware parsing is on the roadmap." },
+              { q: "Why does it flag missing CSP even though CSP is hard to configure?",
+                a: "Because absence is unambiguously worse than an imperfect policy. No CSP means no constraints on script execution. The recommendation is to start with Content-Security-Policy-Report-Only to observe violations before enforcing. The tool flags absence, not imperfection." },
+            ] as { q: string; a: string }[]).map(({ q, a }) => (
+              <details key={q} className="group rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+                <summary className="flex items-center justify-between gap-4 px-5 py-4 cursor-pointer list-none font-mono text-sm font-medium text-zinc-200 hover:text-white transition-colors select-none">
+                  {q}
+                  <span className="text-zinc-600 group-open:rotate-180 transition-transform flex-shrink-0 text-base leading-none">↓</span>
+                </summary>
+                <div className="px-5 pb-5 pt-1">
+                  <p className="text-sm text-zinc-400 leading-relaxed">{a}</p>
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+
+      </div>
+
     </div>
+  );
+}
+
+// ─── INLINE HELPER ────────────────────────────────────────────────────────────
+
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="font-mono text-xs bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-green-400">
+      {children}
+    </code>
   );
 }
