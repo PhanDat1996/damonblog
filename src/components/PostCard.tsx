@@ -25,10 +25,11 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
             <span className="font-mono text-[10px] text-zinc-400">{post.readingTime}</span>
           </div>
 
-          <h2 className="mb-3 text-xl font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200 line-clamp-2">
+          <h2 className="mb-3 font-display text-xl font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200 line-clamp-2">
             {post.title}
           </h2>
-          <p className="text-sm leading-relaxed text-zinc-400 line-clamp-3">{post.excerpt}</p>
+          {/* font-sans + slightly larger for readability */}
+          <p className="font-sans text-sm leading-relaxed text-zinc-400 line-clamp-3">{post.excerpt}</p>
         </div>
 
         <div className="mt-6 flex flex-col gap-3">
@@ -40,7 +41,6 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
           <p className="font-mono text-xs text-zinc-600">{formatDate(post.date)}</p>
         </div>
 
-        {/* Arrow indicator */}
         <span className="absolute right-6 top-7 text-zinc-700 transition-all duration-200 group-hover:text-green-400 group-hover:translate-x-0.5">
           →
         </span>
@@ -58,10 +58,12 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
         <span className="text-zinc-700">·</span>
         <span>{post.readingTime}</span>
       </div>
-      <h3 className="text-base font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200 line-clamp-2">
+      {/* font-display for card titles — Inter bold looks sharp */}
+      <h3 className="font-display text-base font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200 line-clamp-2">
         {post.title}
       </h3>
-      <p className="text-sm text-zinc-400 line-clamp-2 leading-relaxed">{post.excerpt}</p>
+      {/* font-sans for excerpt — Plus Jakarta Sans at small size */}
+      <p className="font-sans text-sm text-zinc-400 line-clamp-2 leading-relaxed">{post.excerpt}</p>
       <div className="flex flex-wrap gap-1.5 pt-1">
         {post.tags.map((tag) => (
           <TagBadge key={tag} tag={tag} linked={false} />

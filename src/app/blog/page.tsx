@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { getAllPosts, getAllTags } from '@/lib/posts';
 import PostCard from '@/components/PostCard';
+import { plusJakartaSans } from '@/lib/fonts';
+import { clsx } from 'clsx';
 
 const BASE_URL = 'https://www.damonsec.com';
 
@@ -86,7 +88,7 @@ export default async function BlogPage({ searchParams }: Props) {
   };
 
   return (
-    <div className="space-y-12">
+    <div className={clsx("space-y-12", plusJakartaSans.variable)}>
       {/* Fix #2b: pagination link hints for Google */}
       {!activeTag && totalPages > 1 && (
         <>
@@ -109,7 +111,7 @@ export default async function BlogPage({ searchParams }: Props) {
             ? `#${activeTag}`
             : 'Linux & DevOps Troubleshooting Blog'}
         </h1>
-        <p className="text-zinc-400 max-w-xl leading-relaxed">
+        <p className="font-sans text-zinc-400 max-w-xl leading-relaxed">
           {activeTag
             ? `All articles tagged #${activeTag} — practical guides from production experience.`
             : 'Practical guides for Linux engineers — NGINX debugging, process troubleshooting, CIS hardening, and production incident response.'}
