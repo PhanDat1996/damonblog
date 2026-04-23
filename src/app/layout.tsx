@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Inter, Plus_Jakarta_Sans } from 'next/font/google';
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
@@ -28,6 +28,18 @@ const inter = Inter({
   weight: ['600', '700', '800'],
   display: 'swap',
   preload: true,
+  adjustFontFallback: true,
+});
+
+// Plus Jakarta Sans — body font, injected at root so --font-sans is available
+// on every page without each page needing to import it separately.
+// preload:false keeps it off the critical path (Inter/display is the LCP font).
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  variable: '--font-sans',
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  preload: false,
   adjustFontFallback: true,
 });
 
@@ -105,7 +117,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     // Only apply the display font variable at root.
     // --font-mono and --font-sans are injected by their own lazy font loaders.
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${inter.variable} ${plusJakartaSans.variable}`}>
       <head>
         {/*
           Fix #2 (critical request chain):

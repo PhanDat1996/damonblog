@@ -1,8 +1,6 @@
 import type { Metadata } from 'next';
 import { getAllPosts, getAllTags } from '@/lib/posts';
 import PostCard from '@/components/PostCard';
-import { plusJakartaSans } from '@/lib/fonts';
-import { clsx } from 'clsx';
 
 const BASE_URL = 'https://www.damonsec.com';
 
@@ -88,7 +86,7 @@ export default async function BlogPage({ searchParams }: Props) {
   };
 
   return (
-    <div className={clsx("space-y-12", plusJakartaSans.variable)}>
+    <div className={"space-y-12"}>
       {/* Fix #2b: pagination link hints for Google */}
       {!activeTag && totalPages > 1 && (
         <>

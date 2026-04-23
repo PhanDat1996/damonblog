@@ -1,6 +1,4 @@
 import type { Metadata } from 'next';
-import { plusJakartaSans } from '@/lib/fonts';
-import { clsx } from 'clsx';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
@@ -61,7 +59,7 @@ const STATUS_LABEL: Record<ToolStatus, string> = {
 
 export default function ToolsPage() {
   return (
-    <div className={clsx("space-y-16", plusJakartaSans.variable)}>
+    <div className={"space-y-16"}>
 
       {/* Header */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">

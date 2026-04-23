@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useCallback } from 'react';
 import clsx from 'clsx';
-import { jetbrainsMono, plusJakartaSans } from '@/lib/fonts';
+import { jetbrainsMono } from '@/lib/fonts';
 
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
@@ -24,8 +24,7 @@ export default function Navbar() {
     <header
       className={clsx(
         'sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/95',
-        jetbrainsMono.variable,
-        plusJakartaSans.variable
+        jetbrainsMono.variable
       )}
     >
       <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">

@@ -1,6 +1,8 @@
-import { JetBrains_Mono, Plus_Jakarta_Sans } from 'next/font/google';
+import { JetBrains_Mono } from 'next/font/google';
 
-// JetBrains Mono — unchanged, best monospace for code blocks
+// JetBrains Mono — code blocks only.
+// Plus Jakarta Sans has been moved to the root layout (src/app/layout.tsx)
+// so --font-sans is available globally on every page.
 export const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
   variable: '--font-mono',
@@ -8,16 +10,4 @@ export const jetbrainsMono = JetBrains_Mono({
   display: 'swap',
   preload: false,
   adjustFontFallback: false,
-});
-
-// Plus Jakarta Sans — modern, clean, highly legible body font.
-// Replaces IBM Plex Sans: sharper at small sizes, stronger personality,
-// excellent for technical content with varied weights.
-export const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  variable: '--font-sans',
-  weight: ['400', '500', '600'],
-  display: 'swap',
-  preload: false,
-  adjustFontFallback: true,
 });

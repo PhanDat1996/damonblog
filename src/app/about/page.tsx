@@ -1,6 +1,4 @@
 import type { Metadata } from 'next';
-import { plusJakartaSans } from '@/lib/fonts';
-import { clsx } from 'clsx';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
@@ -81,7 +79,7 @@ const TOPICS = [
 
 export default function AboutPage() {
   return (
-    <div className={clsx("mx-auto max-w-2xl space-y-16", plusJakartaSans.variable)}>
+    <div className={"mx-auto max-w-2xl space-y-16"}>
 
       {/* Header */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">
