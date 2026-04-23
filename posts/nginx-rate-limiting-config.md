@@ -7,8 +7,6 @@ featured: false
 slug: "nginx-rate-limiting-config-guide"
 ---
 
-# Nginx Rate Limiting Configuration: Practical Guide With Examples
-
 Nginx rate limiting stops abuse, reduces load on upstream services, and protects login endpoints from brute force. Two directives do the work: `limit_req_zone` to define the rule, `limit_req` to apply it.
 
 ---
