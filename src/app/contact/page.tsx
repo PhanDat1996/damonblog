@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { plusJakartaSans } from '@/lib/fonts';
+import { clsx } from 'clsx';
 
 export const metadata: Metadata = {
   title: 'Contact',
@@ -40,12 +42,12 @@ const LINKS = [
 
 export default function ContactPage() {
   return (
-    <div className="mx-auto max-w-xl space-y-12">
+    <div className={clsx("mx-auto max-w-xl space-y-12", plusJakartaSans.variable)}>
       {/* Header */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">
         <div className="font-mono text-xs text-green-400">~/contact</div>
         <h1 className="font-display text-4xl font-bold tracking-tight text-white">Get in Touch</h1>
-        <p className="text-zinc-400 leading-relaxed">
+        <p className="font-sans text-zinc-400 leading-relaxed">
           Have a question about something I wrote? Working on a tough infrastructure or security
           problem? I&apos;m always happy to chat.
         </p>
@@ -76,7 +78,7 @@ export default function ContactPage() {
       <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 p-6">
         <div className="flex gap-3">
           <span className="font-mono text-green-400 text-sm mt-0.5 flex-shrink-0">$</span>
-          <div className="space-y-2 text-sm text-zinc-400 leading-relaxed">
+          <div className="font-sans space-y-2 text-sm text-zinc-400 leading-relaxed">
             <p>
               I typically respond within a couple of days. For urgent security matters,
               email is the fastest path. For general questions or feedback about a post,

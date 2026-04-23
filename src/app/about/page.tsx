@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { plusJakartaSans } from '@/lib/fonts';
+import { clsx } from 'clsx';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
@@ -79,7 +81,7 @@ const TOPICS = [
 
 export default function AboutPage() {
   return (
-    <div className="mx-auto max-w-2xl space-y-16">
+    <div className={clsx("mx-auto max-w-2xl space-y-16", plusJakartaSans.variable)}>
 
       {/* Header */}
       <div className="space-y-4 border-b border-zinc-800 pb-10">
@@ -137,12 +139,12 @@ export default function AboutPage() {
           <h2 className="font-display text-xl font-bold text-white mb-1">
             What This Blog Is About
           </h2>
-          <p className="text-zinc-400 text-sm">
+          <p className="font-sans text-zinc-400 text-sm">
             Infrastructure troubleshooting, Linux systems, networking behavior, and production debugging.
           </p>
         </div>
 
-        <p className="text-zinc-400 text-sm leading-relaxed">
+        <p className="font-sans text-zinc-400 text-sm leading-relaxed">
           The content is based on real-world scenarios — not documentation summaries,
           not toy examples. Things I have personally debugged, investigated, and resolved.
         </p>
@@ -159,7 +161,7 @@ export default function AboutPage() {
                   {label}
                 </Link>
               ) : (
-                <span className="text-zinc-400">{label}</span>
+                <span className="font-sans text-zinc-400">{label}</span>
               )}
             </li>
           ))}
@@ -177,7 +179,7 @@ export default function AboutPage() {
         <h2 className="font-display text-xl font-bold text-white">
           Why This Blog Exists
         </h2>
-        <p className="text-zinc-400 text-sm leading-relaxed">
+        <p className="font-sans text-zinc-400 text-sm leading-relaxed">
           Most technical content explains <em>what</em> something is. This blog focuses on:
         </p>
         <ul className="space-y-2">
@@ -188,7 +190,7 @@ export default function AboutPage() {
             </li>
           ))}
         </ul>
-        <p className="text-zinc-400 text-sm leading-relaxed">
+        <p className="font-sans text-zinc-400 text-sm leading-relaxed">
           Every article comes from something I have personally encountered — a real
           issue, a deep investigation, or a problem that required understanding beyond
           the documentation. If it took time to figure out, it&apos;s worth documenting.
@@ -198,7 +200,7 @@ export default function AboutPage() {
       {/* Who this is for */}
       <section className="space-y-4">
         <h2 className="font-display text-xl font-bold text-white">Who This Is For</h2>
-        <p className="text-zinc-400 text-sm">Engineers who:</p>
+        <p className="font-sans text-zinc-400 text-sm">Engineers who:</p>
         <ul className="space-y-2">
           {[
             'work with Linux systems',
