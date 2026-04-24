@@ -6,8 +6,8 @@ import Link from "next/link";
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 type Severity = "high" | "medium" | "low";
-type Category = "Security" | "Performance" | "SEO" | "Best Practice";
-type TabKey   = "all" | "security" | "performance" | "seo" | "best";
+type Category = "Security" | "Performance" | "Best Practice";
+type TabKey   = "all" | "security" | "performance" | "best";
 
 interface Finding {
   id: string;
@@ -25,7 +25,6 @@ interface AnalysisResult {
   summary: {
     security: number;
     performance: number;
-    seo: number;
     bestPractice: number;
     serverBlocks: number;
     locations: number;
@@ -77,7 +76,7 @@ function analyzeNginxConfig(rawConfig: string): AnalysisResult {
   const add = (f: Finding) => findings.push(f);
 
   if (!config.trim()) {
-    return { score: 0, findings: [], summary: { security: 0, performance: 0, seo: 0, bestPractice: 0, serverBlocks: 0, locations: 0 } };
+    return { score: 0, findings: [], summary: { security: 0, performance: 0, bestPractice: 0, serverBlocks: 0, locations: 0 } };
   }
 
   const mergedHeaders = findDirectiveValues(config, "add_header").join("\n").toLowerCase();
@@ -186,21 +185,6 @@ function analyzeNginxConfig(rawConfig: string): AnalysisResult {
       evidence: "proxy_pass found without proxy_set_header X-Forwarded-Proto.",
       recommendation: "Add `proxy_set_header X-Forwarded-Proto $scheme;`" });
 
-  // ── SEO ───────────────────────────────────────────────────────────────────
-  if (/listen\s+80\b/i.test(config) && !/return\s+301\s+https:\/\//i.test(config) && !/rewrite\s+\^\s+https:\/\//i.test(config))
-    add({ id: "http-no-redirect", category: "SEO", severity: "medium",
-      title: "HTTP listener found without HTTPS redirect",
-      whyItMatters: "Google indexes HTTP and HTTPS as separate URLs, splitting crawl budget and diluting link equity.",
-      evidence: "listen 80 detected without an obvious 301 redirect to HTTPS.",
-      recommendation: "Add a dedicated server block on port 80 with `return 301 https://$host$request_uri;`" });
-
-  if (!hasDirective(config, "canonical") && !/return\s+301\s+https:\/\/www\./i.test(config) && !/return\s+301\s+https:\/\/[^$]*\$host/i.test(config))
-    add({ id: "canonical-host", category: "SEO", severity: "low",
-      title: "Canonical host redirect not detected",
-      whyItMatters: "Serving both www and non-www without a redirect creates duplicate content and dilutes SEO signals.",
-      evidence: "No clear canonical host redirect strategy found.",
-      recommendation: "Enforce www or non-www consistently with a `return 301` redirect." });
-
   const severityWeights: Record<Severity, number> = { high: 18, medium: 10, low: 5 };
   const penalty = findings.reduce((sum, f) => sum + severityWeights[f.severity], 0);
 
@@ -210,7 +194,6 @@ function analyzeNginxConfig(rawConfig: string): AnalysisResult {
     summary: {
       security:     findings.filter((f) => f.category === "Security").length,
       performance:  findings.filter((f) => f.category === "Performance").length,
-      seo:          findings.filter((f) => f.category === "SEO").length,
       bestPractice: findings.filter((f) => f.category === "Best Practice").length,
       serverBlocks: countMatches(config, /^\s*server\s*\{/gim),
       locations:    countMatches(config, /^\s*location\s+/gim),
@@ -229,7 +212,6 @@ const SEV_STYLES: Record<Severity, string> = {
 const CAT_ICONS: Record<Category, string> = {
   Security:        "🛡",
   Performance:     "⚡",
-  SEO:             "🔍",
   "Best Practice": "📋",
 };
 
@@ -301,7 +283,6 @@ export default function NginxConfigAnalyzerPage() {
     all:         result.findings,
     security:    result.findings.filter((f) => f.category === "Security"),
     performance: result.findings.filter((f) => f.category === "Performance"),
-    seo:         result.findings.filter((f) => f.category === "SEO"),
     best:        result.findings.filter((f) => f.category === "Best Practice"),
   }), [result]);
 
@@ -348,7 +329,6 @@ export default function NginxConfigAnalyzerPage() {
     { key: "all",         label: `All (${grouped.all.length})` },
     { key: "security",    label: `Security (${grouped.security.length})` },
     { key: "performance", label: `Performance (${grouped.performance.length})` },
-    { key: "seo",         label: `SEO (${grouped.seo.length})` },
     { key: "best",        label: `Best Practice (${grouped.best.length})` },
   ];
 
@@ -378,7 +358,7 @@ export default function NginxConfigAnalyzerPage() {
           nginx-config-analyzer
         </h1>
         <p className="mt-2.5 text-sm text-zinc-400 leading-relaxed max-w-2xl">
-          Paste your NGINX configuration — server block, reverse proxy config, or full nginx.conf — and get instant findings across security hardening gaps, performance tuning, SEO redirects, and proxy best practices. Scored report, exportable as JSON. Runs entirely in your browser.
+          Paste your NGINX configuration — server block, reverse proxy config, or full nginx.conf — and get instant findings across security hardening gaps, performance tuning, and proxy best practices. Scored report, exportable as JSON. Runs entirely in your browser.
         </p>
         <div className="flex flex-wrap gap-1.5 mt-4">
           {["#nginx", "#security", "#infrastructure", "#devops", "#web"].map((tag) => (
@@ -397,7 +377,7 @@ export default function NginxConfigAnalyzerPage() {
           <div className="px-5 pt-5 pb-1">
             <div className="font-mono text-sm font-semibold text-zinc-100">NGINX Config Analyzer</div>
             <div className="text-xs text-zinc-500 mt-1 leading-relaxed">
-              Paste your config to detect security hardening gaps, reverse proxy issues, performance risks, and SEO redirect problems.
+              Paste your config to detect security hardening gaps, reverse proxy issues, and performance risks.
             </div>
           </div>
           <div className="p-5 space-y-3">
@@ -457,13 +437,17 @@ export default function NginxConfigAnalyzerPage() {
               {result.score > 0 ? result.score : "—"}
             </div>
             <div className="text-xs text-zinc-500 mt-2 leading-relaxed">
-              Weighted across security, performance, SEO, and best practices.
+              Weighted across security, performance, and best practices.
             </div>
           </div>
 
           {/* Category summary */}
           <div className="grid grid-cols-2 gap-3">
-            {([ ["Security", result.summary.security], ["Performance", result.summary.performance], ["SEO", result.summary.seo], ["Best Practice", result.summary.bestPractice] ] as [string, number][]).map(([label, value]) => (
+            {([
+              ["Security",      result.summary.security],
+              ["Performance",   result.summary.performance],
+              ["Best Practice", result.summary.bestPractice],
+            ] as [string, number][]).map(([label, value]) => (
               <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-3.5">
                 <div className="font-mono text-[11px] text-zinc-500">{label}</div>
                 <div className="font-mono text-3xl font-bold text-zinc-100 mt-1">{value}</div>
@@ -475,7 +459,10 @@ export default function NginxConfigAnalyzerPage() {
           <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-4">
             <div className="font-mono text-xs text-zinc-500 uppercase tracking-widest mb-3">Structure</div>
             <div className="grid grid-cols-2 gap-3">
-              {([ ["Server blocks", result.summary.serverBlocks], ["Location blocks", result.summary.locations] ] as [string, number][]).map(([label, value]) => (
+              {([
+                ["Server blocks",   result.summary.serverBlocks],
+                ["Location blocks", result.summary.locations],
+              ] as [string, number][]).map(([label, value]) => (
                 <div key={label}>
                   <div className="font-mono text-[11px] text-zinc-500">{label}</div>
                   <div className="font-mono text-2xl font-bold text-zinc-100 mt-1">{value}</div>
@@ -569,10 +556,6 @@ export default function NginxConfigAnalyzerPage() {
               { label: "client_max_body_size", desc: "Most common cause of silent 413 errors in production. Default is 1MB." },
               { label: "Proxy timeouts", desc: "Missing proxy_read/connect/send_timeout means NGINX defaults may not match backend latency under load." },
             ]},
-            { title: "SEO", icon: "🔍", items: [
-              { label: "HTTP → HTTPS redirect", desc: "listen 80 without return 301 splits crawl budget and dilutes link signals between HTTP and HTTPS." },
-              { label: "Canonical host enforcement", desc: "Serving www and non-www without a 301 creates duplicate content in Google's index." },
-            ]},
             { title: "Reverse Proxy", icon: "📋", items: [
               { label: "X-Forwarded-For", desc: "Without this, backend sees 127.0.0.1 for every request. IP-based rate limiting and geo logic break silently." },
               { label: "X-Forwarded-Proto", desc: "Without this, apps don't know if the original request was HTTP or HTTPS — breaks redirects, CSRF tokens, and secure cookies." },
@@ -623,22 +606,19 @@ export default function NginxConfigAnalyzerPage() {
               { num: "01", title: "Missing HSTS header", sev: "HIGH",
                 body: "The most common high-severity finding. Nearly every config handling HTTPS is missing Strict-Transport-Security. Without it: MITM attackers can SSL-strip to HTTP, browsers won't cache the HTTPS preference, and subdomains stay unprotected.",
                 code: `add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;` },
-              { num: "02", title: "HTTP listener without HTTPS redirect", sev: "MEDIUM",
-                body: "listen 80 present, no return 301. Google indexes HTTP and HTTPS as separate URLs. Users without https:// land on an unencrypted connection. Secure cookies don't apply on HTTP requests.",
-                code: `server {\n    listen 80;\n    server_name example.com www.example.com;\n    return 301 https://$host$request_uri;\n}` },
-              { num: "03", title: "client_max_body_size not set", sev: "LOW",
+              { num: "02", title: "client_max_body_size not set", sev: "LOW",
                 body: "Default is 1MB. Any file upload endpoint returns 413 silently once a user exceeds it. The error appears as a generic failed request — no one thinks to check NGINX.",
                 code: `client_max_body_size 50M;` },
-              { num: "04", title: "Proxy headers not forwarded", sev: "MEDIUM",
+              { num: "03", title: "Proxy headers not forwarded", sev: "MEDIUM",
                 body: "proxy_pass present, no X-Forwarded-For or X-Forwarded-Proto. Backend logs show 127.0.0.1 for everything. IP-based rate limiting, fraud detection, and $scheme logic all break silently.",
                 code: `proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;\nproxy_set_header X-Forwarded-Proto $scheme;` },
-              { num: "05", title: "Proxy timeouts not tuned", sev: "MEDIUM",
+              { num: "04", title: "Proxy timeouts not tuned", sev: "MEDIUM",
                 body: "NGINX default is 60s for all proxy timeouts. Long-running operations (report generation, exports) will 504 before completing regardless of whether the backend finished.",
                 code: `proxy_connect_timeout 10s;\nproxy_send_timeout    90s;\nproxy_read_timeout    90s;` },
-              { num: "06", title: "server_tokens not disabled", sev: "LOW",
+              { num: "05", title: "server_tokens not disabled", sev: "LOW",
                 body: "One line fix. Removes NGINX version from Server headers and error pages. Zero operational impact.",
                 code: `server_tokens off;` },
-              { num: "07", title: "No rate limiting", sev: "MEDIUM",
+              { num: "06", title: "No rate limiting", sev: "MEDIUM",
                 body: "No limit_req_zone or limit_req found. Every exposed endpoint — login, password reset, API — accepts unlimited requests per client with no throttle.",
                 code: `# http{} block\nlimit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;\n\n# location block\nlimit_req zone=api burst=20 nodelay;` },
             ] as { num: string; title: string; sev: string; body: string; code: string }[]).map(({ num, title, sev, body, code }) => {
@@ -748,11 +728,9 @@ tail -f /var/log/app/access.log | grep -v "127.0.0.1"`}</code>
           <div className="space-y-3">
             {([
               { q: "What is the NGINX Config Analyzer?",
-                a: "A browser-based static analysis tool that parses your NGINX configuration and checks it against a rule set covering security hardening, performance tuning, SEO redirects, and reverse proxy best practices. It produces a scored report with categorized findings — each with the directive that triggered it, why it matters, and the exact fix. It is not a connectivity tester or live scanner." },
+                a: "A browser-based static analysis tool that parses your NGINX configuration and checks it against a rule set covering security hardening, performance tuning, and reverse proxy best practices. It produces a scored report with categorized findings — each with the directive that triggered it, why it matters, and the exact fix. It is not a connectivity tester or live scanner." },
               { q: "Is it safe to paste my NGINX config here?",
                 a: "Yes. The entire analysis runs in JavaScript inside your browser. No config data is transmitted to any server — no API calls, no logging, no backend. Verify it yourself: open DevTools → Network tab before pasting and you'll see zero outbound requests." },
-              { q: "Why is HTTPS redirect important for SEO?",
-                a: "Google treats http://example.com and https://example.com as separate URLs unless one redirects to the other with a 301. If both are reachable, backlinks and crawl budget split between them. A return 301 https://$host$request_uri; in the HTTP server block costs nothing operationally and eliminates the ambiguity immediately." },
               { q: "What are the most dangerous NGINX misconfigurations?",
                 a: "Ranked by impact: (1) TLS 1.0/1.1 enabled — fails compliance, allows downgrade attacks; (2) Missing HSTS — enables SSL stripping even with a valid cert; (3) X-Forwarded-For not forwarded — silently breaks all IP-based security controls in the app layer; (4) No rate limiting on auth endpoints; (5) server_tokens on — free version fingerprinting. All five are fixed with one or two config lines." },
               { q: "Can this tool detect all NGINX issues?",
