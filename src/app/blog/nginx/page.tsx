@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { getPostsByCategory, VALID_CATEGORIES as _ } from '@/lib/posts';
+import { getPostsByCategory } from '@/lib/posts';
 import { CATEGORIES } from '@/lib/categories';
 import PostCard from '@/components/PostCard';
 
