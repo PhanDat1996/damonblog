@@ -5,6 +5,7 @@ excerpt: "Check which DNS server Linux is using with resolvectl, dig, and cat /e
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "how-to-check-dns-server-linux"
+category: "linux"
 ---
 
 Which DNS server is this machine using? Is it resolving correctly? Is it using the right server for internal hostnames? Here's how to check all of it.

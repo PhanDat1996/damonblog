@@ -5,6 +5,7 @@ excerpt: "The essential Linux debugging tools for production troubleshooting —
 tags: ["linux", "debugging", "troubleshooting", "monitoring", "infrastructure"]
 featured: false
 slug: "linux-debugging-tools-guide"
+category: "linux"
 ---
 
 ## TL;DR

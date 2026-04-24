@@ -5,6 +5,7 @@ excerpt: "Get a Docker container's IP address using docker inspect, docker exec,
 tags: ["docker", "networking", "infrastructure", "troubleshooting"]
 featured: false
 slug: "docker-inspect-container-ip-address"
+category: "devops"
 ---
 
 Need the IP of a running container? There are several ways depending on whether you want just the IP, the full network config, or IPs across multiple networks.

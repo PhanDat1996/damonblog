@@ -5,6 +5,7 @@ excerpt: "How to use the ps command on Linux to debug high CPU, memory leaks, zo
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "ps-command-linux-troubleshooting-guide"
+category: "linux"
 ---
 
 ## Introduction: Why Process Visibility Saves Production Systems

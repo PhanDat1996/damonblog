@@ -5,6 +5,7 @@ excerpt: "Test TCP connections in Linux using nc, curl, telnet, and /dev/tcp —
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "how-to-test-tcp-connection-linux"
+category: "linux"
 ---
 
 You need to know if a port is reachable before debugging further. Here are the reliable ways to test a TCP connection — and what the output actually tells you.

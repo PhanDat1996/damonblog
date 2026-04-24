@@ -5,6 +5,7 @@ excerpt: "Check listening ports in Linux with ss, netstat, lsof, and nmap — kn
 tags: ["linux", "networking", "troubleshooting", "security"]
 featured: false
 slug: "check-listening-ports-linux-guide"
+category: "linux"
 ---
 
 A connection refused error. An unexpected service. A security audit question. All of them start the same way: which ports are listening, on which interface, and which process owns them?

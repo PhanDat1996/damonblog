@@ -5,6 +5,7 @@ excerpt: "Check network interfaces in Linux with ip link, ip addr, and ethtool â
 tags: ["linux", "networking", "troubleshooting", "infrastructure"]
 featured: false
 slug: "check-network-interface-linux-guide"
+category: "linux"
 ---
 
 Network is down. Or you need to know the IP, the interface name, link speed, or whether an interface is actually up. Here's every command you need.

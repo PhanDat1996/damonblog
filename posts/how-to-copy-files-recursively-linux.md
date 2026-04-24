@@ -5,6 +5,7 @@ excerpt: "Copy files recursively in Linux with cp and rsync — preserve permiss
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
 slug: "how-to-copy-files-recursively-linux"
+category: "linux"
 ---
 
 Two tools: `cp` for local copies, `rsync` for everything that needs more control — preserving permissions, syncing, or copying over the network.

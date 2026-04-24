@@ -5,6 +5,7 @@ excerpt: "Check disk usage by folder in Linux with du — sort directories by si
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "linux-check-disk-usage-by-folder-du"
+category: "linux"
 ---
 
 `df` tells you a filesystem is full. `du` tells you which folder is responsible. Here's how to use it efficiently.

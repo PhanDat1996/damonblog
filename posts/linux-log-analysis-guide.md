@@ -5,6 +5,7 @@ excerpt: "A practical Linux log analysis guide — journalctl usage, grep techni
 tags: ["linux", "logs", "troubleshooting", "debugging", "monitoring"]
 featured: false
 slug: "linux-log-analysis-debugging-guide"
+category: "linux"
 ---
 
 ## TL;DR

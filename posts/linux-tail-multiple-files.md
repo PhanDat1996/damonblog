@@ -5,6 +5,7 @@ excerpt: "tail multiple files in Linux simultaneously — using tail -f, multita
 tags: ["linux", "logs", "troubleshooting", "monitoring", "debugging"]
 featured: false
 slug: "linux-tail-multiple-files-examples"
+category: "linux"
 ---
 
 Watching one log file is easy. The real challenge is correlating events across multiple files — application log, nginx error log, and system journal — at the same time.

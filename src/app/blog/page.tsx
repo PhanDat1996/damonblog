@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { getAllPosts, getAllTags } from '@/lib/posts';
+import { CATEGORIES, VALID_CATEGORIES } from '@/lib/categories';
 import PostCard from '@/components/PostCard';
 
 const BASE_URL = 'https://www.damonsec.com';
@@ -114,6 +115,27 @@ export default async function BlogPage({ searchParams }: Props) {
             ? `All articles tagged #${activeTag} — practical guides from production experience.`
             : 'Practical guides for Linux engineers — NGINX debugging, process troubleshooting, CIS hardening, and production incident response.'}
         </p>
+      </div>
+
+      {/* Category nav — links to SEO landing pages */}
+      <div className="space-y-2">
+        <p className="font-mono text-xs text-zinc-400 uppercase tracking-widest">
+          Browse by category
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {VALID_CATEGORIES.map((cat) => {
+            const c = CATEGORIES[cat];
+            return (
+              <a
+                key={cat}
+                href={`/blog/${cat}/`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 font-mono text-xs text-zinc-400 hover:border-zinc-500 hover:text-white transition-all"
+              >
+                {c.icon} {c.label}
+              </a>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tag filters */}

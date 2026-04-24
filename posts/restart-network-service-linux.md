@@ -5,6 +5,7 @@ excerpt: "Restart network service in Linux using systemctl, nmcli, and ip comman
 tags: ["linux", "networking", "infrastructure", "troubleshooting"]
 featured: false
 slug: "restart-network-service-linux-guide"
+category: "linux"
 ---
 
 Network is flaky, an IP change didn't apply, or a config edit needs to take effect. The right command depends on your distro and network manager. Here's every way to do it.

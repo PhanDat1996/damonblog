@@ -5,6 +5,7 @@ excerpt: "Monitor real-time logs in Linux using tail -f, journalctl -f, and mult
 tags: ["linux", "logs", "monitoring", "troubleshooting", "debugging"]
 featured: false
 slug: "monitor-real-time-logs-linux-guide"
+category: "linux"
 ---
 
 Watching logs in real time is how you catch errors as they happen — during deployments, under load tests, or when chasing an intermittent bug. Here's every way to do it.

@@ -5,6 +5,7 @@ excerpt: "Use Linux find command to locate files by name pattern, size, date, an
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "linux-find-file-by-name-size-guide"
+category: "linux"
 ---
 
 The `find` command is one of the most powerful tools on Linux. Most engineers know the basics — here's how to actually use it in production for real search tasks.

@@ -4,6 +4,7 @@ date: "2024-12-05"
 excerpt: "Linux TIME_WAIT exhausts ephemeral ports and causes ECONNREFUSED under load — even when your app is healthy. Learn what TIME_WAIT is, how to detect port exhaustion with ss and netstat, and the exact sysctl fixes that resolve it."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]
 featured: false
+category: "linux"
 ---
 
 ## Introduction

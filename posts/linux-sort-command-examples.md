@@ -5,6 +5,7 @@ excerpt: "Use the Linux sort command effectively — sort by column, numerically
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "linux-sort-command-real-usage-examples"
+category: "linux"
 ---
 
 `sort` by itself isn't particularly useful. Combined with `grep`, `awk`, `uniq`, and pipes — it's one of the most powerful tools in a sysadmin's toolkit for log analysis, reporting, and finding patterns in data.

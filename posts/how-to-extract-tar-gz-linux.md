@@ -5,6 +5,7 @@ excerpt: "Extract tar.gz files in Linux — handle .tar.gz, .tar.bz2, .tar.xz, a
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
 slug: "how-to-extract-tar-gz-linux"
+category: "linux"
 ---
 
 One command. Multiple archive formats. Here's the complete reference.

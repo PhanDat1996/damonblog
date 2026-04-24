@@ -4,6 +4,7 @@ date: "2024-10-03"
 excerpt: "How a single verbose container filled a 500GB disk in 72 hours, and the exact daemon.json config that stops it from ever happening again."
 tags: ["docker", "logs", "infrastructure", "troubleshooting"]
 featured: true
+category: "devops"
 ---
 
 ## 3am, Disk Full, Everything Down

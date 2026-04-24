@@ -5,6 +5,7 @@ excerpt: "Fix systemctl restart not working — diagnose failed units, read jour
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "systemctl-restart-service-not-working-fix"
+category: "devops"
 ---
 
 `systemctl restart myapp` returns no error but the service stays dead, or keeps crashing, or the command itself fails. Here's the diagnostic path to find and fix it.

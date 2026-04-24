@@ -5,6 +5,7 @@ excerpt: "Troubleshoot 'cannot connect to server' on Linux — diagnose connecti
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "cannot-connect-to-server-linux-troubleshooting"
+category: "linux"
 ---
 
 Connection refused. Connection timed out. Network unreachable. Each error means something different and points to a different fix.

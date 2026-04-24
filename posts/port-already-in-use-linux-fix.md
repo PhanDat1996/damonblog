@@ -5,6 +5,7 @@ excerpt: "Fix 'port already in use' errors on Linux — find what process owns t
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "port-already-in-use-linux-fix"
+category: "linux"
 ---
 
 `bind: address already in use`. Service won't start. Something is holding the port. Here's every way to find it and fix it.

@@ -5,6 +5,7 @@ excerpt: "Fix DNS not resolving in Linux — diagnose with dig and nslookup, che
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "dns-not-resolving-linux-fix"
+category: "linux"
 ---
 
 `Name or service not known`. `Could not resolve host`. DNS is either broken or misconfigured. Here's the systematic fix.

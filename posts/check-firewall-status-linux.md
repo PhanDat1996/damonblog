@@ -5,6 +5,7 @@ excerpt: "Check firewall status in Linux using iptables, firewalld, and ufw — 
 tags: ["linux", "security", "networking", "troubleshooting", "infrastructure"]
 featured: false
 slug: "check-firewall-status-linux-guide"
+category: "security"
 ---
 
 Is the firewall blocking that connection? Is it even running? Different distros use different tools. Here's how to check with all three.

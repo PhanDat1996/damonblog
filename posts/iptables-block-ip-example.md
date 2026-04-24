@@ -5,6 +5,7 @@ excerpt: "Block IPs with iptables — block single IP, IP range, port-specific r
 tags: ["linux", "security", "networking", "infrastructure"]
 featured: false
 slug: "iptables-block-ip-example"
+category: "security"
 ---
 
 Blocking a specific IP or range is one of the most common iptables tasks — stopping a brute-force attack, blocking a scanner, or restricting access to a service. Here's exactly how to do it.

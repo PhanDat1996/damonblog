@@ -5,6 +5,7 @@ excerpt: "Know when to use ping, curl, and telnet for network testing — what e
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "ping-vs-curl-vs-telnet-difference"
+category: "linux"
 ---
 
 Each tool tests a different layer of the network stack. Using the wrong one gives you a false positive or misses the real problem. Here's exactly what each one tests and when to use it.

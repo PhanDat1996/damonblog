@@ -5,6 +5,7 @@ excerpt: "Check listening ports in Linux with ss — see TCP and UDP listeners, 
 tags: ["linux", "networking", "troubleshooting", "security", "monitoring"]
 featured: false
 slug: "linux-check-listening-ports-ss-command"
+category: "linux"
 ---
 
 What's listening on this server? Which process owns port 8080? Is the database exposed to the network or localhost only? `ss` answers all of it in one command.

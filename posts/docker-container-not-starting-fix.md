@@ -5,6 +5,7 @@ excerpt: "Fix Docker container not starting — diagnose exit codes, read contai
 tags: ["docker", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "docker-container-not-starting-fix"
+category: "devops"
 ---
 
 Container exits immediately. Container keeps restarting. `docker run` returns an error. Each symptom has a different cause — here's how to find and fix it.

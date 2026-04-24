@@ -5,6 +5,7 @@ excerpt: "htop vs top — a practical comparison for Linux engineers. When to us
 tags: ["linux", "troubleshooting", "monitoring", "debugging"]
 featured: false
 slug: "htop-vs-top-linux-comparison"
+category: "linux"
 ---
 
 ## TL;DR

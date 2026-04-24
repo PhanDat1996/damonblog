@@ -4,6 +4,7 @@ date: "2024-11-28"
 excerpt: "Missing keepalive in your NGINX upstream block silently kills connections under load. Here's exactly what keepalive does, how TCP connection reuse works, and the production-ready config that stops 502s before they start."
 tags: ["nginx", "infrastructure", "production", "networking", "troubleshooting"]
 featured: true
+category: "nginx"
 ---
 
 ## Introduction

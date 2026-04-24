@@ -5,6 +5,7 @@ excerpt: "Check open ports in Linux using ss and netstat — with real command e
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "check-open-ports-linux-ss-netstat-guide"
+category: "linux"
 ---
 
 # How to Check Open Ports in Linux: ss vs netstat (With Real Examples)

@@ -5,6 +5,7 @@ excerpt: "Fix 'permission denied' errors in Linux — read permission bits corre
 tags: ["linux", "troubleshooting", "security", "infrastructure"]
 featured: false
 slug: "permission-denied-linux-fix-chmod-chown"
+category: "linux"
 ---
 
 `Permission denied`. Deployment failed. Service won't start. Script can't read a file. The fix is usually one of two things: wrong ownership (`chown`) or wrong permission bits (`chmod`). Here's how to diagnose and fix both.

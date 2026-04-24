@@ -5,6 +5,7 @@ excerpt: "Compress files in Linux with tar — create .tar.gz and .tar.bz2 archi
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
 slug: "compress-files-linux-tar-examples"
+category: "linux"
 ---
 
 `tar` is the standard tool for archiving and compressing files on Linux. The syntax is dense but the core patterns are simple once you know them.

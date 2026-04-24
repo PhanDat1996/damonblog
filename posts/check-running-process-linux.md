@@ -5,6 +5,7 @@ excerpt: "How to check running processes in Linux using ps, top, and htop — wi
 tags: ["linux", "troubleshooting", "debugging", "monitoring"]
 featured: false
 slug: "check-running-process-linux-guide"
+category: "linux"
 ---
 
 ## TL;DR

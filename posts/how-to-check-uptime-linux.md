@@ -5,6 +5,7 @@ excerpt: "Check Linux server uptime with uptime, w, and /proc/uptime — read lo
 tags: ["linux", "monitoring", "infrastructure", "troubleshooting"]
 featured: false
 slug: "how-to-check-uptime-linux"
+category: "linux"
 ---
 
 Uptime tells you how long the system has been running — and the load average tells you how hard it's been working. Both are packed into a single line.

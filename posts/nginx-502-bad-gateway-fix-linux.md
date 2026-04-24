@@ -5,6 +5,7 @@ excerpt: "Fix nginx 502 bad gateway errors — identify the root cause from the 
 tags: ["nginx", "troubleshooting", "production", "debugging"]
 featured: false
 slug: "nginx-502-bad-gateway-fix-linux"
+category: "nginx"
 ---
 
 Nginx returns 502 when it can't get a valid response from the upstream. The fix depends on the exact error — there are four different root causes and each needs a different solution.

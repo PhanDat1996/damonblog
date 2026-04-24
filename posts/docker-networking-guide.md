@@ -4,6 +4,7 @@ date: "2024-07-05"
 excerpt: "The three Docker network modes that matter for production — what they actually do, when to use each, and the gotchas that'll bite you if you pick the wrong one."
 tags: ["docker", "networking", "infrastructure"]
 featured: false
+category: "devops"
 ---
 
 ## Why Docker Networking Trips People Up

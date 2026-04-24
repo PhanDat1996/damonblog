@@ -4,6 +4,7 @@ date: "2024-09-20"
 excerpt: "A step-by-step walkthrough of the NGINX TLS configuration changes that take you from a mediocre SSL rating to a perfect score — without breaking compatibility."
 tags: ["nginx", "ssl", "security", "infrastructure"]
 featured: true
+category: "security"
 ---
 
 ## The Starting Point

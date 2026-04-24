@@ -5,6 +5,7 @@ excerpt: "Check running services in Linux using systemctl — list active units,
 tags: ["linux", "infrastructure", "troubleshooting", "monitoring"]
 featured: false
 slug: "linux-check-running-services-systemctl"
+category: "devops"
 ---
 
 You need to see which services are running, which have failed, or what's enabled at boot. `systemctl` is the tool for all of it on any modern Linux distribution.

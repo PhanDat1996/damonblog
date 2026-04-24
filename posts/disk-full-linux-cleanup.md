@@ -5,6 +5,7 @@ excerpt: "Fix a full disk on Linux fast — find what's taking space with df and
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "disk-full-linux-cleanup-guide"
+category: "linux"
 ---
 
 Disk alert firing. Server at 100%. Services failing because they can't write. Here's the fastest path from full disk to recovered system.

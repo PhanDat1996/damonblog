@@ -5,6 +5,7 @@ excerpt: "Complete Linux security hardening guide using CIS benchmarks — Ubunt
 tags: ["security", "linux", "infrastructure", "security-ops"]
 featured: true
 slug: "linux-security-hardening-guide"
+category: "security"
 ---
 
 ## TL;DR

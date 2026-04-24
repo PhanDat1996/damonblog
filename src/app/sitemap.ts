@@ -1,5 +1,6 @@
 import { MetadataRoute } from 'next';
 import { getAllPosts } from '@/lib/posts';
+import { VALID_CATEGORIES } from '@/lib/categories';
 
 const BASE_URL = 'https://www.damonsec.com';
 
@@ -11,6 +12,13 @@ export default function sitemap(): MetadataRoute.Sitemap {
     lastModified: new Date(post.date),
     changeFrequency: 'monthly',
     priority: post.featured ? 0.9 : 0.7,
+  }));
+
+  const categoryEntries: MetadataRoute.Sitemap = VALID_CATEGORIES.map((cat) => ({
+    url: `${BASE_URL}/blog/${cat}/`,
+    lastModified: new Date(),
+    changeFrequency: 'weekly',
+    priority: 0.8,
   }));
 
   return [
@@ -25,6 +33,19 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified: new Date(),
       changeFrequency: 'weekly',
       priority: 0.9,
+    },
+    ...categoryEntries,
+    {
+      url: `${BASE_URL}/tools`,
+      lastModified: new Date(),
+      changeFrequency: 'monthly',
+      priority: 0.8,
+    },
+    {
+      url: `${BASE_URL}/tools/nginx-config-analyzer`,
+      lastModified: new Date(),
+      changeFrequency: 'monthly',
+      priority: 0.7,
     },
     {
       url: `${BASE_URL}/about`,

@@ -5,6 +5,7 @@ excerpt: "CIS Windows Server Level 1 hardening in production — what breaks, wh
 tags: ["security", "infrastructure", "security-ops", "windows"]
 featured: false
 slug: "cis-windows-server-level1-hardening-production-guide"
+category: "security"
 ---
 
 ## The Windows Server That Was Hardened Into the Ground

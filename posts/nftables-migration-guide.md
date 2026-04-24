@@ -4,6 +4,7 @@ date: "2024-06-18"
 excerpt: "iptables is showing its age. nftables is the modern replacement — cleaner syntax, better performance, and already the default on most distros. Here's how to migrate."
 tags: ["firewall", "linux", "security", "networking"]
 featured: false
+category: "security"
 ---
 
 ## Why nftables?

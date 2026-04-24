@@ -5,6 +5,7 @@ excerpt: "Check last login history in Linux using last, lastlog, and who — fin
 tags: ["linux", "security", "troubleshooting", "infrastructure"]
 featured: false
 slug: "linux-check-last-login-users-command"
+category: "linux"
 ---
 
 Security audit, suspicious activity, or just tracking who's been on the server — Linux keeps a detailed login history. Here's how to read it.

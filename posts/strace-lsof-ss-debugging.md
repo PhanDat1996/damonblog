@@ -4,6 +4,7 @@ date: "2024-05-02"
 excerpt: "When logs give you nothing and the debugger isn't an option, these three tools let you see exactly what a running process is doing at the system call level."
 tags: ["debugging", "linux", "troubleshooting", "production"]
 featured: false
+category: "linux"
 ---
 
 ## When Normal Debugging Fails

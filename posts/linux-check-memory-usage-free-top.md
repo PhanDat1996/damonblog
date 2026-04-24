@@ -5,6 +5,7 @@ excerpt: "Check memory usage in Linux using free, top, and /proc/meminfo — und
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
 slug: "linux-check-memory-usage-free-top"
+category: "linux"
 ---
 
 `free` says you have 200MB free. Your monitoring alert says memory is critical. Both are technically correct — and that's the confusion. Here's what the numbers actually mean.

@@ -5,6 +5,7 @@ excerpt: "netstat vs ss — understand the differences, when to use each, equiva
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "netstat-vs-ss-command-difference"
+category: "linux"
 ---
 
 Both show network connections and listening ports. `ss` is faster, more accurate, and pre-installed on all modern Linux. `netstat` is older, often missing, and deprecated — but still widely known and occasionally the only option.

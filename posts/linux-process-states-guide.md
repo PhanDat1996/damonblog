@@ -5,6 +5,7 @@ excerpt: "A practical guide to Linux process states — R, S, D, Z, T — what e
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "linux-process-states-guide"
+category: "linux"
 ---
 
 ## TL;DR

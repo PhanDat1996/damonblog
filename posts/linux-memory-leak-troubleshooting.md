@@ -5,6 +5,7 @@ excerpt: "How to troubleshoot memory leaks on Linux — understanding RSS vs VSZ
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
 slug: "linux-memory-leak-troubleshooting-rss-vsz"
+category: "linux"
 ---
 
 ## TL;DR

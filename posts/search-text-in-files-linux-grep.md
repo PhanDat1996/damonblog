@@ -5,6 +5,7 @@ excerpt: "Search text in files in Linux with grep — recursive search, regex pa
 tags: ["linux", "troubleshooting", "debugging", "logs", "infrastructure"]
 featured: false
 slug: "search-text-in-files-linux-grep-examples"
+category: "linux"
 ---
 
 `grep` is the tool you use more than almost anything else on Linux. Search a file, search a directory, match patterns, count occurrences, extract specific fields.

@@ -5,6 +5,7 @@ excerpt: "Fix SSH connection refused on Linux — diagnose why SSH won't connect
 tags: ["linux", "security", "networking", "troubleshooting"]
 featured: false
 slug: "ssh-connection-refused-linux-fix"
+category: "linux"
 ---
 
 `ssh: connect to host 10.0.1.50 port 22: Connection refused`. Either sshd isn't running, the port is blocked, or SSH is on a non-standard port. Here's the diagnostic path.

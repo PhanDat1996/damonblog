@@ -5,6 +5,7 @@ excerpt: "Find large files in Linux using find, du, and ncdu — with real comma
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "find-large-files-linux-guide"
+category: "linux"
 ---
 
 # How to Find Large Files in Linux: Practical Guide

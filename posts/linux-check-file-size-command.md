@@ -5,6 +5,7 @@ excerpt: "Check file size in Linux using ls -lh, du, and stat — understand app
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "linux-check-file-size-command"
+category: "linux"
 ---
 
 Three tools. Each gives you slightly different information. Here's when to use which.

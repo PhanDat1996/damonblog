@@ -5,6 +5,7 @@ excerpt: "A practical strace tutorial for production debugging — trace system 
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "strace-tutorial-linux-debugging"
+category: "linux"
 ---
 
 ## TL;DR

@@ -5,6 +5,7 @@ excerpt: "The complete NGINX troubleshooting reference — 502/504 errors, upstr
 tags: ["nginx", "troubleshooting", "production", "infrastructure"]
 featured: true
 slug: "nginx-troubleshooting-guide"
+category: "nginx"
 ---
 
 ## TL;DR

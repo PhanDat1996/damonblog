@@ -5,6 +5,7 @@ excerpt: "Find a Linux process by name using pgrep, ps, pidof, and top — with 
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "linux-find-process-by-name-guide"
+category: "linux"
 ---
 
 You know what the process is called. You need its PID, its state, its parent, or just to know if it's running. Here's every reliable way to find a process by name.

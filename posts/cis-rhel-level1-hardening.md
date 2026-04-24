@@ -5,6 +5,7 @@ excerpt: "CIS RHEL Level 1 hardening guide for production Red Hat systems — wh
 tags: ["security", "linux", "infrastructure", "security-ops"]
 featured: false
 slug: "cis-rhel-level1-hardening-production-guide"
+category: "security"
 ---
 
 ## The RHEL Server That Locked Everyone Out

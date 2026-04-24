@@ -5,6 +5,7 @@ excerpt: "Kill a process by port number on Linux — using fuser, lsof, ss + kil
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
 slug: "linux-kill-process-by-port"
+category: "linux"
 ---
 
 Port is occupied and something won't start. You need to find what's using it and kill it. Here's every reliable way to do that.

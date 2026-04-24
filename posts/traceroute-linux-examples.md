@@ -5,6 +5,7 @@ excerpt: "Use traceroute in Linux to diagnose network path issues — read hop o
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
 slug: "traceroute-linux-examples-guide"
+category: "linux"
 ---
 
 Ping fails. Or it works but the connection is slow. `traceroute` shows you every hop between your server and the destination — and where the problem is.

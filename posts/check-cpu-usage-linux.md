@@ -5,6 +5,7 @@ excerpt: "Check CPU usage in Linux using top, mpstat, ps, and vmstat — read pe
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
 slug: "check-cpu-usage-linux-commands"
+category: "linux"
 ---
 
 CPU is high and you need to know why. Or you're baselining a server before a deployment. Either way, Linux gives you multiple tools to look at CPU from different angles.

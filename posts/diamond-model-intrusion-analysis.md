@@ -1,18 +1,11 @@
 ---
 title: "Diamond Model of Intrusion Analysis: 4 Core Components Explained (2026)"
-description: "A technical breakdown of the Diamond Model of Intrusion Analysis — adversary, victim, capability, and infrastructure — with real attack examples, meta-features, and how it compares to the Cyber Kill Chain and MITRE ATT&CK."
-tags: [cybersecurity, threatintel, blueteam, incidentresponse, diamondmodel]
-date: 2026-04-23
-readTime: 9 min read
+date: "2026-04-23"
+excerpt: "A technical breakdown of the Diamond Model of Intrusion Analysis — adversary, victim, capability, and infrastructure — with real attack examples, meta-features, and how it compares to the Cyber Kill Chain and MITRE ATT&CK."
+tags: ["cybersecurity", "threatintel", "blueteam", "incidentresponse", "diamondmodel"]
+featured: false
+category: "security"
 ---
-
-#cybersecurity #threatintel #blueteam #incidentresponse #diamondmodel
-
-# Diamond Model of Intrusion Analysis: 4 Core Components Explained (2026)
-
-A technical deep-dive into the Diamond Model — adversary, victim, capability, infrastructure — with real-world attack mapping, meta-features, and how it fits alongside the Cyber Kill Chain and MITRE ATT&CK.
-
-April 23, 2026 · 9 min read · [Your Name]
 
 ---
 

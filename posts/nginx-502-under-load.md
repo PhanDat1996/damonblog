@@ -5,6 +5,7 @@ excerpt: "NGINX returning 502 Bad Gateway only under high load? This guide cover
 tags: ["nginx", "debugging", "production", "troubleshooting", "infrastructure"]
 featured: true
 seoKeywords: ["nginx 502 bad gateway", "fix nginx 502", "nginx upstream error", "nginx under load 502", "nginx keepalive upstream", "proxy_read_timeout nginx"]
+category: "nginx"
 ---
 
 ## Introduction

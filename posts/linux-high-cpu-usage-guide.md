@@ -5,6 +5,7 @@ excerpt: "Step-by-step guide to diagnosing Linux high CPU usage — using ps, to
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
 slug: "linux-high-cpu-usage-troubleshooting"
+category: "linux"
 ---
 
 ## TL;DR

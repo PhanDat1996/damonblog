@@ -5,6 +5,7 @@ excerpt: "Delete large files in Linux safely — handle open file handles, free 
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "how-to-delete-large-files-linux-safely"
+category: "linux"
 ---
 
 Disk is full. You found a 20GB log file. You want to delete it. Sounds simple — but if a process has that file open, `rm` doesn't actually free the space. Here's how to do it right.

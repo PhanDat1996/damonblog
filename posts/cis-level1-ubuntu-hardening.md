@@ -4,6 +4,7 @@ date: "2026-04-20"
 excerpt: "CIS Level 1 Ubuntu hardening guide covering filesystem, SSH, sysctl, and audit logging — with real production pitfalls, configs, and a compliance checklist. Tested in enterprise environments."
 tags: ["security", "linux", "infrastructure", "security-ops"]
 featured: true
+category: "security"
 ---
 
 ## Why Most Ubuntu Servers Are Not Hardened Out of the Box

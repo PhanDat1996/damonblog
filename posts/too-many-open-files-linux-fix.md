@@ -5,6 +5,7 @@ excerpt: "Fix 'too many open files' errors on Linux — increase file descriptor
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "too-many-open-files-linux-fix"
+category: "linux"
 ---
 
 `Too many open files`. `EMFILE`. `Error 24`. Service starts throwing errors or refuses new connections. Here's how to diagnose and fix it — temporarily and permanently.

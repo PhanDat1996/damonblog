@@ -5,6 +5,7 @@ import { getAllSlugs, getPostWithHtml, getAllPosts } from '@/lib/posts';
 import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
 import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
+import { CATEGORIES } from '@/lib/categories';
 import ReadingProgress from '@/components/ReadingProgressLazy';
 
 const BASE_URL = 'https://www.damonsec.com';
@@ -73,14 +74,22 @@ export default async function BlogPostPage({ params }: Props) {
       <BlogPostJsonLd post={post} url={url} wordCount={wordCount} faqItems={faqItems} />
 
       <article className="mx-auto max-w-2xl">
-        {/* Back link */}
-        <div className="mb-10">
+        {/* Back link + category badge */}
+        <div className="mb-10 flex items-center gap-3">
           <Link
             href="/blog"
             className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-500 hover:text-green-400 transition-colors"
           >
             ← back to blog
           </Link>
+          {post.category && CATEGORIES[post.category] && (
+            <Link
+              href={`/blog/${post.category}/`}
+              className="inline-flex items-center gap-1.5 font-mono text-xs text-green-400 border border-green-800/40 bg-green-900/20 px-2 py-0.5 rounded hover:bg-green-900/40 transition-colors"
+            >
+              {CATEGORIES[post.category].icon} {CATEGORIES[post.category].label}
+            </Link>
+          )}
         </div>
 
         {/* Post header */}

@@ -5,6 +5,7 @@ excerpt: "Check open network connections in Linux using ss, netstat, and lsof â€
 tags: ["linux", "networking", "troubleshooting", "monitoring"]
 featured: false
 slug: "linux-check-open-connections-command"
+category: "linux"
 ---
 
 Need to see all active connections on a Linux server? Whether you're debugging a service, auditing network activity, or investigating a slow application, these commands show you exactly what's connected and who owns it.

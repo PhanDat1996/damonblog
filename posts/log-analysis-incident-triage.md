@@ -4,6 +4,7 @@ date: "2024-08-11"
 excerpt: "The exact commands and mental models I use to go from 'something is wrong' to 'I know exactly what happened' in under 15 minutes."
 tags: ["logs", "debugging", "incident", "troubleshooting", "security-ops"]
 featured: false
+category: "linux"
 ---
 
 ## The Art of Log Triage

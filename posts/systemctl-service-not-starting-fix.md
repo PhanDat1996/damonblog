@@ -5,6 +5,7 @@ excerpt: "Fix systemctl service not starting — diagnose failed units, read exi
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "systemctl-service-not-starting-fix-linux"
+category: "devops"
 ---
 
 Service won't start and `systemctl start myapp` returns no useful output. The error is always in the logs — you just need to know where to look.

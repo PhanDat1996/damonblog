@@ -5,6 +5,7 @@ excerpt: "Find files older than X days in Linux using find -mtime — with real 
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 slug: "linux-find-files-older-than-x-days"
+category: "linux"
 ---
 
 Cleaning up old logs, archiving stale files, or auditing what's been sitting untouched — `find` with `-mtime` covers all of it.

@@ -1,18 +1,11 @@
 ---
 title: "Cyber Kill Chain: All 7 Phases Explained with Real Attack Examples (2026)"
-description: "A technical deep-dive into the Cyber Kill Chain — all 7 phases mapped with real attacker techniques, detection indicators, and defensive controls. Includes a full real-world attack walkthrough and Kill Chain vs MITRE ATT&CK comparison."
-tags: [cybersecurity, threatintel, blueteam, redteam, killchain, incidentresponse]
-date: 2026-04-23
-readTime: 10 min read
+date: "2026-04-23"
+excerpt: "A technical deep-dive into the Cyber Kill Chain — all 7 phases mapped with real attacker techniques, detection indicators, and defensive controls. Includes a full real-world attack walkthrough and Kill Chain vs MITRE ATT&CK comparison."
+tags: ["cybersecurity", "threatintel", "blueteam", "redteam", "killchain", "incidentresponse"]
+featured: false
+category: "security"
 ---
-
-#cybersecurity #threatintel #blueteam #redteam #killchain #incidentresponse
-
-# Cyber Kill Chain: All 7 Phases Explained with Real Attack Examples (2026)
-
-A technical deep-dive into all 7 Cyber Kill Chain phases — mapped with real attacker techniques, detection indicators, defensive controls, and a full real-world ransomware walkthrough.
-
-April 23, 2026 · 10 min read · [Your Name]
 
 ---
 

@@ -5,6 +5,7 @@ excerpt: "The complete guide to Linux performance troubleshooting — CPU, memor
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: true
 slug: "linux-performance-troubleshooting-guide"
+category: "linux"
 ---
 
 ## TL;DR

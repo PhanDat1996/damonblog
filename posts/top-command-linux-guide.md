@@ -5,6 +5,7 @@ excerpt: "Learn how to use the top command on Linux for production troubleshooti
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
 slug: "top-command-linux-guide"
+category: "linux"
 ---
 
 ## TL;DR

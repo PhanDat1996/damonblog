@@ -5,6 +5,7 @@ excerpt: "Check disk I/O usage in Linux using iostat — read utilization, throu
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
 slug: "linux-check-disk-io-iostat-examples"
+category: "linux"
 ---
 
 High load average, slow application, CPU mostly idle — the culprit is often disk I/O. `iostat` tells you which disk, how saturated it is, and how fast data is moving.

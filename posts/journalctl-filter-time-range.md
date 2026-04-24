@@ -5,6 +5,7 @@ excerpt: "Filter journalctl output by time range, unit, priority, and keyword â€
 tags: ["linux", "logs", "troubleshooting", "debugging"]
 featured: false
 slug: "journalctl-filter-time-range-guide"
+category: "devops"
 ---
 
 # journalctl Filter by Time Range: Real Examples

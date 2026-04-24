@@ -5,6 +5,7 @@ excerpt: "Move files between directories in Linux using mv and rsync — handle 
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
 slug: "linux-move-files-between-directories"
+category: "linux"
 ---
 
 `mv` moves files. It's instant on the same filesystem (just renames the inode). Across filesystems, it copies then deletes. Here's everything you need.
