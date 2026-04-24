@@ -72,6 +72,51 @@ export default function CategoryPage({ category }: { category: Category }) {
         <p className="font-mono text-sm text-zinc-500">No posts in this category yet.</p>
       )}
 
+      {/* Recommended articles — nginx pillar internal linking */}
+      {category === 'nginx' && (
+        <section className="space-y-4">
+          <h2 className="font-mono text-sm font-semibold text-zinc-300">
+            Start with the most common production issues
+          </h2>
+          <ul className="space-y-2.5">
+            {[
+              { text: 'Fix NGINX 502 Bad Gateway errors in production',           href: '/blog/nginx-502-bad-gateway-fix-linux' },
+              { text: 'Diagnose NGINX 502 errors that only appear under load',    href: '/blog/nginx-502-under-load' },
+              { text: 'Configure upstream keepalive to prevent connection drops',  href: '/blog/nginx-upstream-keepalive' },
+              { text: 'Set up NGINX rate limiting for API and login endpoints',   href: '/blog/nginx-rate-limiting-config' },
+              { text: 'NGINX troubleshooting reference for production incidents',  href: '/blog/nginx-troubleshooting-guide' },
+            ].map(({ text, href }) => (
+              <li key={href}>
+                <Link
+                  href={href}
+                  className="font-mono text-sm text-green-400 hover:underline"
+                >
+                  → {text}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Tool CTA — nginx only */}
+      {category === 'nginx' && (
+        <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-6 space-y-3">
+          <div className="font-mono text-xs text-zinc-500 uppercase tracking-widest">Tool</div>
+          <Link
+            href="/tools/nginx-config-analyzer/"
+            className="font-mono text-base font-semibold text-zinc-100 hover:text-green-400 transition-colors block"
+          >
+            NGINX Config Analyzer →
+          </Link>
+          <p className="text-sm text-zinc-400 leading-relaxed max-w-xl">
+            Paste any NGINX config and get an instant scored report — missing security headers,
+            TLS issues, proxy header gaps, rate limiting, and timeout settings.
+            Runs in-browser, nothing sent to a server.
+          </p>
+        </section>
+      )}
+
       {/* Cross-category links */}
       <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-6 space-y-3">
         <h2 className="font-mono text-sm font-semibold text-zinc-300">Other topics</h2>

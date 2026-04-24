@@ -131,6 +131,18 @@ export default async function BlogPostPage({ params }: Props) {
           </div>
         </div>
 
+        {/* Category back-link — reinforces pillar page */}
+        {post.category && CATEGORIES[post.category] && (
+          <div className="mt-10 pt-6 border-t border-zinc-800">
+            <Link
+              href={`/blog/${post.category}/`}
+              className="font-mono text-xs text-zinc-400 hover:text-green-400 transition-colors"
+            >
+              ← Back to {CATEGORIES[post.category].label} production guides
+            </Link>
+          </div>
+        )}
+
         {/* Prev / Next navigation */}
         <nav className="mt-10 grid sm:grid-cols-2 gap-4" aria-label="Post navigation">
           {prev && (
