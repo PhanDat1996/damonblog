@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import {
+  useState, useMemo, useCallback, memo,
+  useTransition, useId,
+  type KeyboardEvent,
+} from "react";
 import Link from "next/link";
 import { parseConfigs } from "@/app/tools/nginx-config-analyzer/v2/parser";
 import { runAnalysis } from "@/app/tools/nginx-config-analyzer/v2/scoring";
@@ -10,6 +14,31 @@ import type {
   ConfigFile, Finding, AnalysisCategory, Severity, ScoreStatus,
   SimulatorRequest, SimulatorResult, ParseError,
 } from "@/app/tools/nginx-config-analyzer/v2/types";
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+async function writeClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const el = Object.assign(document.createElement("textarea"), {
+      value: text,
+      style: "position:fixed;opacity:0",
+    });
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+}
+
+function downloadText(content: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
+  Object.assign(document.createElement("a"), { href: url, download: filename }).click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const SEV_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
@@ -45,6 +74,34 @@ function SevBadge({ severity }: { severity: Severity }) {
     </span>
   );
 }
+
+// Extracted so only the changed bar re-renders, not the entire sidebar
+const CategoryScoreBar = memo(function CategoryScoreBar({
+  category, score, penalty, findingCount,
+}: { category: AnalysisCategory; score: number; penalty: number; findingCount: number }) {
+  const bar  = score >= 85 ? "bg-emerald-500" : score >= 65 ? "bg-amber-500" : "bg-red-500";
+  const text = score >= 85 ? "text-emerald-400" : score >= 65 ? "text-amber-400" : "text-red-400";
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true">{CAT_ICONS[category]}</span>
+          <span className="font-mono text-xs font-semibold text-zinc-300">{category}</span>
+        </div>
+        <span className={`font-mono text-sm font-bold ${text}`}>{score}</span>
+      </div>
+      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden"
+        role="progressbar" aria-valuenow={score} aria-valuemin={0} aria-valuemax={100}
+        aria-label={`${category} score: ${score}/100`}>
+        <div className={`h-full rounded-full transition-all duration-700 ${bar}`} style={{ width: `${score}%` }} />
+      </div>
+      <p className="font-mono text-[10px] text-zinc-600">
+        {findingCount} finding{findingCount !== 1 ? "s" : ""}
+        {penalty > 0 ? ` · −${penalty} pts` : ""}
+      </p>
+    </div>
+  );
+});
 
 function ScoreRing({ score, status }: { score: number; status: ScoreStatus }) {
   const cfg = STATUS_CFG[status];
@@ -137,6 +194,7 @@ const defaultFile: ConfigFile = {
 export default function NginxConfigAnalyzerPage() {
   const [files, setFiles]         = useState<ConfigFile[]>([defaultFile]);
   const [activeFileId, setActive] = useState("main");
+  const [isAnalyzing, startAnalysis] = useTransition();
   const [domain, setDomain]       = useState("");
   const [activeCategory, setActiveCat]  = useState<AnalysisCategory | "all">("all");
   const [activeSeverity, setActiveSev]  = useState<Severity | "all">("all");
@@ -181,7 +239,9 @@ export default function NginxConfigAnalyzerPage() {
   }, [activeFileId]);
 
   const updateFile = useCallback((id: string, field: "filename" | "content", value: string) => {
-    setFiles((f: ConfigFile[]) => f.map((x: ConfigFile) => x.id === id ? { ...x, [field]: value } : x));
+    startAnalysis(() => {
+      setFiles((f: ConfigFile[]) => f.map((x: ConfigFile) => x.id === id ? { ...x, [field]: value } : x));
+    });
   }, []);
 
   const loadSample = useCallback((key: string) => {
@@ -227,6 +287,11 @@ export default function NginxConfigAnalyzerPage() {
           <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20">Stable</span>
           <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">Browser-only</span>
           <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-zinc-700/60 text-zinc-400 border border-zinc-600/40">v2.0</span>
+          {isAnalyzing && (
+            <span className="font-mono text-[10px] text-zinc-600 animate-pulse" aria-live="polite" aria-atomic="true">
+              analyzing…
+            </span>
+          )}
         </div>
         <h1 className="font-mono text-2xl md:text-3xl font-bold tracking-tight text-zinc-100">NGINX Config Analyzer</h1>
         <p className="mt-2.5 text-sm text-zinc-400 leading-relaxed max-w-2xl">

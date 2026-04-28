@@ -22,6 +22,16 @@ interface Tool {
 
 const TOOLS: Tool[] = [
   {
+    name: 'nginx-cis-hardening-checker',
+    tagline: 'CIS NGINX Benchmark v2.1.0 compliance scanner',
+    description:
+      'Evaluate your NGINX configuration against CIS NGINX Benchmark v2.1.0 controls. Covers TLS configuration, security headers, information disclosure, reverse proxy hardening, and resource controls. Each finding maps to a CIS rule ID with an exact remediation snippet. Generate a fully annotated CIS-hardened config template in one click.',
+    tags: ['nginx', 'cis', 'security', 'compliance', 'hardening'],
+    status: 'stable',
+    type: 'web',
+    href: '/tools/nginx-cis-hardening-checker',
+  },
+  {
     name: 'nginx-config-analyzer',
     tagline: 'Detect security, performance, SEO, and proxy issues in any NGINX config',
     description:
