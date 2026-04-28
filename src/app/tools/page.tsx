@@ -22,6 +22,26 @@ interface Tool {
 
 const TOOLS: Tool[] = [
   {
+    name: 'nginx-cve-checker',
+    tagline: 'Check your NGINX version against known CVEs',
+    description:
+      'Enter any NGINX version string (nginx/1.24.0, nginx version: nginx/1.24.0, or plain 1.24.0) and get an instant CVE report from the local advisory database. Paste your nginx.conf for condition-aware matching — CVEs that only apply when specific modules (HTTP/2, mp4, QUIC, resolver) are active are flagged separately from unconditional findings.',
+    tags: ['nginx', 'cve', 'security', 'vulnerability', 'devsecops'],
+    status: 'stable',
+    type: 'web',
+    href: '/tools/nginx-cve-checker',
+  },
+  {
+    name: 'pg-hardening-checker',
+    tagline: 'CIS-style PostgreSQL security audit for postgresql.conf and pg_hba.conf',
+    description:
+      'Paste your postgresql.conf and pg_hba.conf and get a structured security report. Covers network exposure, authentication methods, SSL/TLS, password hashing, audit logging, and access control rules. Each finding includes real-world attack context, OWASP mapping, and an exact config fix. Generate a hardened baseline config for both files.',
+    tags: ['postgresql', 'database', 'security', 'hardening', 'devsecops'],
+    status: 'stable',
+    type: 'web',
+    href: '/tools/pg-hardening-checker',
+  },
+  {
     name: 'nginx-cis-hardening-checker',
     tagline: 'CIS NGINX Benchmark v2.1.0 compliance scanner',
     description:
