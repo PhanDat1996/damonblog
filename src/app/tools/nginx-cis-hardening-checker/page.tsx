@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, memo } from "react";
 import Link from "next/link";
 import {
   scanConfig, generateHardenedConfig, generateQuickFix,
-  levelLabel, type CISScanResult,
+  type CISScanResult, type ScanStatus,
 } from "@/lib/nginx-cis/analyzer";
 import type { Severity, Confidence, CISResult } from "@/lib/nginx-cis/rules";
 
@@ -46,10 +46,17 @@ const CONF: Record<Confidence, { badge: string }> = {
   low:    { badge: "bg-zinc-800/60 text-zinc-500 border border-zinc-700/40" },
 };
 
+const STATUS_STYLE: Record<ScanStatus, { color: string; ring: string; bar: string; bg: string; border: string; badge: string }> = {
+  PASS:    { color: "text-emerald-400", ring: "ring-emerald-500/20", bar: "bg-emerald-500", bg: "bg-emerald-500/10", border: "border-emerald-500/20", badge: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" },
+  PARTIAL: { color: "text-amber-400",   ring: "ring-amber-500/20",   bar: "bg-amber-500",   bg: "bg-amber-500/10",   border: "border-amber-500/20",   badge: "bg-amber-500/15 text-amber-400 border border-amber-500/30" },
+  FAIL:    { color: "text-red-400",     ring: "ring-red-500/20",     bar: "bg-red-500",     bg: "bg-red-500/10",     border: "border-red-500/20",     badge: "bg-red-500/15 text-red-400 border border-red-500/30" },
+};
+
+// Kept for backwards compat with level-based code still using LEVEL
 const LEVEL = {
-  pass:    { color: "text-emerald-400", ring: "ring-emerald-500/20", bar: "bg-emerald-500", bg: "bg-emerald-500/10", border: "border-emerald-500/20" },
-  partial: { color: "text-amber-400",   ring: "ring-amber-500/20",   bar: "bg-amber-500",   bg: "bg-amber-500/10",   border: "border-amber-500/20" },
-  fail:    { color: "text-red-400",     ring: "ring-red-500/20",     bar: "bg-red-500",     bg: "bg-red-500/10",     border: "border-red-500/20" },
+  pass:    STATUS_STYLE.PASS,
+  partial: STATUS_STYLE.PARTIAL,
+  fail:    STATUS_STYLE.FAIL,
 };
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -201,8 +208,8 @@ function PassedRow({ result }: { result: CISResult }) {
 
 function CategorySection({ name, results }: { name: string; results: CISResult[] }) {
   const [open, setOpen] = useState(true);
-  const issues = results.filter((r) => !r.passed);
-  const passed = results.filter((r) => r.passed);
+  const issues = results.filter((r: CISResult) => !r.passed);
+  const passed = results.filter((r: CISResult) => r.passed);
 
   return (
     <div className="space-y-2">
@@ -226,8 +233,8 @@ function CategorySection({ name, results }: { name: string; results: CISResult[]
 
       {open && (
         <div className="space-y-2">
-          {issues.map((r) => <FindingCard key={r.rule.id} result={r} />)}
-          {passed.map((r) => <PassedRow key={r.rule.id} result={r} />)}
+          {issues.map((r: CISResult) => <FindingCard key={r.rule.id} result={r} />)}
+          {passed.map((r: CISResult) => <PassedRow key={r.rule.id} result={r} />)}
         </div>
       )}
     </div>
@@ -237,34 +244,62 @@ function CategorySection({ name, results }: { name: string; results: CISResult[]
 // ─── Score display ────────────────────────────────────────────────────────────
 
 function ScoreDisplay({ result }: { result: CISScanResult }) {
-  const lv  = LEVEL[result.level];
+  const st  = STATUS_STYLE[result.status];
   const pct = result.score;
 
+  const statusDot: Record<string, string> = {
+    FAIL:    "bg-red-500",
+    PARTIAL: "bg-amber-500",
+    PASS:    "bg-emerald-500",
+  };
+
   return (
-    <div className={`rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 ring-1 ${lv.ring}`}>
+    <div className={`rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 ring-1 ${st.ring}`}>
       <div className="grid gap-6 md:grid-cols-[1fr_auto]">
         <div className="space-y-4">
+
+          {/* Title row */}
           <div className="flex items-center gap-3 flex-wrap">
             <p className="font-mono text-xs text-zinc-500 uppercase tracking-widest">CIS Compliance Score</p>
-            <span className={`font-mono text-[11px] font-bold px-2.5 py-1 rounded border ${lv.bg} ${lv.border} ${lv.color}`}>
-              {levelLabel(result.level)}
+            {/* Status badge — PASS / PARTIAL / FAIL */}
+            <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] font-bold px-2.5 py-1 rounded ${st.badge}`}>
+              <span className={`w-2 h-2 rounded-full ${statusDot[result.status]}`} aria-hidden="true" />
+              {result.status}
+            </span>
+            {/* Risk label */}
+            <span className={`font-mono text-[11px] text-zinc-500 border border-zinc-700/60 bg-zinc-800/60 px-2 py-0.5 rounded`}>
+              {result.riskLabel}
             </span>
           </div>
 
+          {/* Big score */}
           <div className="flex items-end gap-3">
-            <span className={`font-mono text-6xl font-bold leading-none ${lv.color}`}>{pct}</span>
+            <span className={`font-mono text-6xl font-bold leading-none ${st.color}`}>{pct}</span>
             <span className="font-mono text-sm text-zinc-500 mb-2">/ 100</span>
           </div>
 
+          {/* Progress bar */}
           <div className="space-y-1.5">
             <div className="h-2 bg-zinc-800 rounded-full overflow-hidden"
-              role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-              <div className={`h-full rounded-full transition-all duration-700 ${lv.bar}`} style={{ width: `${pct}%` }} />
+              role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}
+              aria-label={`Security score: ${pct}/100`}>
+              <div className={`h-full rounded-full transition-all duration-700 ${st.bar}`} style={{ width: `${pct}%` }} />
             </div>
             <p className="font-mono text-xs text-zinc-600">
-              {result.results.length} checks · −10 High · −5 Medium · −2 Low
+              {result.results.length} checks evaluated · −10 High · −5 Medium · −2 Low
             </p>
           </div>
+
+          {/* Status message */}
+          <div className={`rounded-lg border ${st.border} ${st.bg} px-4 py-2.5`}>
+            <p className={`font-mono text-xs ${st.color} leading-relaxed`}>
+              {result.status === "FAIL"    && "⛔ "}
+              {result.status === "PARTIAL" && "⚠ "}
+              {result.status === "PASS"    && "✓ "}
+              {result.message}
+            </p>
+          </div>
+
         </div>
 
         {/* Count cards */}
@@ -310,9 +345,9 @@ export default function NginxCisCheckerPage() {
     : 0;
 
   const severityGroups = result ? ([
-    { sev: "high"   as Severity, label: "High Risk",   items: result.results.filter((r) => !r.passed && r.rule.severity === "high") },
-    { sev: "medium" as Severity, label: "Medium Risk",  items: result.results.filter((r) => !r.passed && r.rule.severity === "medium") },
-    { sev: "low"    as Severity, label: "Low Risk",     items: result.results.filter((r) => !r.passed && r.rule.severity === "low") },
+    { sev: "high"   as Severity, label: "High Risk",   items: result.results.filter((r: CISResult) => !r.passed && r.rule.severity === "high") },
+    { sev: "medium" as Severity, label: "Medium Risk",  items: result.results.filter((r: CISResult) => !r.passed && r.rule.severity === "medium") },
+    { sev: "low"    as Severity, label: "Low Risk",     items: result.results.filter((r: CISResult) => !r.passed && r.rule.severity === "low") },
   ]) : [];
 
   return (
@@ -424,7 +459,7 @@ export default function NginxCisCheckerPage() {
                 <div className="space-y-6">
                   {Object.entries(result.byCategory)
                     .sort(([, a], [, b]) =>
-                      b.filter((r) => !r.passed).length - a.filter((r) => !r.passed).length
+                      b.filter((r: CISResult) => !r.passed).length - a.filter((r: CISResult) => !r.passed).length
                     )
                     .map(([cat, items]) => (
                       <CategorySection key={cat} name={cat} results={items} />
@@ -437,7 +472,7 @@ export default function NginxCisCheckerPage() {
                       <h3 className="font-mono text-xs text-zinc-500 uppercase tracking-widest px-1">
                         {label} ({items.length})
                       </h3>
-                      {items.map((r) => <FindingCard key={r.rule.id} result={r} />)}
+                      {items.map((r: CISResult) => <FindingCard key={r.rule.id} result={r} />)}
                     </div>
                   ))}
                 </div>

@@ -1,15 +1,65 @@
 // lib/nginx-cis/analyzer.ts
 import { CIS_RULES, type CISResult, type Severity } from "./rules";
 
+export type ScanStatus   = "PASS" | "PARTIAL" | "FAIL";
+export type RiskLabel    = "Excellent" | "Good" | "Needs Improvement" | "High Risk";
+
+export interface ScoreBreakdown {
+  high:   number;
+  medium: number;
+  low:    number;
+  passed: number;
+}
+
 export interface CISScanResult {
   results:    CISResult[];
   counts:     Record<Severity | "passed", number>;
   score:      number;
+  status:     ScanStatus;
+  riskLabel:  RiskLabel;
+  message:    string;
+  breakdown:  ScoreBreakdown;
+  /** @deprecated use status */
   level:      "pass" | "partial" | "fail";
   byCategory: Record<string, CISResult[]>;
 }
 
 const PENALTY: Record<Severity, number> = { high: 10, medium: 5, low: 2 };
+
+function computeScore(counts: ScoreBreakdown): number {
+  // Base deduction
+  let score =
+    100 -
+    counts.high   * PENALTY.high -
+    counts.medium * PENALTY.medium -
+    counts.low    * PENALTY.low;
+
+  // High-severity cap — prevents misleading high scores when critical issues exist
+  if (counts.high >= 3) score = Math.min(score, 40);
+  else if (counts.high === 2) score = Math.min(score, 50);
+  else if (counts.high === 1) score = Math.min(score, 70);
+
+  return Math.max(0, score);
+}
+
+function computeStatus(counts: ScoreBreakdown): ScanStatus {
+  if (counts.high > 0)   return "FAIL";
+  if (counts.medium > 0) return "PARTIAL";
+  return "PASS";
+}
+
+function computeRiskLabel(score: number): RiskLabel {
+  if (score >= 90) return "Excellent";
+  if (score >= 70) return "Good";
+  if (score >= 50) return "Needs Improvement";
+  return "High Risk";
+}
+
+const STATUS_MESSAGES: Record<ScanStatus, string> = {
+  FAIL:    "This configuration contains high-risk issues that should be fixed immediately.",
+  PARTIAL: "This configuration is partially hardened but still has security gaps.",
+  PASS:    "This configuration follows most security best practices.",
+};
 
 export function scanConfig(config: string): CISScanResult {
   const results: CISResult[] = CIS_RULES.map((rule) => {
@@ -26,11 +76,25 @@ export function scanConfig(config: string): CISScanResult {
     (byCategory[r.rule.category] ??= []).push(r);
   }
 
-  const penalty = results.filter((r) => !r.passed).reduce((s, r) => s + PENALTY[r.rule.severity], 0);
-  const score   = Math.max(0, 100 - penalty);
-  const level   = score >= 80 ? "pass" : score >= 50 ? "partial" : "fail";
+  const breakdown: ScoreBreakdown = {
+    high: counts.high, medium: counts.medium, low: counts.low, passed: counts.passed,
+  };
 
-  return { results, counts, score, level, byCategory };
+  const score     = computeScore(breakdown);
+  const status    = computeStatus(breakdown);
+  const riskLabel = computeRiskLabel(score);
+
+  return {
+    results,
+    counts,
+    score,
+    status,
+    riskLabel,
+    message:    STATUS_MESSAGES[status],
+    breakdown,
+    level:      status === "PASS" ? "pass" : status === "PARTIAL" ? "partial" : "fail",
+    byCategory,
+  };
 }
 
 export function levelLabel(level: CISScanResult["level"]): string {
