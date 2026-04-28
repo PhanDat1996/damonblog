@@ -1,338 +1,353 @@
 ---
-title: "NGINX 502 Bad Gateway Under Load: Causes, Debugging, and Fixes"
-date: "2024-11-14"
-excerpt: "NGINX returning 502 Bad Gateway only under high load? This guide covers every root cause — ephemeral port exhaustion, missing keepalive, proxy timeouts, worker limits — with step-by-step debugging commands and production-ready config fixes."
-tags: ["nginx", "debugging", "production", "troubleshooting", "infrastructure"]
-featured: true
-seoKeywords: ["nginx 502 bad gateway", "fix nginx 502", "nginx upstream error", "nginx under load 502", "nginx keepalive upstream", "proxy_read_timeout nginx"]
+title: "NGINX 502 Bad Gateway Under Load: Root Causes and Fixes"
+date: "2026-04-28"
+excerpt: "NGINX 502 errors under load are almost never a simple app crash. This guide covers the real root causes — connection backlog overflow, keepalive misconfiguration, ephemeral port exhaustion — with diagnostic commands and config fixes from production incidents."
+tags: ["nginx", "debugging", "linux", "infrastructure", "troubleshooting"]
+featured: false
 category: "nginx"
 ---
 
-## Introduction
+You're on a call at 3 AM. The dashboard is red, users are seeing 502s, and the NGINX error log is full of `upstream prematurely closed connection while reading response header`. You `curl` the backend directly — it responds fine. But under load, the 502s keep coming.
 
-It's 2am. Alerts are firing. Your monitoring shows a spike in 5xx errors — specifically **502 Bad Gateway** — but only on the production cluster. Staging is clean. The upstream app is running. You restart NGINX, errors drop... then come back the moment traffic picks up again.
-
-This is one of the most frustrating failure patterns in production: a bug that hides at low traffic and only surfaces under real load. This guide covers every common root cause of **NGINX 502 Bad Gateway errors under load**, the exact commands to isolate them, and the configuration fixes that actually work.
-
-> **Related:** If you are also seeing high TIME-WAIT counts or connection refused errors outside of NGINX, see [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) for a deeper look at socket-level debugging.
+The standard definition of a 502 — "invalid response from upstream" — is useless here. Under load, the root cause is almost never an application crash. It's resource contention between NGINX's connection handling and the backend's ability to process requests at scale.
 
 ---
 
-## What Does NGINX 502 Bad Gateway Mean?
+## TL;DR
 
-When NGINX acts as a reverse proxy and returns a **502 Bad Gateway**, it means one thing: NGINX successfully received the client's request, attempted to forward it to an upstream server (your app, PHP-FPM, Node.js, Gunicorn, etc.), and **failed to get a valid response**.
-
-NGINX itself is alive. The problem is downstream.
-
-The upstream failure can happen in several ways:
-- The upstream **refused the connection** entirely
-- The upstream accepted the connection but **timed out** before responding
-- The upstream returned a response NGINX could not parse
-- The upstream **crashed** mid-request
-
-The NGINX error log is your first clue — the specific error message tells you which of these happened, and determines your fix.
-
----
-
-## Common Causes of NGINX 502 Under Load
-
-### 1. Upstream Server Crash or Restart
-
-The simplest case. Your app process died, was OOM-killed, or is restarting. At low traffic this might not trigger alerts; under load, every request hits a dead backend.
-
-**Log signature:**
 ```
-connect() failed (111: Connection refused) while connecting to upstream
-```
+502 under load ≠ app is broken
+502 under load = connection boundary failure between NGINX and backend
 
-### 2. Ephemeral Port Exhaustion (TIME-WAIT Buildup)
+Most common causes:
+1. Backend listen backlog overflow (kernel drops connections → NGINX sees RST → 502)
+2. No upstream keepalive → TCP handshake overhead kills backend at scale
+3. Ephemeral port exhaustion → NGINX can't open new connections
+4. Worker pool undersized for actual concurrency requirements
 
-One of the most common and least-known causes of **NGINX 502 under load**. If NGINX opens a new TCP connection for every proxied request — which happens when `keepalive` is not configured in the upstream block — those connections close into `TIME-WAIT` state for 60 seconds. At 200 req/s, that is 12,000 sockets in TIME-WAIT. The Linux default ephemeral port range only provides ~28,000 ports. When the pool exhausts, new connections get `ECONNREFUSED`.
-
-**Log signature:**
-```
-connect() failed (111: Connection refused) while connecting to upstream
-```
-
-Identical to a crashed upstream. The distinction: `ss -s` will show thousands of TIME-WAIT connections climbing under load.
-
-### 3. Proxy Timeout
-
-Your upstream is alive but slow. Under load, response times increase. If the response takes longer than `proxy_read_timeout` (default: 60s) or the connection takes longer than `proxy_connect_timeout` (default: 60s), NGINX gives up and returns 502.
-
-**Log signature:**
-```
-upstream timed out (110: Connection timed out) while reading response header from upstream
-```
-
-### 4. Resource Exhaustion on the Upstream
-
-The upstream server is running but overwhelmed — CPU at 100%, swap thrashing, or the process has hit its file descriptor limit. It accepts the connection but cannot serve it.
-
-**Log signature:**
-```
-upstream sent invalid header while reading response header from upstream
-```
-
-### 5. NGINX Worker Connection Limits
-
-NGINX drops connections before they even reach the upstream if `worker_connections` is too low. Each worker process can only hold `worker_connections` simultaneous connections. Under high load, new connections get dropped at the NGINX layer.
-
-**Log signature:**
-```
-worker_connections are not enough while connecting to upstream
-```
-
-### 6. Backend Pool Limits (PHP-FPM, Gunicorn)
-
-If your backend is PHP-FPM, `pm.max_children` caps simultaneous requests. Gunicorn has `--workers`. When the pool is full, excess requests are refused immediately.
-
-**Log signature:**
-```
-connect() failed (11: Resource temporarily unavailable) while connecting to upstream
+Fastest diagnostic:
+  netstat -s | grep overflowed    # climbing number = smoking gun
+  ss -lnt sport = :8000           # Recv-Q > 0 = app not keeping up
 ```
 
 ---
 
-## Real-World Incident: The 0.3% Error Rate That Only Appeared at 200 req/s
+## 502 vs 504 — the distinction matters
 
-**Setup:** NGINX reverse proxying a Node.js API on the same host, port 8080. Passed all staging load tests at 50 req/s without a single error.
+Before diagnosing, know what you're actually looking at:
 
-**Symptom:** Three days after a traffic surge from a product launch, 502 errors started appearing — 0.3% error rate, completely random, only under sustained load above ~180 req/s.
+- **502 Bad Gateway** — the connection was established but something broke the conversation before a complete response header was parsed. The upstream rejected the connection, closed it abruptly, or returned garbage.
+- **504 Gateway Timeout** — NGINX connected and sent the request, but the upstream never responded within the configured timeout.
 
-**Error log:**
-```
-2024/11/14 02:41:08 [error] 31#31: *18423 connect() failed (111: Connection refused)
-while connecting to upstream, client: 10.0.1.42, server: api.example.com,
-request: "POST /api/v2/events HTTP/1.1", upstream: "http://127.0.0.1:8080/api/v2/events"
-```
-
-Connection refused — but Node.js was running, health checks passed, and its own logs were clean. CPU was 40%. Memory was fine.
-
-**The tell:** Running `watch -n 0.5 'ss -s'` during a load test showed TIME-WAIT climbing past 14,000 and still going. The ephemeral port pool was draining. New outbound connections were being refused at the kernel level — before they ever reached the app.
-
-Root cause: no `keepalive` directive in the upstream block. NGINX was opening a brand-new TCP connection for every single proxied request.
+If you're seeing 502s specifically under load (not 504s), the upstream isn't slow — it's actively rejecting connections or closing them before they complete. That's a different problem with a different fix.
 
 ---
 
-## How to Debug NGINX 502 Errors: Step by Step
+## Why 502s appear specifically under load
 
-### Step 1: Read the Exact Error Log Message
+A server that handles 100 req/s cleanly can collapse into 502s at 500 req/s. The load doesn't just slow things down — it changes the failure mode of the TCP stack.
+
+### 1. Backend listen backlog overflow
+
+This is the dominant root cause in high-traffic environments, and the one most engineers miss.
+
+Application servers (Gunicorn, Unicorn, Puma, PHP-FPM) define a maximum number of worker processes. When traffic exceeds what those workers can handle:
+
+1. NGINX accepts connections and opens TCP connections to the backend port
+2. The backend Linux kernel accepts the TCP handshake and places the connection in the **listen backlog** (the accept queue)
+3. When the accept queue overflows, the kernel either drops the SYN packet or sends a RST depending on `tcp_abort_on_overflow`
+4. NGINX sees the connection "succeed" at the TCP level, then immediately receives a RST
+5. NGINX logs `upstream prematurely closed connection` and returns 502
+
+This happens in milliseconds. It's not a timeout — it's an immediate rejection at the kernel level. This is why `curl` to the backend passes fine: you're not generating enough load to overflow the queue with a single request.
+
+### 2. Upstream keepalive misconfiguration
+
+In default NGINX proxy mode, NGINX closes the TCP connection to the upstream after every request. At low traffic, this is negligible. Under load:
+
+- Every request requires a new TCP handshake to the backend
+- After each connection closes, the socket enters `TIME_WAIT` state for 60 seconds (default)
+- Under sustained traffic, thousands of `TIME_WAIT` sockets accumulate on the NGINX host
+- Ephemeral ports (typically 32768–60999) get exhausted — NGINX literally cannot open new connections
+- New connections fail immediately, producing 502s
+
+Even before port exhaustion, the TCP handshake overhead places a heavier "connect load" on backend workers. A backend that handles 500 req/s with keepalive enabled may fail at 200 req/s without it — because workers spend CPU accepting connections instead of processing requests.
+
+### 3. Backend timeout under garbage collection
+
+Common in Python, Ruby, and Java apps. GC pauses the application process. If the worker is single-threaded, it stops calling `accept()` on the socket. NGINX connects (TCP handshake completes at kernel level), writes the request, and waits. The kernel buffer fills. Eventually NGINX hits its timeout or the backend sends a partial RST. You get a 502, not a 504, because the connection was technically established before it broke.
+
+Increasing `proxy_read_timeout` masks this symptom without fixing the GC problem.
+
+### 4. CPU steal time in virtualized environments
+
+On shared VMs, high CPU steal time (`%st` in `top`) means the hypervisor is not scheduling your VM's CPU. The backend kernel accepts TCP connections, but the app process can't run to read from the socket. NGINX writes to a full socket buffer, the write times out or resets, and you get a 502. This is worth checking early — `top` will show it.
+
+---
+
+## Diagnostic workflow
+
+Don't just read the logs. Trace the connection state.
+
+### Step 1 — Check the NGINX error log for the specific message
 
 ```bash
-tail -f /var/log/nginx/error.log
+tail -f /var/log/nginx/error.log | grep upstream
 ```
 
-`connect() failed (111)` vs `timed out (110)` vs `invalid header` are three different problems requiring different fixes. Read it before assuming.
+The message tells you which failure mode you're in:
 
-> **Tip:** For a full walkthrough on reading and correlating logs across services, see [Reading Logs Like a Detective: A Field Guide to Incident Triage](/blog/log-analysis-incident-triage).
-
-### Step 2: Verify the Upstream Directly
-
-```bash
-# Is the port listening?
-ss -tlnp | grep 8080
-
-# Does it respond to a direct request?
-curl -sf http://127.0.0.1:8080/health && echo "upstream OK"
-
-# Check the upstream process logs
-journalctl -u app-server -n 100 --no-pager
-```
-
-If the upstream responds normally to direct requests, the problem is in the connection layer between NGINX and the app — not the app itself.
-
-### Step 3: Watch Socket State Under Load
-
-Run this while traffic is active:
-
-```bash
-watch -n 0.5 'ss -s'
-```
-
-| What you see | What it means |
+| Message | Likely cause |
 |---|---|
-| TIME-WAIT > 5,000 and climbing | Ephemeral port exhaustion — missing keepalive |
-| CLOSE-WAIT climbing | Upstream not closing connections properly |
-| SYN-SENT stuck | Upstream not accepting new connections |
+| `upstream prematurely closed connection` | Backlog overflow, worker death, RST from backend |
+| `connect() failed (111: Connection refused)` | Backend port closed, process crashed |
+| `no live upstreams while connecting` | All servers in upstream block marked down |
+| `upstream timed out (110: Operation timed out)` | Backend accepted connection but never processed it |
+
+### Step 2 — Bypass NGINX and hit the backend directly under load
 
 ```bash
-# Check current ephemeral port range (~28,000 ports by default)
+# 200 requests, 50 concurrent — directly to backend port
+ab -n 200 -c 50 http://127.0.0.1:8000/health
+```
+
+If you see `Connection Reset by Peer` here, the backend is overflowing its listen queue before NGINX is even involved. NGINX is the messenger, not the cause.
+
+### Step 3 — Check the listen queue (the smoking gun)
+
+```bash
+# Is the app keeping up with connections?
+ss -lnt sport = :8000
+```
+
+Look at the `Recv-Q` column. For a listening socket, `Recv-Q` shows the current backlog size. If it's non-zero and growing, the app is not calling `accept()` fast enough.
+
+```bash
+# Is the listen queue overflowing? Run this twice.
+netstat -s | grep -i "listen"
+# "X times the listen queue of a socket overflowed"
+# If the number increases between runs — that's your root cause.
+```
+
+A climbing overflow counter confirms that the kernel is rejecting connections. NGINX is receiving RSTs and converting them to 502s.
+
+### Step 4 — Check TIME_WAIT accumulation
+
+```bash
+# On the NGINX host — how many connections are in TIME_WAIT to the backend port?
+ss -tan state time-wait dst :8000 | wc -l
+```
+
+If this number is in the thousands, you're either close to or already experiencing ephemeral port exhaustion. Check the available range:
+
+```bash
 cat /proc/sys/net/ipv4/ip_local_port_range
-
-# Count TIME-WAIT sockets right now
-ss -tn state time-wait | wc -l
+# Default: 32768 60999 → ~28,000 ports available
 ```
 
-> **Related:** For a deeper dive into `ss`, `lsof`, and socket-level debugging, see [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging).
+If TIME_WAIT count approaches that range and traffic is sustained, NGINX will start failing to open new connections entirely.
 
-### Step 4: Check System Resources
+### Step 5 — Check backend worker concurrency math
 
-```bash
-# CPU, memory, load average
-top -bn1 | head -5
+This is the calculation most people skip:
 
-# Is the upstream process hitting FD limits?
-PID=$(pgrep -f app-server | head -1)
-echo "Limit:   $(cat /proc/$PID/limits | grep 'open files' | awk '{print $4}')"
-echo "Current: $(ls /proc/$PID/fd | wc -l)"
-
-# Is the system swapping?
-vmstat 1 3
+```
+Max backend throughput ≈ (workers × worker_connections) / avg_request_duration_seconds
 ```
 
-### Step 5: Check NGINX Worker Limits
-
-```bash
-# Current setting
-nginx -T 2>/dev/null | grep worker_connections
-
-# Active NGINX connections right now
-ss -tnp | grep nginx | wc -l
+Example: 8 Gunicorn sync workers, requests averaging 200ms each:
 ```
+8 workers / 0.2s = 40 req/s max
+```
+
+If you're sending 200 req/s at that backend, the backlog will overflow. No NGINX tuning fixes a backend that is fundamentally undersized for the load.
 
 ---
 
-## Fix and Configuration
+## Real production incident
 
-### Fix 1: Add Upstream Keepalive — The Most Common Fix for NGINX 502 Under Load
+**Setup:** E-commerce site, NGINX proxying to Django on Gunicorn. During a flash sale, error rate hit 15% (502). Static assets loaded fine. Only the cart API failed.
+
+**Logs:** `upstream prematurely closed connection` flooding error.log.
+
+**Health check:** `curl http://127.0.0.1:8000/api/health` → `200 OK` immediately. The on-call engineer thought the backend was fine.
+
+**What `netstat -s` showed:** The listen queue overflow counter was incrementing at ~300/second.
+
+**Root cause:** Gunicorn was configured with `--workers=8` using sync workers. The cart API made a synchronous call to a legacy payment gateway averaging 3 seconds. Effective throughput: `8 / 3 = 2.6 req/s`. Traffic during the sale: 50 req/s.
+
+NGINX accepted 50 connections. Established TCP to 8 Gunicorn workers. The remaining 42 went into the kernel listen backlog. `net.core.somaxconn` was the default 128, but the Gunicorn sync worker capped the accept queue much lower. The backlog overflowed. Kernel sent RSTs. NGINX returned 502s.
+
+**The backend health check passed because a single `curl` request never overflowed the queue.** Under load, the queue was permanently saturated.
+
+**Fix:**
+
+1. **Immediate:** Scaled Gunicorn to 16 workers (bought time, didn't solve the architecture problem)
+2. **Permanent:** Switched to `gevent` async workers with `--worker-connections=1000` — 8 workers handling 1000 concurrent greenlets each
+3. **Kernel tuning:** `net.core.somaxconn` set to 4096
+
+502 errors dropped to zero within 30 seconds of the worker type change. NGINX configuration was never the problem.
+
+---
+
+## NGINX configuration fixes
+
+After verifying the backend can handle the load, these NGINX changes prevent the proxy layer from making the problem worse.
+
+### Enable upstream keepalive
+
+The single highest-impact change for preventing 502s under load:
 
 ```nginx
-upstream app_backend {
-    server 127.0.0.1:8080;
-
-    keepalive 64;            # idle keepalive connections per worker
-    keepalive_requests 1000; # requests before recycling a connection
-    keepalive_timeout 75s;   # idle timeout before closing
+upstream backend {
+    server 10.0.0.1:8000;
+    server 10.0.0.2:8000;
+    keepalive 32;         # cache up to 32 idle connections to the upstream group
+    least_conn;           # route to the backend with fewest active connections
 }
 
 server {
-    location /api/ {
-        proxy_pass http://app_backend;
-
-        proxy_http_version 1.1;         # required — HTTP/1.0 has no keepalive
-        proxy_set_header Connection ""; # clear client's "Connection: close" header
+    location / {
+        proxy_pass          http://backend;
+        proxy_http_version  1.1;            # required for keepalive to function
+        proxy_set_header    Connection "";  # required — clears the "close" header from HTTP/1.0
+        proxy_set_header    Host $host;
+        proxy_set_header    X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header    X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-**Why it works:** NGINX reuses existing TCP connections instead of opening a new one per request. TIME-WAIT sockets stop accumulating. The two required lines — `proxy_http_version 1.1` and the cleared `Connection` header — are both mandatory. Without them, keepalive silently degrades to HTTP/1.0 behavior and does nothing.
+**Why `proxy_http_version 1.1` is non-negotiable:** NGINX defaults to HTTP/1.0 for proxying. HTTP/1.0 closes the connection after every request regardless of `keepalive`. Without `proxy_http_version 1.1` and `proxy_set_header Connection ""`, the `keepalive 32` directive does nothing. This is the most common misconfiguration in NGINX reverse proxy setups.
 
-> **See also:** [NGINX SSL Hardening: From C Grade to A+ on SSL Labs](/blog/nginx-ssl-hardening) for a complete production-ready NGINX server block setup.
-
-### Fix 2: Increase Worker Connections
+### Set realistic proxy timeouts
 
 ```nginx
-worker_processes auto;        # one per CPU core
-worker_rlimit_nofile 65535;   # OS file descriptor limit for NGINX processes
+proxy_connect_timeout  3s;   # fail fast if backend can't accept a connection
+proxy_send_timeout     10s;  # time to transmit the request
+proxy_read_timeout     30s;  # time between successive read operations from backend
+```
 
-events {
-    worker_connections 4096;  # per worker (total = processes × this value)
-    use epoll;                 # most efficient I/O model on Linux
-    multi_accept on;
+Don't set `proxy_read_timeout` to 120s to "stop 502 errors." If the backend takes 120s to respond, you have an architecture problem — offload to a job queue. A high timeout just means failed connections hold worker slots for longer, making the cascade worse.
+
+`proxy_connect_timeout` should be low. If the backend is at 100% CPU, it may take seconds to accept a new TCP connection. A short connect timeout fails fast and triggers `proxy_next_upstream` to try the next server.
+
+### Configure retry behavior
+
+```nginx
+proxy_next_upstream error timeout http_502 http_503;
+proxy_next_upstream_tries 2;
+proxy_next_upstream_timeout 5s;
+```
+
+With multiple backends in the upstream block, this tells NGINX to retry on 502 rather than returning the error immediately. `proxy_next_upstream_tries 2` limits retries to prevent amplification if the entire upstream pool is struggling.
+
+### Add upstream health tracking parameters
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8000 max_fails=3 fail_timeout=30s;
+    server 10.0.0.2:8000 max_fails=3 fail_timeout=30s;
+    keepalive 32;
 }
 ```
 
-**Why it works:** `worker_processes × worker_connections` is the maximum simultaneous connection count NGINX can hold. The default of 1024 connections per worker is far too low for production traffic.
+`max_fails=3` marks a server as down after 3 consecutive failures. `fail_timeout=30s` keeps it marked down for 30 seconds before retrying. Without these, NGINX continues sending traffic to a backend that's overloaded.
 
-### Fix 3: Tune Proxy Timeouts
+### Use `least_conn` for unequal backends
+
+Default round-robin distributes requests equally regardless of how long they take. If one backend is slower (GC pause, noisy VM neighbor), it accumulates more connections. `least_conn` routes new requests to the backend with the fewest active connections:
 
 ```nginx
-location /api/ {
-    proxy_pass http://app_backend;
-
-    proxy_connect_timeout  5s;  # time to establish connection to upstream
-    proxy_send_timeout    30s;  # time to transmit the full request
-    proxy_read_timeout    30s;  # time to wait for upstream response
+upstream backend {
+    least_conn;
+    server 10.0.0.1:8000;
+    server 10.0.0.2:8000;
+    keepalive 32;
 }
 ```
 
-**Why it works:** The 60s defaults are too generous for most APIs. Tighter timeouts make NGINX fail fast, freeing connections instead of holding them open for a minute while the upstream is struggling.
+---
 
-### Fix 4: Widen the Ephemeral Port Range
+## Kernel tuning for high-traffic deployments
 
-Even with keepalive configured, widening the port range adds safety margin:
+These kernel settings directly affect the connection boundary between NGINX and the backend.
 
 ```bash
-# Temporary (lost on reboot)
-echo "1024 65535" > /proc/sys/net/ipv4/ip_local_port_range
+# Increase the maximum listen backlog
+sysctl -w net.core.somaxconn=4096
 
-# Permanent
-echo "net.ipv4.ip_local_port_range = 1024 65535" >> /etc/sysctl.conf
-echo "net.ipv4.tcp_tw_reuse = 1" >> /etc/sysctl.conf
-sysctl -p
+# Increase TCP SYN backlog
+sysctl -w net.ipv4.tcp_max_syn_backlog=4096
+
+# Reuse TIME_WAIT sockets for new connections (reduces port exhaustion)
+sysctl -w net.ipv4.tcp_tw_reuse=1
+
+# Allow faster reuse of local ports
+sysctl -w net.ipv4.ip_local_port_range="10000 65000"
 ```
 
-### Fix 5: Tune Backend Pool Size (PHP-FPM)
-
-```ini
-; /etc/php/8.x/fpm/pool.d/www.conf
-pm = dynamic
-pm.max_children = 50
-pm.start_servers = 10
-pm.min_spare_servers = 5
-pm.max_spare_servers = 20
-pm.max_requests = 500
-```
-
-Reload after changes: `systemctl reload php8.x-fpm`
-
----
-
-## Verifying the Fix
-
-Run a load test while watching socket state and the error log simultaneously:
+Make permanent by adding to `/etc/sysctl.d/99-nginx.conf`:
 
 ```bash
-# Terminal 1: watch socket state
-watch -n 1 'ss -s'
-
-# Terminal 2: watch for errors
-tail -f /var/log/nginx/error.log
-
-# Terminal 3: generate load
-ab -n 10000 -c 200 https://api.example.com/health
+net.core.somaxconn = 4096
+net.ipv4.tcp_max_syn_backlog = 4096
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.ip_local_port_range = 10000 65000
 ```
 
-After adding upstream keepalive: TIME-WAIT count stays below 200 (instead of climbing into the thousands), and the error log stays silent.
+**Important:** `net.core.somaxconn` caps the maximum listen backlog. Even if you configure Gunicorn with `--backlog=2048`, the kernel silently clamps it to `somaxconn`. Setting `somaxconn=128` (the default on many systems) means your application's backlog setting is irrelevant above that value.
 
 ---
 
-## Lessons Learned and Best Practices
+## Common mistakes that make 502s worse
 
-**Always configure upstream keepalive.** There is almost no valid reason for NGINX to open a new TCP connection for every request to a local upstream. Add it to every reverse proxy config by default.
+**Disabling `proxy_buffering`:** Some articles recommend `proxy_buffering off` for latency. Under load, this ties up a backend connection for the entire duration of the client receiving the response. Slow clients directly hold backend worker slots. For normal request-response APIs, keep buffering on.
 
-**Load test at 2–3x expected peak.** The bug above was invisible at 50 req/s and catastrophic at 200 req/s. Low-concurrency staging tests miss resource exhaustion entirely.
+**Setting `proxy_read_timeout` very high:** This doesn't fix 502s. It converts them to 504s and makes your worker slots queue for longer, worsening the cascade. Fix the underlying slowness instead.
 
-**Monitor socket state, not just error rate.** By the time 502s appear, port exhaustion is already severe. A rising TIME-WAIT count in your monitoring is an early warning you can act on before users are affected.
+**Ignoring `net.core.somaxconn`:** The single most common kernel oversight in NGINX tuning guides. If it's 128, every other backlog setting is irrelevant above 128 connections.
 
-**Know your connection limits.** `worker_connections`, `worker_rlimit_nofile`, `ulimit -n`, `pm.max_children` — these interact. When traffic grows, one becomes the bottleneck. Document and review them when you scale.
+**Using round-robin with unequal backends:** One slow node drains its accept queue while NGINX keeps sending equal traffic. Switch to `least_conn`.
 
-**The exact error message matters.** `Connection refused (111)` and `timed out (110)` are different problems. Read before you act.
-
----
-
-## Quick Reference: NGINX 502 Diagnostic Table
-
-| Error message | Likely cause | First action |
-|---|---|---|
-| `connect() failed (111)` + high TIME-WAIT | Missing keepalive | Add `keepalive` to upstream block |
-| `connect() failed (111)` + low TIME-WAIT | Upstream crashed | `systemctl status app` |
-| `timed out (110)` reading response | Slow upstream / timeout too short | Check app perf + tune `proxy_read_timeout` |
-| `worker_connections are not enough` | NGINX limit hit | Increase `worker_connections` |
-| `connect() failed (11)` | Backend pool full | Increase `pm.max_children` / workers |
-| `upstream sent invalid header` | App crash mid-response | Check app error logs |
+**Health check that doesn't reflect real load:** A health check endpoint that returns 200 in 10ms doesn't prove the backend can handle production load. The health check bypasses the queue. Test with `ab` or `wrk` directly to the backend under load.
 
 ---
 
-## Conclusion
+## Diagnostic checklist
 
-**NGINX 502 Bad Gateway errors under load** are almost always a connection management problem — not a code bug. The most common culprit is missing upstream keepalive causing ephemeral port exhaustion, but timeouts, worker limits, and backend pool saturation all produce similar symptoms.
+Run in this order when 502s fire:
 
-The debugging path is fast once you know it: read the exact error log message, check socket state with `ss -s` under load, verify the upstream directly, then work through resource limits from the OS up through the application layer.
+```bash
+# 1. Is the backend process running?
+systemctl status gunicorn
 
-Add upstream keepalive to every reverse proxy config. Monitor TIME-WAIT socket counts. Load test at realistic traffic levels before launch. You will not be debugging this at 2am.
+# 2. Can you connect directly?
+curl -sv http://127.0.0.1:8000/health
+
+# 3. Is the listen queue overflowing? (run twice, check if number increases)
+netstat -s | grep -i "overflowed"
+
+# 4. Is Recv-Q > 0 on the backend socket?
+ss -lnt sport = :8000
+
+# 5. TIME_WAIT accumulation on NGINX host?
+ss -tan state time-wait dst :8000 | wc -l
+
+# 6. Is NGINX hitting worker_connections limit?
+nginx -T | grep worker_connections
+cat /var/log/nginx/error.log | grep "worker_connections"
+
+# 7. Verify keepalive is actually configured
+nginx -T | grep -A5 "upstream"
+```
 
 ---
 
-*Found this useful? The same debugging approach applies to Docker containers — see [Docker Ate My Disk: Fixing Log Rotation Before It Kills Production](/blog/docker-log-rotation) for another common production incident breakdown.*
+## Related
+
+- [NGINX Upstream Keepalive: Why Missing It Causes 502 Errors Under Load](/blog/nginx-upstream-keepalive)
+- [NGINX Rate Limiting Configuration](/blog/nginx-rate-limiting-config)
+- [NGINX Troubleshooting Guide](/blog/nginx-troubleshooting-guide)
+- [ss vs netstat: Check Open Ports and Connections in Linux](/blog/check-open-ports-linux-ss-netstat-guide)
+- [Linux TIME_WAIT Explained: What It Is and When to Worry](/blog/linux-time-wait-explained)
