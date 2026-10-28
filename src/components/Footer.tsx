@@ -30,6 +30,12 @@ export default function Footer() {
                 {label}
               </Link>
             ))}
+            <a
+              href="/feed.xml"
+              className="font-mono text-xs text-zinc-400 hover:text-green-400 transition-colors"
+            >
+              RSS
+            </a>
           </nav>
         </div>
         <div className="mt-8 border-t border-zinc-800/60 pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
