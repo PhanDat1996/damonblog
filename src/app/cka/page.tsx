@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { CURRICULUM_META, DOMAINS, SKILLS } from '@/lib/cka/curriculum.ts';
 import { formatDate } from '@/lib/cka/dates.ts';
 import { RECENT_DAYS, REVIEW_INTERVAL_DAYS } from '@/lib/cka/recommend.ts';
+import { SIMULATIONS } from '@/lib/cka/simulations.ts';
 import { TASKS } from '@/lib/cka/tasks.ts';
 import { getAllPosts } from '@/lib/posts';
 import { CkaTracker } from './_components/CkaTracker';
@@ -59,7 +60,7 @@ export default function CkaPage() {
         </p>
         <ul className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs text-zinc-400">
           <li>Curriculum: Kubernetes {CURRICULUM_META.kubernetesVersion}, checked {formatDate(CURRICULUM_META.verifiedOn)}</li>
-          <li>{TASKS.length} hands-on lab tasks</li>
+          <li>{TASKS.length} hands-on lab tasks, {SIMULATIONS.length} simulations</li>
           <li>Progress stays in this browser</li>
         </ul>
         <p className="max-w-2xl text-xs leading-relaxed text-zinc-500">
@@ -68,6 +69,8 @@ export default function CkaPage() {
         </p>
         <p className="font-mono text-xs">
           <a href="#curriculum" className="text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400">Jump to curriculum</a>
+          <span className="text-zinc-600"> · </span>
+          <a href="#simulations" className="text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400">Simulations</a>
           <span className="text-zinc-600"> · </span>
           <a href="#practice-tasks" className="text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400">Practice tasks</a>
           <span className="text-zinc-600"> · </span>

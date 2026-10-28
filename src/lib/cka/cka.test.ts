@@ -12,6 +12,8 @@ import { buildExport, emptyState, normalizeState, parseImport, parseStored, SCHE
 import type { Attempt, AttemptOutcome, SkillStatus, TrackerState } from './storage.ts';
 import { computeProgress, countdown, latestAttempt } from './progress.ts';
 import { recommend, RECENT_DAYS, REVIEW_INTERVAL_DAYS } from './recommend.ts';
+import { CAPTURES } from './simulation-captures.ts';
+import { SIMULATIONS, commandOutput, getSimulation, matchCommand, orderedOptions, practiceItemTitle, suggestOutcome } from './simulations.ts';
 
 let seq = 0;
 function attempt(date: string, outcome: AttemptOutcome, minutes = 30, extra: Partial<Attempt> = {}): Attempt {
@@ -289,4 +291,68 @@ test('stored data: missing, malformed and partly invalid', () => {
   const { state, issues } = normalizeState({ schemaVersion: 1, settings: {}, skills: {} });
   assert.deepEqual(issues, []);
   assert.deepEqual(state, emptyState());
+});
+
+// ── Simulations ─────────────────────────────────────────────────────────────
+
+test('simulations: map to real tasks and skills, one correct option per decision', () => {
+  assert.ok(SIMULATIONS.length >= 3);
+  assert.equal(new Set(SIMULATIONS.map((s) => s.id)).size, SIMULATIONS.length);
+  for (const sim of SIMULATIONS) {
+    const task = TASKS.find((t) => t.id === sim.taskId);
+    assert.ok(task, sim.id);
+    assert.equal(task!.skillId, sim.skillId, `${sim.id} skill matches its task`);
+    assert.ok(sim.decisions.length >= 2, sim.id);
+    for (const d of sim.decisions) {
+      assert.equal(d.options.filter((o) => o.correct).length, 1, `${sim.id}/${d.id}`);
+      assert.equal(new Set(d.options.map((o) => o.id)).size, d.options.length, `${sim.id}/${d.id} option ids`);
+    }
+    // Every state a decision moves to changes at least one command's output.
+    for (const d of sim.decisions.filter((x) => x.stateAfter)) {
+      assert.ok(sim.commands.some((c) => c.outputs[d.stateAfter!]), `${sim.id}: state ${d.stateAfter} is visible`);
+    }
+  }
+});
+
+test('simulations: every recorded capture is used', () => {
+  const used = new Set<string>();
+  for (const sim of SIMULATIONS) {
+    for (const c of sim.commands) Object.values(c.outputs).forEach((k) => used.add(k as string));
+    for (const d of sim.decisions) for (const o of d.options) for (const s of o.shows ?? []) used.add(s.output);
+  }
+  const unused = Object.keys(CAPTURES).filter((k) => !used.has(k));
+  assert.deepEqual(unused, []);
+});
+
+test('simulations: output follows state, typed commands are matched leniently', () => {
+  const sim = getSimulation('sim.svc-no-endpoints')!;
+  const eps = sim.commands.find((c) => c.id === 'eps')!;
+  assert.match(commandOutput(eps, 'start'), /<unset>/);
+  assert.match(commandOutput(eps, 'fixed'), /\b80\b/);
+  const describe = sim.commands.find((c) => c.id === 'describe')!;
+  assert.equal(commandOutput(describe, 'fixed'), commandOutput(describe, 'start'), 'falls back to start');
+
+  assert.equal(matchCommand(sim, '$  k -n cka-lab-svc   get svc web -o wide ')?.id, 'svc');
+  assert.equal(matchCommand(sim, 'kubectl get pods -A'), null);
+  assert.equal(matchCommand(sim, '   '), null);
+});
+
+test('simulations: attempts can reference a simulation and show its title', () => {
+  assert.equal(practiceItemTitle('sim.crashloop-logs'), 'Simulation: Pod keeps restarting');
+  assert.equal(practiceItemTitle('task.rbac-log-reader'), 'Read-only access for a ServiceAccount');
+  assert.equal(practiceItemTitle('sim.removed'), null);
+  const s = emptyState();
+  withSkill(s, 'storage.pv-pvc', 'learning', [attempt('2026-10-27', 'hints', 6, { taskId: 'sim.pvc-pending' })]);
+  assert.ok(parseImport(buildExport(s, new Date(), 'v1.37')).ok);
+  assert.deepEqual([suggestOutcome(0).suggested, suggestOutcome(2).suggested], ['independent', 'hints']);
+});
+
+test('simulations: displayed option order is stable and does not always lead with the answer', () => {
+  const decisions = SIMULATIONS.flatMap((s) => s.decisions);
+  const firstCorrect = decisions.filter((d) => orderedOptions(d)[0].correct).length;
+  assert.ok(firstCorrect < decisions.length / 2, `correct option first in ${firstCorrect}/${decisions.length}`);
+  for (const d of decisions) {
+    assert.deepEqual(orderedOptions(d).map((o) => o.id), orderedOptions(d).map((o) => o.id));
+    assert.equal(orderedOptions(d).length, d.options.length);
+  }
 });

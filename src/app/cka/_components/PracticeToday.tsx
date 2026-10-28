@@ -3,6 +3,7 @@
 import { SKILLS, getDomain } from '@/lib/cka/curriculum.ts';
 import { formatDate } from '@/lib/cka/dates.ts';
 import type { Recommendations, SuggestionKind } from '@/lib/cka/recommend.ts';
+import { SIMULATIONS } from '@/lib/cka/simulations.ts';
 import { getTask } from '@/lib/cka/tasks.ts';
 import { BTN_PRIMARY, BTN_SECONDARY, FOCUS_RING } from './ui';
 
@@ -18,12 +19,14 @@ export function PracticeToday({
   recs,
   onOpenSkill,
   onOpenTask,
+  onOpenSimulation,
   onLog,
 }: {
   loaded: boolean;
   recs: Recommendations | null;
   onOpenSkill: (skillId: string) => void;
   onOpenTask: (taskId: string) => void;
+  onOpenSimulation: (simId: string) => void;
   onLog: (skillId: string, taskId: string | null) => void;
 }) {
   return (
@@ -51,6 +54,7 @@ export function PracticeToday({
           {recs.suggestions.map((s, i) => {
             const skill = SKILLS.find((x) => x.id === s.skillId)!;
             const task = s.taskId ? getTask(s.taskId) : undefined;
+            const sim = task ? SIMULATIONS.find((x) => x.taskId === task.id) : undefined;
             return (
               <li key={s.skillId} className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
                 <p className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
@@ -66,6 +70,11 @@ export function PracticeToday({
                   ) : (
                     <button type="button" className={BTN_PRIMARY} onClick={() => onOpenSkill(skill.id)}>
                       Open skill and docs
+                    </button>
+                  )}
+                  {sim && (
+                    <button type="button" className={BTN_SECONDARY} onClick={() => onOpenSimulation(sim.id)}>
+                      Simulate first
                     </button>
                   )}
                   <button type="button" className={BTN_SECONDARY} onClick={() => onLog(skill.id, task?.id ?? null)}>

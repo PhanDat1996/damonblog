@@ -7,6 +7,7 @@ import { Curriculum } from './Curriculum';
 import { DataControls } from './DataControls';
 import { Overview } from './Overview';
 import { PracticeToday } from './PracticeToday';
+import { SimulationList } from './SimulationList';
 import { TaskList } from './TaskList';
 import { useTracker } from './useTracker';
 import { BTN_SECONDARY } from './ui';
@@ -20,6 +21,7 @@ export function CkaTracker({ postTitles }: { postTitles: Record<string, string> 
   const [openSkillId, setOpenSkillId] = useState<string | null>(null);
   const [logRequest, setLogRequest] = useState<{ skillId: string; taskId: string | null; n: number } | null>(null);
   const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const [activeSimId, setActiveSimId] = useState<string | null>(null);
 
   const progress = useMemo(() => (loaded && today ? computeProgress(state, today) : null), [state, loaded, today]);
   const recs = useMemo(() => (loaded && today ? recommend(state, today) : null), [state, loaded, today]);
@@ -51,6 +53,11 @@ export function CkaTracker({ postTitles }: { postTitles: Record<string, string> 
     openSkill(skillId);
   }, [openSkill]);
 
+  const openSimulation = useCallback((simId: string) => {
+    setActiveSimId(simId);
+    setScrollTo('simulations');
+  }, []);
+
   // Open a task linked directly by URL hash (e.g. /cka#task.rbac-log-reader).
   useEffect(() => {
     const id = decodeURIComponent(window.location.hash.slice(1));
@@ -72,7 +79,7 @@ export function CkaTracker({ postTitles }: { postTitles: Record<string, string> 
       )}
 
       <div className="grid gap-6 lg:grid-cols-[1.25fr_1fr] lg:items-start">
-        <PracticeToday loaded={loaded} recs={recs} onOpenSkill={openSkill} onOpenTask={openTask} onLog={logAttempt} />
+        <PracticeToday loaded={loaded} recs={recs} onOpenSkill={openSkill} onOpenTask={openTask} onOpenSimulation={openSimulation} onLog={logAttempt} />
         <Overview loaded={loaded} today={today} progress={progress} settings={state.settings} onSaveSettings={actions.setSettings} />
       </div>
 
@@ -87,9 +94,19 @@ export function CkaTracker({ postTitles }: { postTitles: Record<string, string> 
         setOpenSkillId={setOpenSkillId}
         logRequest={logRequest}
         onOpenTask={openTask}
+        onOpenSimulation={openSimulation}
       />
 
-      <TaskList loaded={loaded} onLogAttempt={logAttempt} />
+      <SimulationList
+        loaded={loaded}
+        today={today}
+        activeId={activeSimId}
+        setActiveId={setActiveSimId}
+        onLog={actions.addAttempt}
+        onOpenTask={openTask}
+      />
+
+      <TaskList loaded={loaded} onLogAttempt={logAttempt} onOpenSimulation={openSimulation} />
 
       <DataControls state={state} loaded={loaded} onReplace={actions.replaceAll} onReset={actions.reset} />
     </div>

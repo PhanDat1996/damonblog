@@ -7,7 +7,8 @@ import { formatDate } from '@/lib/cka/dates.ts';
 import { sortedAttempts } from '@/lib/cka/progress.ts';
 import { LIMITS } from '@/lib/cka/storage.ts';
 import type { SkillProgress } from '@/lib/cka/storage.ts';
-import { getTask, tasksForSkill } from '@/lib/cka/tasks.ts';
+import { practiceItemTitle, simulationsForSkill } from '@/lib/cka/simulations.ts';
+import { tasksForSkill } from '@/lib/cka/tasks.ts';
 import { AttemptForm } from './AttemptForm';
 import type { TrackerActions } from './useTracker';
 import { BTN_DANGER, BTN_PRIMARY, BTN_SECONDARY, FOCUS_RING, INPUT, LABEL, OutcomeTag } from './ui';
@@ -19,6 +20,7 @@ export function SkillPanel({
   actions,
   postTitles,
   onOpenTask,
+  onOpenSimulation,
   logTaskId,
 }: {
   skill: Skill;
@@ -27,6 +29,7 @@ export function SkillPanel({
   actions: TrackerActions;
   postTitles: Record<string, string>;
   onOpenTask: (taskId: string) => void;
+  onOpenSimulation: (simId: string) => void;
   /** When defined, the log form starts open (with this task preselected if not null). */
   logTaskId?: string | null;
 }) {
@@ -35,6 +38,7 @@ export function SkillPanel({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const tasks = tasksForSkill(skill.id);
+  const sims = simulationsForSkill(skill.id);
   const attempts = sortedAttempts(progress);
   const posts = skill.relatedPosts.filter((slug) => postTitles[slug]);
 
@@ -75,6 +79,14 @@ export function SkillPanel({
 
         <div className="space-y-2">
           <h4 className={LABEL}>Practice tasks</h4>
+          {sims.map((s) => (
+            <p key={s.id} className="text-sm">
+              <button type="button" onClick={() => onOpenSimulation(s.id)} className={`text-zinc-200 underline decoration-zinc-600 underline-offset-2 hover:text-green-400 ${FOCUS_RING}`}>
+                Simulation: {s.title}
+              </button>
+              <span className="text-xs text-zinc-500"> · no cluster needed</span>
+            </p>
+          ))}
           {tasks.length === 0 ? (
             <p className="text-sm text-zinc-400">No DamonSec task for this competency yet. Use the docs above and log your own practice.</p>
           ) : (
@@ -168,7 +180,7 @@ export function SkillPanel({
                       <OutcomeTag outcome={a.outcome} />
                       <span className="font-mono text-xs text-zinc-400">{a.minutes} min</span>
                       {a.taskId && (
-                        <span className="text-xs text-zinc-400">· {getTask(a.taskId)?.title ?? 'Removed task'}</span>
+                        <span className="text-xs text-zinc-400">· {practiceItemTitle(a.taskId) ?? 'Removed task'}</span>
                       )}
                     </div>
                     {a.notes && <p className="whitespace-pre-wrap break-words text-sm text-zinc-300">{a.notes}</p>}

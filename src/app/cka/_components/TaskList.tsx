@@ -1,9 +1,10 @@
 'use client';
 
 import { SKILLS } from '@/lib/cka/curriculum.ts';
+import { SIMULATIONS } from '@/lib/cka/simulations.ts';
 import { TASKS } from '@/lib/cka/tasks.ts';
 import type { CodeStep } from '@/lib/cka/tasks.ts';
-import { BTN_PRIMARY, CodeBlock, FOCUS_RING, LABEL } from './ui';
+import { BTN_PRIMARY, BTN_SECONDARY, CodeBlock, FOCUS_RING, LABEL } from './ui';
 
 function Steps({ steps }: { steps: CodeStep[] }) {
   return (
@@ -23,9 +24,11 @@ const SUMMARY = `flex cursor-pointer list-none items-center gap-2 rounded font-m
 export function TaskList({
   loaded,
   onLogAttempt,
+  onOpenSimulation,
 }: {
   loaded: boolean;
   onLogAttempt: (skillId: string, taskId: string) => void;
+  onOpenSimulation: (simId: string) => void;
 }) {
   return (
     <section id="practice-tasks" aria-labelledby="tasks-heading" className="scroll-mt-24 space-y-6">
@@ -41,6 +44,7 @@ export function TaskList({
       <ul className="space-y-3">
         {TASKS.map((t) => {
           const skill = SKILLS.find((s) => s.id === t.skillId)!;
+          const sim = SIMULATIONS.find((s) => s.taskId === t.id);
           return (
             <li key={t.id}>
               <details id={t.id} className="group scroll-mt-24 rounded-xl border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60">
@@ -120,9 +124,16 @@ export function TaskList({
 
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
                     <p className="text-xs text-zinc-500">{t.testedOn ?? 'Not yet run end to end by DamonSec.'}</p>
-                    <button type="button" disabled={!loaded} className={BTN_PRIMARY} onClick={() => onLogAttempt(t.skillId, t.id)}>
-                      Log an attempt
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      {sim && (
+                        <button type="button" disabled={!loaded} className={BTN_SECONDARY} onClick={() => onOpenSimulation(sim.id)}>
+                          Try the simulation
+                        </button>
+                      )}
+                      <button type="button" disabled={!loaded} className={BTN_PRIMARY} onClick={() => onLogAttempt(t.skillId, t.id)}>
+                        Log an attempt
+                      </button>
+                    </div>
                   </div>
                 </div>
               </details>

@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import { isIsoDate } from '@/lib/cka/dates.ts';
 import { LIMITS, OUTCOME_OPTIONS } from '@/lib/cka/storage.ts';
 import type { AttemptOutcome } from '@/lib/cka/storage.ts';
+import { simulationsForSkill } from '@/lib/cka/simulations.ts';
 import { TASKS } from '@/lib/cka/tasks.ts';
 import type { AttemptInput } from './useTracker';
 import { BTN_PRIMARY, BTN_SECONDARY, INPUT, LABEL } from './ui';
@@ -25,6 +26,7 @@ export function AttemptForm({
 }) {
   const uid = useId();
   const tasks = TASKS.filter((t) => t.skillId === skillId);
+  const sims = simulationsForSkill(skillId);
   const [date, setDate] = useState(initial?.date ?? today);
   const [outcome, setOutcome] = useState<AttemptOutcome | ''>(initial?.outcome ?? '');
   const [minutes, setMinutes] = useState(initial?.minutes ? String(initial.minutes) : '');
@@ -79,13 +81,16 @@ export function AttemptForm({
         </div>
       </div>
 
-      {tasks.length > 0 && (
+      {tasks.length + sims.length > 0 && (
         <div className="space-y-1">
-          <label htmlFor={`${uid}-task`} className={LABEL}>Practice task (optional)</label>
+          <label htmlFor={`${uid}-task`} className={LABEL}>Practice task or simulation (optional)</label>
           <select id={`${uid}-task`} value={taskId} onChange={(e) => setTaskId(e.target.value)} className={`${INPUT} w-full`}>
             <option value="">Own practice</option>
             {tasks.map((t) => (
               <option key={t.id} value={t.id}>{t.title}</option>
+            ))}
+            {sims.map((s) => (
+              <option key={s.id} value={s.id}>Simulation: {s.title}</option>
             ))}
           </select>
         </div>

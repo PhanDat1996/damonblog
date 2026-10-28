@@ -24,6 +24,7 @@ export function Curriculum({
   setOpenSkillId,
   logRequest,
   onOpenTask,
+  onOpenSimulation,
 }: {
   state: TrackerState;
   loaded: boolean;
@@ -36,6 +37,7 @@ export function Curriculum({
   /** Set by "Log attempt" buttons elsewhere on the page; `n` remounts the panel. */
   logRequest: { skillId: string; taskId: string | null; n: number } | null;
   onOpenTask: (taskId: string) => void;
+  onOpenSimulation: (simId: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [domain, setDomain] = useState<DomainId | 'all'>('all');
@@ -178,6 +180,7 @@ export function Curriculum({
                           actions={actions}
                           postTitles={postTitles}
                           onOpenTask={onOpenTask}
+                          onOpenSimulation={onOpenSimulation}
                           logTaskId={logRequest?.skillId === s.id ? logRequest.taskId : undefined}
                         />
                       )}

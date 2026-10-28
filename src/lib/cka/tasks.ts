@@ -652,14 +652,15 @@ kubectl -n cka-lab-logs logs deployment/worker`,
     ],
     hints: [
       'kubectl get pods shows the RESTARTS count. kubectl describe pod shows the last state and exit code.',
-      'kubectl logs <pod> --previous prints the output of the last terminated container. stderr is included in kubectl logs.',
+      'kubectl logs <pod> shows the current container, or its output if it has already exited. kubectl logs <pod> --previous shows the instance before that, while it is still kept. stderr is included in both.',
       'kubectl rollout status can report success for a crashing Pod that has no readiness probe, because the container is briefly Running. Trust RESTARTS, not the rollout message.',
       'kubectl set env changes the Pod template and triggers a new rollout.',
     ],
     solution: [
       {
         code: `POD=$(kubectl -n cka-lab-logs get pod -l app=worker -o jsonpath='{.items[0].metadata.name}')
-kubectl -n cka-lab-logs logs "$POD" --previous
+kubectl -n cka-lab-logs logs "$POD"
+kubectl -n cka-lab-logs logs "$POD" --previous   # may fail if that instance is already gone
 kubectl -n cka-lab-logs set env deployment/worker QUEUE_URL=redis://queue:6379
 kubectl -n cka-lab-logs rollout status deployment/worker --timeout=90s`,
       },
