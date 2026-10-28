@@ -4,7 +4,7 @@ import Link from 'next/link';
 export const metadata: Metadata = {
   title: 'About',
   description:
-    'Damon — Senior Technical Support Engineer at OPSWAT. 7+ years debugging Linux systems, NGINX, Docker, and production infrastructure across enterprise environments.',
+    'Damon — Senior Technical Support Engineer at OPSWAT. 8+ years debugging Linux systems, NGINX, Docker, and production infrastructure across enterprise environments.',
   alternates: { canonical: '/about' },
 };
 
@@ -65,16 +65,16 @@ const TOPICS = [
     label: 'Keepalive misconfiguration and connection handling problems',
   },
   {
-    slug: null,
+    slug: 'docker-networking-guide',
     label: 'Docker container networking and log management',
   },
   {
-    slug: null,
+    slug: 'linux-performance-troubleshooting-guide',
     label: 'Debugging systems under production load',
   },
   {
-    slug: null,
-    label: 'Security operations in enterprise environments',
+    slug: 'log-analysis-security-windows-webserver',
+    label: 'Security log analysis and hardening',
   },
 ];
 
@@ -102,9 +102,9 @@ export default function AboutPage() {
             <p className="font-mono text-xs text-zinc-500 mt-1">
               Ho Chi Minh City, Vietnam
             </p>
-            <div className="mt-2 flex items-center gap-1.5 font-mono text-xs text-zinc-500">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span>Available for consulting</span>
+            <div className="mt-2 flex items-center gap-4 font-mono text-xs">
+              <a href="https://github.com/PhanDat1996" target="_blank" rel="noopener noreferrer me" className="text-zinc-400 hover:text-green-400 transition-colors">GitHub ↗</a>
+              <a href="https://www.linkedin.com/in/thanh-dat-phan-b95027224/" target="_blank" rel="noopener noreferrer me" className="text-zinc-400 hover:text-green-400 transition-colors">LinkedIn ↗</a>
             </div>
           </div>
         </div>
@@ -112,7 +112,7 @@ export default function AboutPage() {
         <div className="space-y-4 text-zinc-400 leading-relaxed">
           <p>
             I&apos;m a Senior Technical Support Engineer at{' '}
-            <strong className="text-zinc-300">OPSWAT</strong>, with over 7 years
+            <strong className="text-zinc-300">OPSWAT</strong>, with over 8 years
             of experience in Linux systems, infrastructure engineering, and
             production troubleshooting.
           </p>
@@ -144,8 +144,8 @@ export default function AboutPage() {
         </div>
 
         <p className="font-sans text-zinc-400 text-sm leading-relaxed">
-          The content is based on real-world scenarios — not documentation summaries,
-          not toy examples. Things I have personally debugged, investigated, and resolved.
+          The focus is the kind of problem that reaches escalation: the obvious fix
+          didn&apos;t work, and you need to understand what the system is actually doing.
         </p>
 
         <ul className="space-y-2">
@@ -168,7 +168,7 @@ export default function AboutPage() {
 
         <div className="border-l-2 border-green-500/40 pl-4">
           <p className="text-sm text-zinc-400 italic">
-            Not theory — real incidents, documented and explained.
+            Practical over theoretical: commands you can run, and why they work.
           </p>
         </div>
       </section>
@@ -190,9 +190,9 @@ export default function AboutPage() {
           ))}
         </ul>
         <p className="font-sans text-zinc-400 text-sm leading-relaxed">
-          Every article comes from something I have personally encountered — a real
-          issue, a deep investigation, or a problem that required understanding beyond
-          the documentation. If it took time to figure out, it&apos;s worth documenting.
+          Guides are reviewed for technical accuracy and updated when tools or defaults
+          change; each post shows its last update date. If you spot a mistake, please{' '}
+          <Link href="/contact" className="text-green-400 hover:underline">let me know</Link>.
         </p>
       </section>
 
@@ -269,6 +269,9 @@ export default function AboutPage() {
           If you&apos;re dealing with NGINX errors, connection failures, container
           networking issues, or debugging production systems under load — you&apos;ll
           likely find something useful here.
+        </p>
+        <p className="mt-3 text-xs text-zinc-500 leading-relaxed">
+          This is a personal blog. Opinions are my own and do not represent OPSWAT.
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
           <Link
