@@ -91,6 +91,8 @@ location /api/export/ {
 
 `proxy_read_timeout` is the time **between two reads**, not the total response time. A streaming response that sends something every 30 seconds never trips a 60-second timeout.
 
+Retries across several upstream servers multiply the wait, and a stall after the headers is logged as a 200, not a 504. Both are reproduced in [NGINX 504 Gateway Timeout: Find Which Timeout Fired](/blog/nginx-504-gateway-timeout-fix).
+
 ---
 
 ## 403 Forbidden
@@ -159,6 +161,8 @@ location /upload/ {
     proxy_pass http://app_backend;
 }
 ```
+
+If the 413 persists after raising it, the request probably matched a regex location that still has the default, or the app sent the 413 itself. See [NGINX 413 Request Entity Too Large](/blog/nginx-413-request-entity-too-large) for how to tell them apart.
 
 ---
 
