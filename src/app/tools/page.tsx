@@ -36,7 +36,7 @@ const WEB_TOOLS: WebTool[] = [
     tagline: 'Scored security, performance and reliability audit of any NGINX config.',
     input: 'nginx.conf, server blocks, multiple files',
     checks: [
-      '35+ context-aware rules',
+      '40+ context-aware rules',
       'Resolves include across multiple files',
       'Request flow simulator',
       'Export findings as JSON',

@@ -7,7 +7,7 @@ import type {
   ParseResult,
   ParseError,
   ConfigFile,
-} from "./types";
+} from "./types.ts";
 
 // ─── TOKENIZER ────────────────────────────────────────────────────────────────
 
@@ -69,7 +69,8 @@ function tokenize(source: string, filename: string): Token[] {
       const col = i - lineStart;
       i++;
       while (i < source.length && source[i] !== quote) {
-        if (source[i] === "\n") line++;
+        if (source[i] === "\\") i++; // escaped char, e.g. \"
+        else if (source[i] === "\n") line++;
         i++;
       }
       i++; // closing quote
@@ -218,6 +219,7 @@ function parseDirective(state: ParserState, parent: NginxBlock): NginxDirective 
         }
       }
       if (peek(state).type === "close_brace") consume(state);
+      else state.errors.push({ kind: "syntax", message: `Unexpected end of file: '${contextLabel}' block opened here is never closed with '}'`, line, file: state.filename });
 
       return { name, values, rawValue, line, col, file: state.filename, block };
     }
@@ -225,8 +227,8 @@ function parseDirective(state: ParserState, parent: NginxBlock): NginxDirective 
 
   // Regular directive — consume semicolon
   if (peek(state).type === "semicolon") consume(state);
-  else if (peek(state).type !== "eof" && peek(state).type !== "close_brace") {
-    state.errors.push({ message: `Expected ; after directive '${name}'`, line, file: state.filename });
+  else {
+    state.errors.push({ kind: "syntax", message: `Missing ';' after directive '${name}'`, line, file: state.filename });
   }
 
   return { name, values, rawValue, line, col, file: state.filename };
@@ -251,7 +253,11 @@ function parseFile(content: string, filename: string): { block: NginxBlock; erro
   while (peek(state).type !== "eof") {
     const tok = peek(state);
     if (tok.type === "comment") { consume(state); continue; }
-    if (tok.type === "close_brace") { consume(state); continue; } // stray }
+    if (tok.type === "close_brace") {
+      errors.push({ kind: "syntax", message: "Unexpected '}' with no matching '{'", line: tok.line, file: filename });
+      consume(state);
+      continue;
+    }
     if (tok.type === "word") {
       const directive = parseDirective(state, root);
       if (directive) root.directives.push(directive);
@@ -293,6 +299,7 @@ export function parseConfigs(files: ConfigFile[]): ParseResult {
   // Add incomplete include warnings
   for (const missing of incompleteIncludes) {
     allErrors.push({
+      kind: "include",
       message: `include target '${missing}' not provided — analysis of that scope may be incomplete`,
       line: 0,
       file: files[0].filename,
@@ -321,9 +328,11 @@ function resolveIncludes(
       // Try to find by full path or basename
       const resolved = parsedBlocks.get(target) ?? parsedBlocks.get(basename);
       if (resolved) {
-        // Inject the resolved block's directives as children of current block
+        // Inject the resolved block's directives as children of current block,
+        // re-parenting nested blocks so inheritance (add_header, proxy_set_header,
+        // ssl_* ...) and context paths follow the including scope.
         for (const child of resolved.directives) {
-          // update file reference
+          if (child.block) reparent(child.block, block);
           block.directives.push({ ...child, file: child.file || target });
         }
       } else {
@@ -338,6 +347,14 @@ function resolveIncludes(
     if (directive.block) {
       resolveIncludes(directive.block, parsedBlocks, fileMap, missing, errors);
     }
+  }
+}
+
+function reparent(child: NginxBlock, parent: NginxBlock): void {
+  child.parent = parent;
+  child.contextPath = buildContextPath(parent, child.contextLabel);
+  for (const d of child.directives) {
+    if (d.block) reparent(d.block, child);
   }
 }
 
@@ -407,8 +424,8 @@ export function getServerBlocks(root: NginxBlock): NginxBlock[] {
 export function isHttpsServer(serverBlock: NginxBlock): boolean {
   const listenDirs = getDirectives(serverBlock, "listen");
   return listenDirs.some((d) => {
-    const v = d.rawValue.toLowerCase();
-    return v.includes("443") || v.includes("ssl");
+    const tokens = d.values.map((v) => v.toLowerCase());
+    return tokens.includes("ssl") || tokens.includes("quic") || /(^|:)443$/.test(tokens[0] ?? "");
   });
 }
 
@@ -422,8 +439,30 @@ export function getUpstreamBlocks(root: NginxBlock): NginxBlock[] {
   return getBlocksOfType(root, "upstream");
 }
 
-/** Get all add_header directives in block + parents (for inheritance checking) */
+/**
+ * Effective directives for an array-type directive (add_header, proxy_set_header, ...)
+ * using NGINX inheritance rules: a level inherits from its parent only when it
+ * declares none of its own. `add_header_inherit merge` (1.29.3+) appends the
+ * parent's headers instead.
+ */
+export function getEffectiveArrayDirectives(block: NginxBlock, name: string): NginxDirective[] {
+  const own = getDirectives(block, name);
+  if (!block.parent) return own;
+  if (own.length === 0) return getEffectiveArrayDirectives(block.parent, name);
+  if (name.toLowerCase() === "add_header" &&
+      getDirectives(block, "add_header_inherit").some((d) => d.rawValue.toLowerCase().trim() === "merge")) {
+    return [...own, ...getEffectiveArrayDirectives(block.parent, name)];
+  }
+  return own;
+}
+
+/** add_header directives that actually apply to responses from this block */
 export function getEffectiveHeaders(block: NginxBlock): NginxDirective[] {
+  return getEffectiveArrayDirectives(block, "add_header");
+}
+
+/** Every add_header declared in this block or any ancestor, regardless of inheritance */
+export function getDeclaredHeadersInChain(block: NginxBlock): NginxDirective[] {
   const headers: NginxDirective[] = [];
   let current: NginxBlock | undefined = block;
   while (current) {
@@ -433,10 +472,48 @@ export function getEffectiveHeaders(block: NginxBlock): NginxDirective[] {
   return headers;
 }
 
+/** Name of the header set by an add_header / proxy_set_header directive, lowercased */
+export function headerName(d: NginxDirective): string {
+  return (d.values[0] ?? "").replace(/^["']|["']$/g, "").toLowerCase();
+}
+
 /** Check if a header name exists in add_header directives */
-export function hasHeader(directives: NginxDirective[], headerName: string): boolean {
-  const lower = headerName.toLowerCase();
-  return directives.some((d) => d.rawValue.toLowerCase().includes(lower));
+export function hasHeader(directives: NginxDirective[], name: string): boolean {
+  const lower = name.toLowerCase();
+  return directives.some((d) => headerName(d) === lower);
+}
+
+/** True if a CSP header in the list contains frame-ancestors */
+export function hasCspFrameAncestors(directives: NginxDirective[]): boolean {
+  return directives.some((d) => headerName(d) === "content-security-policy" && /frame-ancestors/i.test(d.rawValue));
+}
+
+/** Walk up the block chain and return the first directive with this name */
+export function findInheritedDirective(block: NginxBlock, name: string): NginxDirective | null {
+  let current: NginxBlock | undefined = block;
+  while (current) {
+    const dirs = getDirectives(current, name);
+    if (dirs.length > 0) return dirs[dirs.length - 1];
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * A server whose server-level `return` answers every request (redirect servers,
+ * `return 444` catch-alls). Server-level rewrite directives run before location
+ * matching, so nothing in its locations is ever served.
+ */
+export function isReturnOnlyServer(server: NginxBlock): boolean {
+  return getDirectives(server, "return").length > 0;
+}
+
+/** Full nginx.conf (has http/events) vs a conf.d snippet that only holds server blocks */
+export function isFullConfig(root: NginxBlock): boolean {
+  return root.directives.some((d) => {
+    const n = d.name.toLowerCase();
+    return n === "http" || n === "events" || n === "worker_processes";
+  });
 }
 
 /** Get listen ports from a server block */

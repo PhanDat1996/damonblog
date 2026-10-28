@@ -1,5 +1,5 @@
 // simulator.ts — simplified NGINX request flow simulator
-import type { SimulatorRequest, SimulatorResult, NginxBlock, MatchConfidence } from "./types";
+import type { SimulatorRequest, SimulatorResult, NginxBlock, MatchConfidence } from "./types.ts";
 import {
   getServerBlocks,
   getDirectives,
@@ -8,8 +8,8 @@ import {
   getListenPorts,
   getServerNames,
   getEffectiveHeaders,
-} from "./parser";
-import type { ParseResult } from "./types";
+} from "./parser.ts";
+import type { ParseResult } from "./types.ts";
 
 // ─── SERVER MATCHING ──────────────────────────────────────────────────────────
 
