@@ -37,7 +37,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       type: 'article',
       url,
       publishedTime: new Date(post.date).toISOString(),
-      modifiedTime: new Date(post.date).toISOString(),
+      modifiedTime: new Date(post.updated ?? post.date).toISOString(),
       authors: [`${BASE_URL}/about`],
       tags: post.tags,
       siteName: 'damonsec.com',
@@ -108,6 +108,12 @@ export default async function BlogPostPage({ params }: Props) {
 
           <div className="flex items-center gap-4 font-mono text-xs text-zinc-400 border-t border-b border-zinc-800 py-4">
             <span>{formatDate(post.date)}</span>
+            {post.updated && post.updated !== post.date && (
+              <>
+                <span className="text-zinc-700">·</span>
+                <span>Updated {formatDate(post.updated)}</span>
+              </>
+            )}
             <span className="text-zinc-700">·</span>
             <span>{post.readingTime}</span>
             <span className="text-zinc-700">·</span>
