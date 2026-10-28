@@ -47,11 +47,11 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.damonsec.com'),
   title: {
-    default: 'Linux Troubleshooting & Performance Tuning — Damon',
+    default: 'Damon: notes on debugging Linux, NGINX and security',
     template: '%s | damonsec.com',
   },
   description:
-    'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents. No theory, no fluff.',
+    'Debugging notes from an L3 support engineer: NGINX errors, Linux performance and CIS hardening, with lab-tested posts and free NGINX/PostgreSQL checkers.',
   keywords: [
     'linux troubleshooting',
     'linux performance tuning',
@@ -85,15 +85,15 @@ export const metadata: Metadata = {
     type: 'website',
     locale: 'en_US',
     siteName: 'damonsec.com',
-    title: 'Linux Troubleshooting & Performance Tuning — Damon',
+    title: 'Damon: notes on debugging Linux, NGINX and security',
     description:
-      'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents.',
+      'Debugging notes from an L3 support engineer: NGINX errors, Linux performance and CIS hardening, with lab-tested posts and free NGINX/PostgreSQL checkers.',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Linux Troubleshooting & Performance Tuning — Damon',
+    title: 'Damon: notes on debugging Linux, NGINX and security',
     description:
-      'Real-world Linux troubleshooting guides from a Senior L3 engineer.',
+      'Debugging notes from an L3 support engineer: NGINX errors, Linux performance and CIS hardening, with lab-tested posts and free NGINX/PostgreSQL checkers.',
     creator: '@damonsec',
   },
   robots: {
