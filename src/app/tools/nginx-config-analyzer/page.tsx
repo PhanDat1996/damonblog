@@ -1,9 +1,8 @@
 "use client";
 
 import {
-  useState, useMemo, useCallback, memo,
+  useState, useMemo, useCallback, useEffect, useRef, memo,
   useTransition, useId,
-  type KeyboardEvent,
 } from "react";
 import Link from "next/link";
 import { parseConfigs } from "@/app/tools/nginx-config-analyzer/v2/parser";
@@ -43,15 +42,11 @@ function downloadText(content: string, filename: string): void {
 const SEV_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
 const SEV_STYLES: Record<Severity, { badge: string; dot: string }> = {
-  critical: { badge: "bg-red-500/15 text-red-400 border border-red-500/25",         dot: "bg-red-500" },
-  high:     { badge: "bg-orange-500/15 text-orange-400 border border-orange-500/25", dot: "bg-orange-500" },
-  medium:   { badge: "bg-amber-500/15 text-amber-400 border border-amber-500/25",    dot: "bg-amber-500" },
-  low:      { badge: "bg-zinc-700/60 text-zinc-400 border border-zinc-600/40",        dot: "bg-zinc-500" },
-  info:     { badge: "bg-blue-500/15 text-blue-400 border border-blue-500/25",        dot: "bg-blue-500" },
-};
-
-const CAT_ICONS: Record<AnalysisCategory, string> = {
-  Security: "🛡", Performance: "⚡", "Reverse Proxy": "🔀", Reliability: "📡", Maintainability: "🔧",
+  critical: { badge: "bg-red-500/15 text-red-300 border border-red-500/30",         dot: "bg-red-500" },
+  high:     { badge: "bg-orange-500/15 text-orange-300 border border-orange-500/30", dot: "bg-orange-500" },
+  medium:   { badge: "bg-amber-500/15 text-amber-300 border border-amber-500/30",    dot: "bg-amber-500" },
+  low:      { badge: "bg-zinc-700/60 text-zinc-300 border border-zinc-600/50",        dot: "bg-zinc-400" },
+  info:     { badge: "bg-blue-500/15 text-blue-300 border border-blue-500/30",        dot: "bg-blue-500" },
 };
 
 const ALL_CATEGORIES: AnalysisCategory[] = [
@@ -65,121 +60,139 @@ const STATUS_CFG: Record<ScoreStatus, { label: string; color: string; ring: stri
   risky:               { label: "Risky",             color: "text-red-400",     ring: "ring-red-500/20" },
 };
 
+const LINE_H = 20; // px — must match leading-5 on the editor and gutter
+
+const BTN = "font-mono text-xs px-3 py-2 rounded-lg border transition-colors";
+const BTN_GHOST = `${BTN} border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100`;
+const LABEL = "font-mono text-[11px] text-zinc-400 uppercase tracking-widest";
+
+function scoreTone(score: number) {
+  if (score >= 85) return { bar: "bg-emerald-500", text: "text-emerald-400" };
+  if (score >= 65) return { bar: "bg-amber-500", text: "text-amber-400" };
+  return { bar: "bg-red-500", text: "text-red-400" };
+}
+
 function SevBadge({ severity }: { severity: Severity }) {
   const s = SEV_STYLES[severity];
   return (
-    <span className={`inline-flex items-center gap-1 font-mono text-[10px] font-bold tracking-wider px-2 py-0.5 rounded whitespace-nowrap ${s.badge}`}>
+    <span className={`inline-flex items-center gap-1 font-mono text-[11px] font-bold tracking-wider px-2 py-0.5 rounded whitespace-nowrap ${s.badge}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
       {severity.toUpperCase()}
     </span>
   );
 }
 
-// Extracted so only the changed bar re-renders, not the entire sidebar
-const CategoryScoreBar = memo(function CategoryScoreBar({
-  category, score, penalty, findingCount,
-}: { category: AnalysisCategory; score: number; penalty: number; findingCount: number }) {
-  const bar  = score >= 85 ? "bg-emerald-500" : score >= 65 ? "bg-amber-500" : "bg-red-500";
-  const text = score >= 85 ? "text-emerald-400" : score >= 65 ? "text-amber-400" : "text-red-400";
-  return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span aria-hidden="true">{CAT_ICONS[category]}</span>
-          <span className="font-mono text-xs font-semibold text-zinc-300">{category}</span>
-        </div>
-        <span className={`font-mono text-sm font-bold ${text}`}>{score}</span>
-      </div>
-      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden"
-        role="progressbar" aria-valuenow={score} aria-valuemin={0} aria-valuemax={100}
-        aria-label={`${category} score: ${score}/100`}>
-        <div className={`h-full rounded-full transition-all duration-700 ${bar}`} style={{ width: `${score}%` }} />
-      </div>
-      <p className="font-mono text-[10px] text-zinc-600">
-        {findingCount} finding{findingCount !== 1 ? "s" : ""}
-        {penalty > 0 ? ` · −${penalty} pts` : ""}
-      </p>
-    </div>
-  );
-});
-
 function ScoreRing({ score, status }: { score: number; status: ScoreStatus }) {
   const cfg = STATUS_CFG[status];
-  const r = 38; const sw = 5;
+  const r = 32; const sw = 5;
   const circ = 2 * Math.PI * r;
   const offset = circ - (score / 100) * circ;
   return (
-    <div className="relative inline-flex items-center justify-center">
-      <svg width={(r + sw) * 2} height={(r + sw) * 2} style={{ transform: "rotate(-90deg)" }}>
+    <div className="relative inline-flex flex-shrink-0 items-center justify-center">
+      <svg width={(r + sw) * 2} height={(r + sw) * 2} style={{ transform: "rotate(-90deg)" }} aria-hidden="true">
         <circle cx={r+sw} cy={r+sw} r={r} fill="none" stroke="currentColor" strokeWidth={sw} className="text-zinc-800" />
         <circle cx={r+sw} cy={r+sw} r={r} fill="none" stroke="currentColor" strokeWidth={sw}
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
           className={`${cfg.color} transition-all duration-700`} />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className={`font-mono text-2xl font-bold ${cfg.color}`}>{score}</span>
+        <span className={`font-mono text-xl font-bold ${cfg.color}`}>{score}</span>
       </div>
     </div>
   );
 }
 
-function FindingCard({ finding }: { finding: Finding }) {
+// ─── Editor with line numbers ─────────────────────────────────────────────────
+
+const ConfigEditor = memo(function ConfigEditor({
+  value, onChange, highlightLine, inputRef,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  highlightLine: number | null;
+  inputRef: React.RefObject<HTMLTextAreaElement>;
+}) {
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const lineCount = value.split("\n").length;
+  return (
+    <div className="flex h-[360px] lg:h-[calc(100vh-17rem)] lg:min-h-[420px] rounded-lg border border-zinc-700 bg-zinc-950/60 overflow-hidden focus-within:border-zinc-500 transition-colors">
+      <div ref={gutterRef} aria-hidden="true"
+        className="flex-shrink-0 overflow-hidden select-none py-3 px-2 min-w-[2.75rem] text-right font-mono text-xs leading-5 text-zinc-500 bg-zinc-900/60 border-r border-zinc-800">
+        {Array.from({ length: lineCount }, (_, i) => (
+          <div key={i} className={i + 1 === highlightLine ? "-mx-2 px-2 bg-amber-500/20 text-amber-200" : undefined}>{i + 1}</div>
+        ))}
+        {/* room for the textarea's horizontal scrollbar so both scroll to the same end */}
+        <div className="h-4" />
+      </div>
+      <textarea ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
+        onScroll={(e) => { if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop; }}
+        wrap="off" spellCheck={false} aria-label="NGINX configuration" placeholder="Paste NGINX configuration here..."
+        className="flex-1 min-w-0 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-500 outline-none whitespace-pre overflow-auto" />
+    </div>
+  );
+});
+
+// ─── Finding card ─────────────────────────────────────────────────────────────
+
+function FindingCard({ finding, onJump }: { finding: Finding; onJump: (filename: string, line: number) => void }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const copyFix = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    await navigator.clipboard.writeText(finding.fixSnippet);
+  const panelId = useId();
+  const copyFix = useCallback(async () => {
+    await writeClipboard(finding.fixSnippet);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [finding.fixSnippet]);
 
+  // Most recommendations just restate the fix snippet; only show the ones that add something.
+  const firstFixLine = finding.fixSnippet.split("\n")[0].trim();
+  const showRecommendation = !firstFixLine || !finding.recommendation.includes(firstFixLine);
+
   return (
-    <div className={`rounded-xl border transition-all ${open ? "border-zinc-700 bg-zinc-900/70" : "border-zinc-800 bg-zinc-900/40"}`}>
-      <button onClick={() => setOpen(o => !o)} className="w-full text-left p-4 flex items-start gap-3">
-        <span className="flex-shrink-0 text-base mt-0.5">{CAT_ICONS[finding.category]}</span>
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5 mb-1">
-            <span className="font-mono text-[10px] text-zinc-500">{finding.category}</span>
-            {finding.filename && <>
-              <span className="text-zinc-700 text-[10px]">·</span>
-              <span className="font-mono text-[10px] text-zinc-600">{finding.filename}:{finding.line}</span>
-            </>}
-            <span className="text-zinc-700 text-[10px]">·</span>
-            <span className="font-mono text-[10px] text-zinc-600 capitalize">{finding.confidence} confidence</span>
-          </div>
-          <p className="font-mono text-sm font-semibold text-zinc-100 leading-snug">{finding.title}</p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-          <SevBadge severity={finding.severity} />
-          <span className={`text-[10px] text-zinc-600 transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▼</span>
-        </div>
+    <div className={`rounded-lg border transition-colors ${open ? "border-zinc-700 bg-zinc-900/70" : "border-zinc-800 bg-zinc-900/40"}`}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3 font-mono text-[11px] text-zinc-400">
+        <SevBadge severity={finding.severity} />
+        <span>{finding.category}</span>
+        {finding.line > 0 && <>
+          <span aria-hidden="true" className="text-zinc-600">·</span>
+          <button onClick={() => onJump(finding.filename, finding.line)} title="Show in editor"
+            className="py-1 underline decoration-zinc-600 underline-offset-2 hover:text-green-400 hover:decoration-green-400/60 transition-colors">
+            {finding.filename}:{finding.line}
+          </button>
+        </>}
+        <span className="ml-auto hidden sm:inline">{finding.confidence} confidence</span>
+      </div>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={panelId}
+        className="w-full text-left px-4 pt-1 pb-3 flex items-start gap-3">
+        <span className="flex-1 font-mono text-sm font-semibold text-zinc-100 leading-snug">{finding.title}</span>
+        <span aria-hidden="true" className={`mt-1 text-[10px] text-zinc-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}>▼</span>
       </button>
       {open && (
-        <div className="px-4 pb-4 border-t border-zinc-800 pt-4 space-y-4">
-          <div className="grid gap-4 md:grid-cols-3">
-            {[
-              { label: "Why it matters", text: finding.whyItMatters },
-              { label: "Evidence", text: finding.evidence },
-              { label: "Recommendation", text: finding.recommendation },
-            ].map(({ label, text }) => (
-              <div key={label}>
-                <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-1.5">{label}</p>
-                <p className="text-xs text-zinc-400 leading-relaxed">{text}</p>
-              </div>
-            ))}
+        <div id={panelId} className="px-4 pb-4 border-t border-zinc-800 pt-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <p className={`${LABEL} mb-1.5`}>Why it matters</p>
+              <p className="text-xs text-zinc-300 leading-relaxed">{finding.whyItMatters}</p>
+            </div>
+            <div>
+              <p className={`${LABEL} mb-1.5`}>Evidence</p>
+              <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-line break-words">{finding.evidence}</p>
+            </div>
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest">Fix</p>
-              <button onClick={copyFix} className="font-mono text-[10px] text-zinc-400 hover:text-green-400 transition-colors px-2 py-0.5 rounded border border-zinc-700 hover:border-green-500/40">
+            <div className="flex items-center justify-between gap-3 mb-1.5">
+              <p className={LABEL}>Fix</p>
+              <button onClick={copyFix}
+                className="font-mono text-[11px] text-zinc-300 hover:text-green-400 transition-colors px-2.5 py-1.5 rounded border border-zinc-700 hover:border-green-500/40">
                 {copied ? "✓ copied" : "copy fix"}
               </button>
             </div>
+            {showRecommendation && <p className="text-xs text-zinc-300 leading-relaxed mb-2">{finding.recommendation}</p>}
             <pre className="font-mono text-xs bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-green-400 overflow-x-auto leading-relaxed whitespace-pre">
               <code>{finding.fixSnippet}</code>
             </pre>
           </div>
-          <p className="font-mono text-[10px] text-zinc-700">ref: {finding.reference}</p>
+          <p className="font-mono text-[11px] text-zinc-500">{finding.confidence} confidence · ref: {finding.reference}</p>
         </div>
       )}
     </div>
@@ -203,6 +216,20 @@ export default function NginxConfigAnalyzerPage() {
   const [showSim, setShowSim]     = useState(false);
   const [simReq, setSimReq]       = useState<SimulatorRequest>({ scheme: "http", host: "example.com", path: "/", method: "GET" });
   const [simResult, setSimResult] = useState<SimulatorResult | null>(null);
+  const [jump, setJump]           = useState<{ fileId: string; line: number; nonce: number } | null>(null);
+  const editorRef    = useRef<HTMLTextAreaElement>(null);
+  const editorBoxRef = useRef<HTMLDivElement>(null);
+  const exportRef    = useRef<HTMLDetailsElement>(null);
+
+  // <details> menus don't close on outside clicks by themselves
+  useEffect(() => {
+    const close = (e: PointerEvent) => {
+      const menu = exportRef.current;
+      if (menu?.open && !menu.contains(e.target as Node)) menu.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
 
   const ast    = useMemo(() => parseConfigs(files), [files]);
   const result = useMemo(() => runAnalysis(ast), [ast]);
@@ -239,6 +266,7 @@ export default function NginxConfigAnalyzerPage() {
   }, [activeFileId]);
 
   const updateFile = useCallback((id: string, field: "filename" | "content", value: string) => {
+    if (field === "content") setJump(null);
     startAnalysis(() => {
       setFiles((f: ConfigFile[]) => f.map((x: ConfigFile) => x.id === id ? { ...x, [field]: value } : x));
     });
@@ -249,336 +277,319 @@ export default function NginxConfigAnalyzerPage() {
     if (!s) return;
     setFiles(s.files as ConfigFile[]);
     setActive(s.files[0].id);
+    setJump(null);
   }, []);
 
-  const doExport = useCallback((type: "json" | "md" | "patch") => {
-    const content = type === "json" ? exportJson(result, domain)
-      : type === "md" ? exportMarkdown(result, domain)
-      : exportPatch(result);
-    const ext = type === "json" ? "json" : type === "md" ? "md" : "conf";
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `nginx-analysis-${Date.now()}.${ext}`; a.click();
-    URL.revokeObjectURL(url);
-  }, [result, domain]);
+  const jumpTo = useCallback((filename: string, line: number) => {
+    const target = files.find((f) => f.filename === filename) ?? files[0];
+    setActive(target.id);
+    setJump({ fileId: target.id, line, nonce: Date.now() });
+  }, [files]);
+
+  // Scroll the editor to the jumped-to line once the right file is shown
+  useEffect(() => {
+    const ta = editorRef.current;
+    if (!jump || !ta || jump.fileId !== activeFileId) return;
+    const lines = ta.value.split("\n");
+    const start = lines.slice(0, jump.line - 1).reduce((n, l) => n + l.length + 1, 0);
+    ta.scrollTop = Math.max(0, (jump.line - 1) * LINE_H - ta.clientHeight / 3);
+    // Selecting the line needs focus; skip it on touch screens so the keyboard doesn't open
+    if (window.matchMedia("(pointer: fine)").matches) {
+      ta.focus({ preventScroll: true });
+      ta.setSelectionRange(start, start + (lines[jump.line - 1]?.length ?? 0));
+    }
+    editorBoxRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [jump, activeFileId]);
 
   const copyText = useCallback(async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     setCopied(key);
     setTimeout(() => setCopied(null), 2000);
   }, []);
 
+  const download = useCallback((type: "json" | "md") => {
+    downloadText(type === "json" ? exportJson(result, domain) : exportMarkdown(result, domain), `nginx-analysis-${Date.now()}.${type}`);
+  }, [result, domain]);
+
   const runSim = useCallback(() => setSimResult(simulateRequest(ast, simReq)), [ast, simReq]);
 
-  const syntaxErrors = result.parseErrors.filter((e) => e.kind === "syntax");
+  const syntaxErrors = result.parseErrors.filter((e: ParseError) => e.kind === "syntax");
   const statusCfg = STATUS_CFG[result.status];
-  const active = files.find(f => f.id === activeFileId);
+  const active = files.find((f) => f.id === activeFileId);
+  const highlightLine = jump && jump.fileId === activeFileId ? jump.line : null;
 
   return (
     <div className="pb-24">
-      <div className="font-mono text-xs text-zinc-500 mb-8">
-        <Link href="/tools" className="hover:text-zinc-300 transition-colors">~/tools</Link>
+      <div className="font-mono text-xs text-zinc-400 mb-6">
+        <Link href="/tools" className="hover:text-zinc-200 transition-colors">~/tools</Link>
         <span className="mx-1 text-zinc-600">/</span>
-        <span className="text-zinc-400">nginx-config-analyzer</span>
+        <span className="text-zinc-300">nginx-config-analyzer</span>
       </div>
 
-      <div className="mb-8">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20">Stable</span>
-          <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">Browser-only</span>
-          <span className="font-mono text-[11px] font-semibold px-2 py-0.5 rounded bg-zinc-700/60 text-zinc-400 border border-zinc-600/40">v2.0</span>
-          {isAnalyzing && (
-            <span className="font-mono text-[10px] text-zinc-600 animate-pulse" aria-live="polite" aria-atomic="true">
-              analyzing…
-            </span>
-          )}
-        </div>
+      <div className="mb-6">
         <h1 className="font-mono text-2xl md:text-3xl font-bold tracking-tight text-zinc-100">NGINX Config Analyzer</h1>
         <p className="mt-2.5 text-sm text-zinc-400 leading-relaxed max-w-2xl">
           Paste one or more NGINX config files and get a scored security, performance, and reliability audit across 40+ context-aware rules.
           Supports multi-file configs with include resolution and a request flow simulator.
-          Your configuration is analyzed locally — never uploaded.
         </p>
-        <div className="flex flex-wrap gap-1.5 mt-4">
-          {["#nginx","#security","#devops","#infrastructure"].map(t => (
-            <span key={t} className="font-mono text-[11px] text-zinc-500 bg-zinc-800/80 border border-zinc-700/60 px-2 py-0.5 rounded">{t}</span>
-          ))}
-        </div>
+        <p className="mt-2 font-mono text-xs text-zinc-400">
+          v2.0 · runs in your browser, nothing is uploaded · static analysis only, confirm with <code className="text-green-400">nginx -t</code>
+          {isAnalyzing && <span className="ml-2 text-zinc-500 animate-pulse" aria-live="polite">analyzing…</span>}
+        </p>
       </div>
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-2.5 flex items-start gap-2.5">
-          <span className="text-green-400 flex-shrink-0">🔒</span>
-          <p className="font-mono text-xs text-zinc-500">Your NGINX configuration is analyzed locally in your browser and is never uploaded to any server.</p>
-        </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-2.5 flex items-start gap-2.5">
-          <span className="text-amber-500 flex-shrink-0">⚠</span>
-          <p className="font-mono text-xs text-zinc-500">Static analysis only. Always verify with <code className="text-green-400">nginx -t</code> and <code className="text-green-400">nginx -T</code> before applying changes.</p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1.5 mb-4">
-        <span className="font-mono text-xs text-zinc-600">Load sample:</span>
-        {(Object.entries(SAMPLE_CONFIGS) as [string, { label: string; files: ConfigFile[] }][]).map(([key, { label }]) => (
-          <button key={key} onClick={() => loadSample(key)}
-            className="font-mono text-xs px-2.5 py-1 rounded border border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 transition-colors">
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr] items-start">
-        {/* Editor */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
-          <div className="flex items-center gap-1 px-3 pt-3 pb-0 border-b border-zinc-800 flex-wrap">
-            {files.map((f: ConfigFile) => (
-              <div key={f.id} onClick={() => setActive(f.id)}
-                className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg border border-b-0 font-mono text-xs cursor-pointer transition-colors ${
-                  f.id === activeFileId ? "border-zinc-700 bg-zinc-800 text-zinc-200" : "border-transparent text-zinc-500 hover:text-zinc-300"
-                }`}>
-                <span className="max-w-[120px] truncate">{f.filename || "untitled"}</span>
-                {files.length > 1 && (
-                  <button onClick={e => { e.stopPropagation(); removeFile(f.id); }}
-                    className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-all">×</button>
-                )}
-              </div>
-            ))}
-            <button onClick={addFile} className="px-2 py-1 rounded text-zinc-600 hover:text-zinc-300 font-mono text-sm transition-colors" title="Add file">+</button>
-          </div>
-          {active && (
-            <div className="p-3 space-y-2">
-              <input type="text" value={active.filename} onChange={e => updateFile(active.id, "filename", e.target.value)}
-                placeholder="filename (e.g. nginx.conf, conf.d/api.conf)"
-                className="w-full font-mono text-xs px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors" />
-              <textarea value={active.content} onChange={e => updateFile(active.id, "content", e.target.value)}
-                spellCheck={false} placeholder="Paste NGINX configuration here..."
-                className="w-full min-h-[400px] font-mono text-xs px-3 py-3 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors resize-y leading-relaxed" />
-            </div>
-          )}
-        </div>
-
-        {/* Right */}
-        <div className="flex flex-col gap-3">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
-            <input type="text" value={domain} onChange={e => setDomain(e.target.value)}
-              placeholder="Optional: domain (e.g. api.example.com)"
-              className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors" />
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => copyText(exportMarkdown(result, domain), "md")}
-                className="font-mono text-xs px-3 py-1.5 rounded-lg border border-zinc-600 bg-zinc-100 text-zinc-900 hover:bg-white transition-colors font-semibold">
-                {copied === "md" ? "✓ Copied" : "Copy report"}
-              </button>
-              <button onClick={() => copyText(exportPatch(result), "patch")}
-                className="font-mono text-xs px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 transition-colors">
-                {copied === "patch" ? "✓" : "Copy fixes"}
-              </button>
-              <button onClick={() => doExport("json")} className="font-mono text-xs px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 transition-colors">JSON</button>
-              <button onClick={() => doExport("md")} className="font-mono text-xs px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 transition-colors">Markdown</button>
-            </div>
-          </div>
-
-          <div className={`rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-5 ring-1 ${statusCfg.ring}`}>
-            <div className="font-mono text-xs text-zinc-500 uppercase tracking-widest mb-4">Overall score</div>
-            <div className="flex items-center gap-5">
-              <ScoreRing score={result.overallScore} status={result.status} />
-              <div className="space-y-1">
-                <div className={`font-mono text-lg font-bold ${statusCfg.color}`}>{statusCfg.label}</div>
-                <div className="font-mono text-xs text-zinc-500">{result.findings.length} findings · {files.length} file{files.length > 1 ? "s" : ""}</div>
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {SEV_ORDER.filter(s => sevCounts[s] > 0).map(s => (
-                    <span key={s} className={`font-mono text-[10px] font-bold px-1.5 py-0.5 rounded ${SEV_STYLES[s].badge}`}>
-                      {sevCounts[s]} {s}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            {ALL_CATEGORIES.map(cat => {
-              const s = result.categoryScores[cat];
-              const pct = s.score;
-              const barColor = pct >= 85 ? "bg-emerald-500" : pct >= 65 ? "bg-amber-500" : "bg-red-500";
-              const textColor = pct >= 85 ? "text-emerald-400" : pct >= 65 ? "text-amber-400" : "text-red-400";
-              return (
-                <div key={cat} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3.5 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span>{CAT_ICONS[cat]}</span>
-                      <span className="font-mono text-xs font-semibold text-zinc-300">{cat}</span>
-                    </div>
-                    <span className={`font-mono text-sm font-bold ${textColor}`}>{pct}</span>
-                  </div>
-                  <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${pct}%` }} />
-                  </div>
-                  <p className="font-mono text-[10px] text-zinc-600">{s.findingCount} findings{s.penalty > 0 ? ` · −${s.penalty} pts` : ""}</p>
-                </div>
-              );
-            })}
-          </div>
-
-          {syntaxErrors.length > 0 && (
-            <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 px-4 py-3 space-y-1.5">
-              <div className="font-mono text-xs font-semibold text-red-400">✖ Syntax errors — nginx -t would reject this config</div>
-              {syntaxErrors.map((e, i) => (
-                <p key={i} className="font-mono text-xs text-red-400/80">{e.file}:{e.line} — {e.message}</p>
-              ))}
-              <p className="font-mono text-[11px] text-zinc-500">Findings below may be incomplete until these are fixed.</p>
-            </div>
-          )}
-
-          {result.hasIncompleteAnalysis && (
-            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 space-y-1.5">
-              <div className="font-mono text-xs font-semibold text-amber-400">⚠ Incomplete analysis</div>
-              {result.incompleteReasons.map((r: string, i: number) => (
-                <p key={i} className="font-mono text-xs text-amber-500/70">{r}</p>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Findings */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 mt-4">
-        <div className="px-5 pt-5 pb-0">
-          <div className="font-mono text-sm font-semibold text-zinc-100 mb-4">
-            Findings <span className="text-zinc-600 font-normal text-xs">({filtered.length} shown of {result.findings.length})</span>
-          </div>
-          <div className="space-y-3 pb-4 border-b border-zinc-800">
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search findings..."
-              className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors" />
-            <div className="flex flex-wrap gap-1.5">
-              {(["all", ...ALL_CATEGORIES] as (AnalysisCategory | "all")[]).map(cat => {
-                const count = cat === "all" ? result.findings.length : result.categoryScores[cat].findingCount;
-                return (
-                  <button key={cat} onClick={() => setActiveCat(cat)}
-                    className={`font-mono text-xs px-2.5 py-1 rounded-lg border transition-colors ${
-                      activeCategory === cat ? "bg-zinc-100 text-zinc-900 border-zinc-300 font-semibold"
-                        : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:text-zinc-200 hover:bg-zinc-700"
+      <div className="xl:-mx-24">
+        <div className="grid gap-4 lg:grid-cols-2 items-start">
+          {/* Editor */}
+          <div ref={editorBoxRef} className="lg:sticky lg:top-20 scroll-mt-20 rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+            <div className="flex items-center gap-2 px-3 pt-3 border-b border-zinc-800">
+              <div className="flex items-end gap-1 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {files.map((f: ConfigFile) => (
+                  <div key={f.id}
+                    className={`flex items-center rounded-t-lg border border-b-0 font-mono text-xs transition-colors ${
+                      f.id === activeFileId ? "border-zinc-700 bg-zinc-800 text-zinc-100" : "border-transparent text-zinc-400 hover:text-zinc-200"
                     }`}>
-                    {cat === "all" ? `All (${count})` : `${CAT_ICONS[cat]} ${cat} (${count})`}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              <button onClick={() => setActiveSev("all")}
-                className={`font-mono text-xs px-2 py-1 rounded border transition-colors ${activeSeverity === "all" ? "bg-zinc-100 text-zinc-900 border-zinc-300 font-semibold" : "bg-zinc-800/60 text-zinc-400 border-zinc-700 hover:text-zinc-200"}`}>
-                All
-              </button>
-              {SEV_ORDER.map(sev => (
-                <button key={sev} onClick={() => setActiveSev(sev)}
-                  className={`font-mono text-xs px-2 py-1 rounded border transition-colors ${
-                    activeSeverity === sev ? "bg-zinc-100 text-zinc-900 border-zinc-300 font-semibold"
-                      : `${SEV_STYLES[sev].badge} opacity-70 hover:opacity-100`
-                  }`}>
-                  {sev} ({sevCounts[sev]})
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-        <div className="p-5 space-y-2">
-          {filtered.length === 0 ? (
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 font-mono text-xs text-emerald-400 flex items-center gap-2">
-              ✓ No findings match current filters
-            </div>
-          ) : filtered.map(f => <FindingCard key={f.id} finding={f} />)}
-        </div>
-      </div>
-
-      {/* Simulator */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 mt-4">
-        <button onClick={() => setShowSim(s => !s)} className="w-full text-left px-5 py-4 flex items-center justify-between">
-          <div>
-            <div className="font-mono text-sm font-semibold text-zinc-100">Request Flow Test</div>
-            <div className="text-xs text-zinc-500 mt-0.5">Simulate how NGINX routes a request through your config</div>
-          </div>
-          <span className={`text-zinc-500 transition-transform duration-200 text-xs ${showSim ? "rotate-180" : ""}`}>▼</span>
-        </button>
-        {showSim && (
-          <div className="px-5 pb-5 border-t border-zinc-800 pt-4 space-y-4">
-            <div className="grid gap-3 sm:grid-cols-4">
-              {[
-                { label: "Scheme", key: "scheme" as const, type: "select", options: ["http","https"] },
-                { label: "Host",   key: "host"   as const, type: "text", placeholder: "example.com" },
-                { label: "Path",   key: "path"   as const, type: "text", placeholder: "/" },
-                { label: "Method", key: "method" as const, type: "select", options: ["GET","POST","PUT","DELETE","PATCH","HEAD","OPTIONS"] },
-              ].map(field => (
-                <div key={field.key}>
-                  <label className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest block mb-1">{field.label}</label>
-                  {field.type === "select" ? (
-                    <select value={simReq[field.key]} onChange={(e) => setSimReq((r: SimulatorRequest) => ({ ...r, [field.key]: e.target.value }))}
-                      className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 outline-none focus:border-zinc-500">
-                      {field.options!.map((o: string) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : (
-                    <input type="text" value={simReq[field.key]} placeholder={field.placeholder}
-                      onChange={(e) => setSimReq((r: SimulatorRequest) => ({ ...r, [field.key]: e.target.value }))}
-                      className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-zinc-500 transition-colors" />
-                  )}
-                </div>
-              ))}
-            </div>
-            <button onClick={runSim} className="font-mono text-xs px-4 py-2 rounded-lg border border-zinc-600 bg-zinc-100 text-zinc-900 hover:bg-white transition-colors font-semibold">
-              Run test →
-            </button>
-            <p className="font-mono text-xs text-amber-400/60 border border-amber-500/15 bg-amber-500/5 rounded-lg px-3 py-2">
-              Simplified simulation — cannot emulate complex rewrites, variables, map/geo blocks, or Lua/njs.
-            </p>
-            {simResult && (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="font-mono text-sm font-semibold text-zinc-100">Result</div>
-                  <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${
-                    simResult.confidence === "definite" ? "border-green-500/30 bg-green-500/10 text-green-400"
-                    : simResult.confidence === "probable" ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
-                    : "border-zinc-600 bg-zinc-800 text-zinc-400"
-                  }`}>{simResult.confidence} confidence</span>
-                </div>
-                <div className="space-y-1">
-                  {simResult.matchPath.map((step: string, i: number) => (
-                    <div key={i} className="flex items-start gap-2 text-xs">
-                      <span className="text-green-400 font-mono flex-shrink-0">{i+1}.</span>
-                      <span className="text-zinc-300 font-mono">{step}</span>
-                    </div>
-                  ))}
-                </div>
-                {simResult.proxyPass && (
-                  <div>
-                    <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Proxy pass</p>
-                    <code className="font-mono text-xs text-green-400 bg-zinc-950 border border-zinc-800 rounded px-2 py-1 block">{simResult.proxyPass}</code>
-                  </div>
-                )}
-                {simResult.appliedHeaders.length > 0 && (
-                  <div>
-                    <p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mb-1">Applied headers</p>
-                    <div className="space-y-1">
-                      {simResult.appliedHeaders.slice(0,6).map((h: string, i: number) => (
-                        <code key={i} className="font-mono text-[11px] text-zinc-400 bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 block truncate">{h}</code>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {simResult.warnings.map((w: string, i: number) => (
-                  <div key={i} className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-                    <span className="text-amber-400 flex-shrink-0">⚠</span>
-                    <p className="font-mono text-xs text-amber-400/80">{w}</p>
+                    <button onClick={() => setActive(f.id)} className="px-3 py-2 max-w-[140px] truncate">{f.filename || "untitled"}</button>
+                    {files.length > 1 && (
+                      <button onClick={() => removeFile(f.id)} aria-label={`Close ${f.filename || "untitled"}`}
+                        className="pr-2.5 pl-0.5 py-2 text-zinc-500 hover:text-red-400 transition-colors">×</button>
+                    )}
                   </div>
                 ))}
-                {!simResult.matched && (
-                  <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 font-mono text-xs text-red-400">
-                    No matching server block found.
-                  </div>
-                )}
+                <button onClick={addFile} aria-label="Add file" title="Add file"
+                  className="px-3 py-2 rounded text-zinc-400 hover:text-zinc-100 font-mono text-sm transition-colors">+</button>
+              </div>
+              <select aria-label="Load sample config" value="" onChange={(e) => loadSample(e.target.value)}
+                className="mb-2 flex-shrink-0 font-mono text-xs px-2 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-300 outline-none focus:border-zinc-500">
+                <option value="" disabled>Load sample…</option>
+                {(Object.entries(SAMPLE_CONFIGS) as [string, { label: string; files: ConfigFile[] }][]).map(([key, { label }]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+            {active && (
+              <div className="p-3 space-y-2">
+                <input type="text" value={active.filename} onChange={(e) => updateFile(active.id, "filename", e.target.value)}
+                  aria-label="File name" placeholder="filename (e.g. nginx.conf, conf.d/api.conf)"
+                  className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-zinc-500 transition-colors" />
+                <ConfigEditor value={active.content} onChange={(v) => updateFile(active.id, "content", v)}
+                  highlightLine={highlightLine} inputRef={editorRef} />
               </div>
             )}
           </div>
-        )}
+
+          {/* Results */}
+          <div className="flex flex-col gap-3 min-w-0">
+            <div className={`rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 ring-1 ${statusCfg.ring}`}>
+              <div className="flex flex-wrap items-center gap-4">
+                <ScoreRing score={result.overallScore} status={result.status} />
+                <div className="flex-1 min-w-[10rem] space-y-1">
+                  <div className={`font-mono text-lg font-bold ${statusCfg.color}`}>{statusCfg.label}</div>
+                  <div className="font-mono text-xs text-zinc-400">{result.findings.length} findings · {files.length} file{files.length > 1 ? "s" : ""}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => copyText(exportMarkdown(result, domain), "md")}
+                    className={`${BTN} border-zinc-300 bg-zinc-100 text-zinc-900 hover:bg-white font-semibold`}>
+                    {copied === "md" ? "✓ Copied" : "Copy report"}
+                  </button>
+                  <details ref={exportRef} className="relative">
+                    <summary className={`${BTN_GHOST} list-none cursor-pointer select-none`}>Export ▾</summary>
+                    <div className="absolute right-0 z-20 mt-1 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl space-y-1">
+                      <input type="text" value={domain} onChange={(e) => setDomain(e.target.value)}
+                        aria-label="Domain for the report" placeholder="Domain for report (optional)"
+                        className="w-full font-mono text-xs px-2.5 py-2 mb-1 rounded border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-zinc-500" />
+                      {([
+                        { label: copied === "patch" ? "✓ Copied" : "Copy all fixes", run: () => copyText(exportPatch(result), "patch") },
+                        { label: "Download Markdown", run: () => download("md") },
+                        { label: "Download JSON", run: () => download("json") },
+                      ]).map(({ label, run }) => (
+                        <button key={label} onClick={() => { run(); if (exportRef.current && !label.startsWith("Copy")) exportRef.current.open = false; }}
+                          className="block w-full text-left font-mono text-xs px-2.5 py-2 rounded text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100">
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-0.5" role="group" aria-label="Filter by category">
+                {ALL_CATEGORIES.map((cat) => {
+                  const s = result.categoryScores[cat];
+                  const tone = scoreTone(s.score);
+                  const selected = activeCategory === cat;
+                  return (
+                    <button key={cat} onClick={() => setActiveCat(selected ? "all" : cat)} aria-pressed={selected}
+                      className={`grid grid-cols-[7rem_1fr_2rem] sm:grid-cols-[7.5rem_1fr_2rem_4.5rem] items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors ${
+                        selected ? "bg-zinc-800" : "hover:bg-zinc-800/50"
+                      }`}>
+                      <span className={`font-mono text-xs ${selected ? "text-zinc-100 font-semibold" : "text-zinc-300"}`}>{cat}</span>
+                      <span className="h-1.5 bg-zinc-800 rounded-full overflow-hidden" aria-hidden="true">
+                        <span className={`block h-full rounded-full transition-all duration-700 ${tone.bar}`} style={{ width: `${s.score}%` }} />
+                      </span>
+                      <span className={`font-mono text-xs font-bold text-right ${tone.text}`}>{s.score}</span>
+                      <span className="hidden sm:inline font-mono text-[11px] text-zinc-400 text-right">{s.findingCount} finding{s.findingCount !== 1 ? "s" : ""}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {syntaxErrors.length > 0 && (
+              <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 px-4 py-3 space-y-1">
+                <div className="font-mono text-xs font-semibold text-red-300">✖ Syntax errors: nginx -t would reject this config</div>
+                {syntaxErrors.map((e: ParseError, i: number) => (
+                  <button key={i} onClick={() => jumpTo(e.file, e.line)}
+                    className="block text-left font-mono text-xs text-red-300/90 hover:text-red-200 underline decoration-red-500/30 underline-offset-2 py-0.5">
+                    {e.file}:{e.line} — {e.message}
+                  </button>
+                ))}
+                <p className="font-mono text-[11px] text-zinc-400">Findings below may be incomplete until these are fixed.</p>
+              </div>
+            )}
+
+            {result.hasIncompleteAnalysis && (
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 space-y-1.5">
+                <div className="font-mono text-xs font-semibold text-amber-300">Incomplete analysis</div>
+                {result.incompleteReasons.map((r: string, i: number) => (
+                  <p key={i} className="font-mono text-xs text-amber-300/80">{r}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Findings */}
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+              <div className="px-4 pt-4 pb-3 space-y-3 border-b border-zinc-800">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-mono text-sm font-semibold text-zinc-100">
+                    Findings <span className="text-zinc-400 font-normal text-xs">({filtered.length} of {result.findings.length})</span>
+                  </h2>
+                  {activeCategory !== "all" && (
+                    <button onClick={() => setActiveCat("all")}
+                      className="font-mono text-[11px] px-2 py-1 rounded border border-zinc-600 bg-zinc-800 text-zinc-200 hover:bg-zinc-700">
+                      {activeCategory} ×
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
+                    aria-label="Search findings" placeholder="Search findings..."
+                    className="flex-1 min-w-[10rem] font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-zinc-500 transition-colors" />
+                  {(["all", ...SEV_ORDER] as (Severity | "all")[]).map((sev) => {
+                    const count = sev === "all" ? result.findings.length : sevCounts[sev];
+                    if (sev !== "all" && count === 0) return null;
+                    const selected = activeSeverity === sev;
+                    return (
+                      <button key={sev} onClick={() => setActiveSev(sev)} aria-pressed={selected}
+                        className={`font-mono text-xs px-2.5 py-2 rounded-lg border transition-colors ${
+                          selected ? "bg-zinc-100 text-zinc-900 border-zinc-300 font-semibold"
+                            : sev === "all" ? "bg-zinc-800/60 text-zinc-300 border-zinc-700 hover:text-zinc-100"
+                            : `${SEV_STYLES[sev].badge} hover:brightness-125`
+                        }`}>
+                        {sev === "all" ? "All" : sev} {count}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="p-3 space-y-2">
+                {filtered.length === 0 ? (
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 font-mono text-xs text-emerald-300">
+                    {result.findings.length === 0 ? "✓ No findings" : "No findings match the current filters"}
+                  </div>
+                ) : filtered.map((f) => <FindingCard key={f.id} finding={f} onJump={jumpTo} />)}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Simulator */}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 mt-4">
+          <button onClick={() => setShowSim((s) => !s)} aria-expanded={showSim}
+            className="w-full text-left px-5 py-4 flex items-center justify-between">
+            <div>
+              <div className="font-mono text-sm font-semibold text-zinc-100">Request Flow Test</div>
+              <div className="text-xs text-zinc-400 mt-0.5">Simulate how NGINX routes a request through your config</div>
+            </div>
+            <span aria-hidden="true" className={`text-zinc-400 transition-transform duration-200 text-xs ${showSim ? "rotate-180" : ""}`}>▼</span>
+          </button>
+          {showSim && (
+            <div className="px-5 pb-5 border-t border-zinc-800 pt-4 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-4">
+                {[
+                  { label: "Scheme", key: "scheme" as const, type: "select", options: ["http","https"] },
+                  { label: "Host",   key: "host"   as const, type: "text", placeholder: "example.com" },
+                  { label: "Path",   key: "path"   as const, type: "text", placeholder: "/" },
+                  { label: "Method", key: "method" as const, type: "select", options: ["GET","POST","PUT","DELETE","PATCH","HEAD","OPTIONS"] },
+                ].map(field => (
+                  <div key={field.key}>
+                    <label htmlFor={`sim-${field.key}`} className={`${LABEL} block mb-1`}>{field.label}</label>
+                    {field.type === "select" ? (
+                      <select id={`sim-${field.key}`} value={simReq[field.key]} onChange={(e) => setSimReq((r: SimulatorRequest) => ({ ...r, [field.key]: e.target.value }))}
+                        className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 outline-none focus:border-zinc-500">
+                        {field.options!.map((o: string) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input id={`sim-${field.key}`} type="text" value={simReq[field.key]} placeholder={field.placeholder}
+                        onChange={(e) => setSimReq((r: SimulatorRequest) => ({ ...r, [field.key]: e.target.value }))}
+                        className="w-full font-mono text-xs px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/60 text-zinc-200 placeholder:text-zinc-500 outline-none focus:border-zinc-500 transition-colors" />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button onClick={runSim} className={`${BTN} border-zinc-300 bg-zinc-100 text-zinc-900 hover:bg-white font-semibold`}>
+                Run test →
+              </button>
+              <p className="font-mono text-xs text-amber-300/80 border border-amber-500/15 bg-amber-500/5 rounded-lg px-3 py-2">
+                Simplified simulation: cannot emulate complex rewrites, variables, map/geo blocks, or Lua/njs.
+              </p>
+              {simResult && (
+                <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="font-mono text-sm font-semibold text-zinc-100">Result</div>
+                    <span className={`font-mono text-[11px] px-2 py-0.5 rounded border ${
+                      simResult.confidence === "definite" ? "border-green-500/30 bg-green-500/10 text-green-300"
+                      : simResult.confidence === "probable" ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                      : "border-zinc-600 bg-zinc-800 text-zinc-300"
+                    }`}>{simResult.confidence} confidence</span>
+                  </div>
+                  <div className="space-y-1">
+                    {simResult.matchPath.map((step: string, i: number) => (
+                      <div key={i} className="flex items-start gap-2 text-xs">
+                        <span className="text-green-400 font-mono flex-shrink-0">{i+1}.</span>
+                        <span className="text-zinc-300 font-mono">{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {simResult.proxyPass && (
+                    <div>
+                      <p className={`${LABEL} mb-1`}>Proxy pass</p>
+                      <code className="font-mono text-xs text-green-400 bg-zinc-950 border border-zinc-800 rounded px-2 py-1 block break-all">{simResult.proxyPass}</code>
+                    </div>
+                  )}
+                  {simResult.appliedHeaders.length > 0 && (
+                    <div>
+                      <p className={`${LABEL} mb-1`}>Applied headers</p>
+                      <div className="space-y-1">
+                        {simResult.appliedHeaders.slice(0,6).map((h: string, i: number) => (
+                          <code key={i} className="font-mono text-[11px] text-zinc-300 bg-zinc-950 border border-zinc-800 rounded px-2 py-0.5 block truncate">{h}</code>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {simResult.warnings.map((w: string, i: number) => (
+                    <p key={i} className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 font-mono text-xs text-amber-300/90">{w}</p>
+                  ))}
+                  {!simResult.matched && (
+                    <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 font-mono text-xs text-red-300">
+                      No matching server block found.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* SEO content */}
@@ -601,14 +612,12 @@ export default function NginxConfigAnalyzerPage() {
           {([
             { cat: "Security" as AnalysisCategory, items: ["HSTS on HTTPS servers", "X-Frame-Options / CSP frame-ancestors", "X-Content-Type-Options nosniff", "Content-Security-Policy", "server_tokens off", "add_header inheritance dropping security headers", "Security headers without always", "Legacy SSL/TLS 1.0/1.1", "ssl_protocols missing", "Weak ssl_ciphers", "ssl_session_cache", "autoindex on", "Dotfile exposure (.git, .env)", "HTTP to HTTPS redirect", "alias off-by-slash path traversal", "SSRF / open proxy via proxy_pass variables", "CRLF injection via $uri", "Rate limiting on login/auth endpoints"] },
             { cat: "Performance" as AnalysisCategory, items: ["worker_processes auto", "worker_connections sizing", "gzip / Brotli compression", "client_max_body_size", "sendfile / tcp_nopush / tcp_nodelay", "HTTP/2 on TLS", "proxy_read_timeout", "Upstream keepalive"] },
-            { cat: "Maintainability" as AnalysisCategory, items: ["Syntax errors (missing ;, unclosed blocks)", "Deprecated listen ... http2", "if inside location", "Unused upstream blocks", "Missing include files", "Partial config (snippet) detection"] },
             { cat: "Reverse Proxy" as AnalysisCategory, items: ["Host / X-Forwarded-For / X-Forwarded-Proto forwarding (with inheritance)", "proxy_http_version 1.1 with keepalive", "WebSocket Upgrade/Connection headers", "proxy_pass variable without resolver", "proxy_buffering global disable"] },
             { cat: "Reliability" as AnalysisCategory, items: ["error_log", "access_log with upstream timing", "proxy_next_upstream", "max_fails/fail_timeout on upstream servers", "default_server block", "error_page for 502/503/504"] },
+            { cat: "Maintainability" as AnalysisCategory, items: ["Syntax errors (missing ;, unclosed blocks)", "Deprecated listen ... http2", "if inside location", "Unused upstream blocks", "Missing include files", "Partial config (snippet) detection"] },
           ] as { cat: AnalysisCategory; items: string[] }[]).map(({ cat, items }) => (
             <div key={cat} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-3">
-              <h3 className="font-mono text-sm font-semibold text-zinc-100 flex items-center gap-2">
-                <span>{CAT_ICONS[cat]}</span> {cat}
-              </h3>
+              <h3 className="font-mono text-sm font-semibold text-zinc-100">{cat}</h3>
               <ul className="grid sm:grid-cols-2 gap-1.5">
                 {items.map(item => (
                   <li key={item} className="flex gap-2 text-xs text-zinc-400">

@@ -35,13 +35,20 @@ type RuleFn = (ast: ParseResult, findings: Finding[]) => void;
 
 let _findingCounter = 0;
 
+type SourceLocation = Pick<NginxBlock, "file" | "line" | "contextPath">;
+
+/** Point a finding at a specific directive while keeping its block's context path */
+function at(block: NginxBlock, d: NginxDirective): SourceLocation {
+  return { file: d.file, line: d.line, contextPath: block.contextPath };
+}
+
 function finding(
   id: string,
   title: string,
   category: AnalysisCategory,
   severity: Severity,
   confidence: Confidence,
-  block: NginxBlock,
+  block: SourceLocation,
   evidence: string,
   whyItMatters: string,
   recommendation: string,
@@ -199,7 +206,7 @@ const ruleHeaderInheritance: RuleFn = (ast, findings) => {
       const own = getDirectives(block, "add_header").map(headerName).join(", ");
       findings.push(finding(
         "sec-header-inheritance", `add_header in ${block.contextType} drops inherited security headers`,
-        "Security", lost.some((h) => h === "strict-transport-security" || h === "content-security-policy") ? "high" : "medium", "high", block,
+        "Security", lost.some((h) => h === "strict-transport-security" || h === "content-security-policy") ? "high" : "medium", "high", at(block, getDirectives(block, "add_header")[0]),
         `'${block.contextLabel}' (${block.file}:${block.line}) sets its own add_header (${own}), so these headers from the parent level are no longer sent: ${lost.join(", ")}.`,
         "NGINX only inherits add_header from the parent level when the current level declares none. One add_header in a location (for example Cache-Control) silently removes HSTS, CSP and the other security headers for every response from that location.",
         "Repeat the security headers in this block, move them into a shared snippet included at each level, or on NGINX 1.29.3+ use add_header_inherit merge;.",
@@ -212,15 +219,13 @@ const ruleHeaderInheritance: RuleFn = (ast, findings) => {
 
 const ruleHeadersWithoutAlways: RuleFn = (ast, findings) => {
   for (const server of contentServers(ast)) {
-    const missingAlways = [...new Set(
-      getEffectiveHeaders(server)
-        .filter((d) => SECURITY_HEADERS.includes(headerName(d)) && !d.values.some((v) => v.toLowerCase() === "always"))
-        .map(headerName)
-    )];
+    const offending = getEffectiveHeaders(server)
+      .filter((d) => SECURITY_HEADERS.includes(headerName(d)) && !d.values.some((v) => v.toLowerCase() === "always"));
+    const missingAlways = [...new Set(offending.map(headerName))];
     if (missingAlways.length === 0) continue;
     findings.push(finding(
       "sec-header-always", "Security headers set without 'always'",
-      "Security", "low", "high", server,
+      "Security", "low", "high", at(server, offending[0]),
       `Without the always parameter: ${missingAlways.join(", ")}.`,
       "Without always, add_header only applies to 200, 201, 204, 206, 301, 302, 303, 304, 307 and 308 responses. Error pages (4xx/5xx) go out without the headers, which is where reflected content often lands.",
       "Append always to each security add_header.",
@@ -259,7 +264,7 @@ const ruleLegacyTls: RuleFn = (ast, findings) => {
       if (legacy.length === 0) continue;
       findings.push(finding(
         "sec-legacy-tls", "Legacy TLS/SSL versions enabled",
-        "Security", "high", "high", server,
+        "Security", "high", "high", at(server, d),
         `ssl_protocols enables ${legacy.join(", ")} (${d.file}:${d.line}: ${d.rawValue})`,
         "SSLv3, TLS 1.0 and TLS 1.1 are deprecated by RFC 8996 and vulnerable to POODLE, BEAST and downgrade attacks. They also fail PCI DSS scans.",
         "Use only TLS 1.2 and 1.3.",
@@ -299,7 +304,7 @@ const ruleWeakCiphers: RuleFn = (ast, findings) => {
       if (weak.length) {
         findings.push(finding(
           "sec-weak-ciphers", "Weak cipher suites in ssl_ciphers",
-          "Security", "high", "high", server,
+          "Security", "high", "high", at(server, d),
           `Weak cipher patterns found: ${weak.join(", ")} in ssl_ciphers (${d.file}:${d.line})`,
           "Weak ciphers (RC4, MD5, DES, NULL, EXPORT) have known cryptographic vulnerabilities.",
           "Use Mozilla's modern cipher list.",
@@ -336,7 +341,7 @@ const ruleAutoindex: RuleFn = (ast, findings) => {
       const block = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
       findings.push(finding(
         "sec-autoindex", "Directory listing enabled (autoindex on)",
-        "Security", "high", "high", block,
+        "Security", "high", "high", at(block, d),
         `autoindex on found at ${d.file}:${d.line}`,
         "Exposes entire directory structure to anyone requesting a path without an index file — leaks backup files, configs, and sensitive content.",
         "Remove autoindex on or set autoindex off explicitly.",
@@ -432,7 +437,7 @@ const ruleProxyHeaders: RuleFn = (ast, findings) => {
       getEffectiveArrayDirectives(g.block.parent ?? g.block, "proxy_set_header").length > 0);
     findings.push(finding(
       "rp-forward-headers", `Proxied requests missing ${missingLabels.join(", ")}`,
-      "Reverse Proxy", severity, "high", gaps[0].block,
+      "Reverse Proxy", severity, "high", at(gaps[0].block, getDirectives(gaps[0].block, "proxy_pass")[0]),
       gaps.map((g) => `${g.block.contextLabel} (${g.block.file}:${g.block.line}): missing ${g.missing.map((m) => m.label).join(", ")}`).join("\n") +
         (shadowed ? "\nNote: a location that sets any proxy_set_header no longer inherits the ones from server/http." : ""),
       "Without Host the backend sees the upstream name instead of the requested hostname, which breaks virtual hosting and absolute URL generation. Without X-Forwarded-For/X-Real-IP it logs and rate-limits on the proxy address. Without X-Forwarded-Proto it cannot tell HTTPS from HTTP, which breaks redirects and Secure cookies.",
@@ -462,7 +467,7 @@ const ruleUpstreamKeepaliveConfig: RuleFn = (ast, findings) => {
       if (!httpVersionDirs.some((d) => d.rawValue.trim() === "1.1")) {
         findings.push(finding(
           "rp-proxy-http-version", "proxy_http_version 1.1 not set — upstream keepalive will not function",
-          "Reverse Proxy", "high", "high", parentBlock,
+          "Reverse Proxy", "high", "high", at(parentBlock, ppDir),
           `upstream '${upstreamName}' has keepalive but proxy_http_version 1.1 is missing.`,
           "upstream keepalive requires HTTP/1.1. Without it, NGINX uses HTTP/1.0 which closes connections after each request, defeating keepalive entirely.",
           "Add proxy_http_version 1.1; and proxy_set_header Connection \"\";",
@@ -537,7 +542,7 @@ const ruleProxyPassVariable: RuleFn = (ast, findings) => {
     if (findInheritedDirective(parentBlock, "resolver")) continue;
     findings.push(finding(
       "rp-proxy-pass-variable", "proxy_pass uses variable without resolver directive",
-      "Reverse Proxy", "high", staticHost ? "high" : "medium", parentBlock,
+      "Reverse Proxy", "high", staticHost ? "high" : "medium", at(parentBlock, d),
       `proxy_pass ${d.rawValue} at ${d.file}:${d.line} contains a variable, so its host is resolved per request, but no resolver is in scope.`,
       "When proxy_pass contains variables and the host is not an IP or an upstream{} name, NGINX resolves it at request time. Without a resolver every such request fails with 502 and 'no resolver defined to resolve' in error_log.",
       "Add a resolver directive in the http or server block, or point proxy_pass at an upstream{} block.",
@@ -557,7 +562,7 @@ const ruleProxyPassSsrf: RuleFn = (ast, findings) => {
     const variable = (requestControlled ?? hostHeader)![0];
     findings.push(finding(
       "sec-proxy-ssrf", requestControlled ? "proxy_pass target controlled by the client (SSRF / open proxy)" : "proxy_pass target taken from the Host header",
-      "Security", requestControlled ? "critical" : "high", requestControlled ? "high" : "medium", block,
+      "Security", requestControlled ? "critical" : "high", requestControlled ? "high" : "medium", at(block, d),
       `proxy_pass ${d.rawValue} at ${d.file}:${d.line} builds the upstream host from ${variable}.`,
       requestControlled
         ? "Any client can choose where NGINX connects, including internal services and cloud metadata endpoints (169.254.169.254). This is a server-side request forgery and open proxy."
@@ -579,7 +584,7 @@ const ruleAliasTraversal: RuleFn = (ast, findings) => {
       if (!target.endsWith("/")) continue;
       findings.push(finding(
         "sec-alias-traversal", "alias path traversal (location without trailing slash)",
-        "Security", "high", "high", loc,
+        "Security", "high", "high", at(loc, a),
         `location ${path} has alias ${target} (${a.file}:${a.line}). A request for ${path}../ maps to ${target}../`,
         `Because the location prefix has no trailing slash but the alias does, GET ${path}../secret resolves to the parent of the alias directory. Attackers use this to read files next to the static directory, such as app source or .env.`,
         "Make both paths end with a slash (or neither).",
@@ -603,7 +608,7 @@ const ruleCrlfInjection: RuleFn = (ast, findings) => {
       const block = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
       findings.push(finding(
         "sec-crlf-uri", "Decoded $uri used in a header or redirect (CRLF injection)",
-        "Security", "medium", "high", block,
+        "Security", "medium", "high", at(block, d),
         `${d.name} ${d.rawValue} at ${d.file}:${d.line}`,
         "$uri and $document_uri are URL-decoded, so %0d%0a in the request becomes a real line break. Used in a redirect or header, it lets an attacker inject headers such as Set-Cookie (HTTP response splitting).",
         "Use $request_uri (raw, still encoded) instead of $uri.",
@@ -664,7 +669,7 @@ const ruleProxyBuffering: RuleFn = (ast, findings) => {
       if (block.contextType === "http" || block.contextType === "server") {
         findings.push(finding(
           "rp-proxy-buffering-off", "proxy_buffering disabled globally",
-          "Reverse Proxy", "medium", "high", block,
+          "Reverse Proxy", "medium", "high", at(block, d),
           `proxy_buffering off found at ${d.file}:${d.line} in ${block.contextType} context.`,
           "Globally disabling proxy_buffering holds upstream connections open while responding byte-by-byte to slow clients, reducing upstream throughput.",
           "Enable globally, disable only for specific streaming endpoints.",
@@ -697,7 +702,7 @@ const ruleWorkerProcesses: RuleFn = (ast, findings) => {
   if (val !== "auto" && parseInt(val) === 1) {
     findings.push(finding(
       "perf-worker-processes-one", "worker_processes set to 1",
-      "Performance", "medium", "high", ast.root,
+      "Performance", "medium", "high", at(ast.root, dirs[0]),
       `worker_processes ${val} — single worker regardless of CPU count.`,
       "On multi-core systems, a single worker limits throughput.",
       "Set worker_processes auto;",
@@ -727,7 +732,7 @@ const ruleWorkerConnections: RuleFn = (ast, findings) => {
     if (!isNaN(val) && val < 512) {
       findings.push(finding(
         "perf-worker-connections-low", `worker_connections too low (${val})`,
-        "Performance", "medium", "high", events,
+        "Performance", "medium", "high", at(events, dirs[0]),
         `worker_connections ${val} detected.`,
         `Each worker handles at most ${val} concurrent connections — a hard ceiling under load.`,
         "Increase to at least 1024 for production.",
@@ -815,7 +820,7 @@ const ruleHttp2: RuleFn = (ast, findings) => {
     for (const d of legacyListen) {
       findings.push(finding(
         "maint-listen-http2", "Deprecated 'listen ... http2' parameter",
-        "Maintainability", "low", "medium", server,
+        "Maintainability", "low", "medium", at(server, d),
         `listen ${d.rawValue} at ${d.file}:${d.line}`,
         "Since NGINX 1.25.1 the http2 parameter of listen is deprecated and logs a warning on every reload. It will be removed in a future release.",
         "On 1.25.1+ remove http2 from listen and add http2 on; to the server block. Keep the old form only if you run an older NGINX.",
@@ -888,7 +893,7 @@ const ruleUpstreamHealth: RuleFn = (ast, findings) => {
       if (!hasMaxFails || !hasFailTimeout) {
         findings.push(finding(
           "rel-upstream-health", "Upstream servers use default max_fails/fail_timeout",
-          "Reliability", "info", "high", upstream,
+          "Reliability", "info", "high", at(upstream, s),
           `upstream server '${s.rawValue}' at ${s.file}:${s.line} relies on max_fails=1 fail_timeout=10s.`,
           "With the defaults, one failed attempt takes a server out for 10s. That is often too eager on a flaky network and too short for a backend that is restarting.",
           "Set max_fails and fail_timeout explicitly to match how your backends fail and recover.",

@@ -177,3 +177,11 @@ test('overall score is a weighted average, capped by severe findings', () => {
   const broken = analyze(`server { listen 80; root /x; location ~ /\\. { deny all; } `);
   assert.equal(broken.status, 'risky');
 });
+
+test('findings point at the offending directive line, not the server block', () => {
+  const r = runAnalysis(parseConfigs(SAMPLE_CONFIGS['bad-production'].files));
+  const autoindex = r.findings.find((f) => f.id.startsWith('sec-autoindex'));
+  assert.equal(autoindex?.line, 4);
+  const legacy = analyze(`server {\n  listen 443 ssl;\n  ssl_protocols TLSv1 TLSv1.2;\n}`).findings.find((f) => f.id.startsWith('sec-legacy-tls'));
+  assert.equal(legacy?.line, 3);
+});
