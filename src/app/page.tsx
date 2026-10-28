@@ -10,10 +10,11 @@ export const metadata: Metadata = {
 };
 
 const TOOLS = [
-  { slug: 'nginx-config-analyzer', title: 'NGINX Config Analyzer', desc: 'Scores an NGINX config for security, performance and reliability.' },
-  { slug: 'nginx-cis-hardening-checker', title: 'NGINX CIS Hardening Checker', desc: 'Checks a config against CIS NGINX Benchmark v2.1.0.' },
-  { slug: 'nginx-cve-checker', title: 'NGINX CVE Checker', desc: 'Lists known CVEs for an NGINX version and its modules.' },
-  { slug: 'pg-hardening-checker', title: 'PostgreSQL Hardening Checker', desc: 'Audits postgresql.conf and pg_hba.conf.' },
+  { href: '/tools/nginx-config-analyzer', title: 'NGINX Config Analyzer', desc: 'Scores an NGINX config for security, performance and reliability.' },
+  { href: '/tools/nginx-cis-hardening-checker', title: 'NGINX CIS Hardening Checker', desc: 'Checks a config against CIS NGINX Benchmark v2.1.0.' },
+  { href: '/tools/nginx-cve-checker', title: 'NGINX CVE Checker', desc: 'Lists known CVEs for an NGINX version and its modules.' },
+  { href: '/tools/pg-hardening-checker', title: 'PostgreSQL Hardening Checker', desc: 'Audits postgresql.conf and pg_hba.conf.' },
+  { href: '/cka', title: 'CKA Study Tracker', desc: 'Tracks practice against the official CKA curriculum, with lab tasks.' },
 ];
 
 function shortDate(date: string): string {
@@ -90,8 +91,8 @@ export default function HomePage() {
         <SectionHeading>Tools</SectionHeading>
         <ul className="space-y-2">
           {TOOLS.map((t) => (
-            <li key={t.slug}>
-              <Link href={`/tools/${t.slug}`} className="text-zinc-200 hover:text-green-400 transition-colors">
+            <li key={t.href}>
+              <Link href={t.href} className="text-zinc-200 hover:text-green-400 transition-colors">
                 {t.title}
               </Link>
               <span className="text-sm text-zinc-500"> · {t.desc}</span>
