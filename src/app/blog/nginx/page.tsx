@@ -9,12 +9,12 @@ const BASE_URL = 'https://www.damonsec.com';
 export const metadata: Metadata = {
   title: 'NGINX Configuration & Troubleshooting Guides',
   description:
-    'Production NGINX guides — reverse proxy configuration, upstream keepalive, performance tuning, 502/504 debugging, and SSL hardening. Real configs, real failure modes.',
+    'NGINX troubleshooting notes: 502, 504 and 413 errors reproduced on a lab VM, upstream keepalive, rate limiting and TLS hardening.',
   alternates: { canonical: `${BASE_URL}/blog/nginx` },
   openGraph: {
     title: 'NGINX Configuration & Troubleshooting Guides — damonsec.com',
     description:
-      'Production NGINX guides — reverse proxy configuration, upstream keepalive, performance tuning, 502/504 debugging, and SSL hardening. Real configs, real failure modes.',
+      'NGINX troubleshooting notes: 502, 504 and 413 errors reproduced on a lab VM, upstream keepalive, rate limiting and TLS hardening.',
     url: `${BASE_URL}/blog/nginx`,
     type: 'website',
     siteName: 'damonsec.com',
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     card: 'summary',
     title: 'NGINX Configuration & Troubleshooting Guides — damonsec.com',
     description:
-      'Production NGINX guides — reverse proxy configuration, upstream keepalive, performance tuning, 502/504 debugging, and SSL hardening.',
+      'NGINX troubleshooting notes: 502, 504 and 413 errors reproduced on a lab VM, upstream keepalive, rate limiting and TLS hardening.',
   },
 };
 
@@ -92,22 +92,18 @@ export default function NginxCategoryPage() {
           NGINX Production Guides
         </h1>
 
-        {/* Intro — 250 words, keyword-dense, no marketing */}
         <div className="max-w-2xl space-y-4">
           <p className="font-sans text-zinc-400 leading-relaxed">
-            Most NGINX problems don't announce themselves. A{' '}
-            <Link href="/blog/nginx-502-bad-gateway-fix-linux" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502 Bad Gateway</Link>{' '}
-            that only fires under load. An{' '}
-            <Link href="/blog/nginx-upstream-keepalive" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">nginx upstream keepalive</Link>{' '}
-            misconfiguration that passes all tests in staging, then exhausts ephemeral ports at 400 req/s in production. A{' '}
-            <code className="font-mono text-xs text-green-400 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5">proxy_read_timeout</code>{' '}
-            left at the 60-second default — invisible until a single slow endpoint starts causing cascading 504s.
+            Notes on NGINX problems:{' '}
+            <Link href="/blog/nginx-502-bad-gateway-fix-linux" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502</Link> and{' '}
+            <Link href="/blog/nginx-504-gateway-timeout-fix" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">504</Link> errors traced from the
+            upstream side, request size limits,{' '}
+            <Link href="/blog/nginx-upstream-keepalive" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">keepalive to upstreams</Link>, rate
+            limiting and TLS settings.
           </p>
           <p className="font-sans text-zinc-400 leading-relaxed">
-            NGINX configuration covers a deceptively wide surface area. As a reverse proxy, it handles connection pooling, header forwarding, and timeout negotiation between clients and upstreams. As a TLS terminator, it controls protocol versions, cipher selection, and session resumption. As a rate limiter, it enforces access policy at the edge — before requests touch your application. Getting any of these wrong has consequences that rarely show up in synthetic tests.
-          </p>
-          <p className="font-sans text-zinc-400 leading-relaxed">
-            These guides focus on nginx performance tuning and debugging for real production deployments: reverse proxy in front of Node.js, Django, Rails, or microservice backends. Every guide includes the specific directives involved, the failure mode it addresses, and the commands to verify the configuration is behaving as expected. No intro-level explanations of what a web server is. No copy-paste configs without explanation. Just the failure modes, the root causes, and the fixes.
+            Posts marked as lab-tested were run on an Ubuntu 26.04 VM with NGINX 1.28. The log
+            lines and status codes in them are copied from those runs.
           </p>
         </div>
 
@@ -205,11 +201,12 @@ export default function NginxCategoryPage() {
       <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-7 space-y-3">
         <h2 className="font-mono text-xs text-zinc-500 uppercase tracking-widest">About these guides</h2>
         <p className="font-sans text-sm text-zinc-400 leading-relaxed max-w-2xl">
-          These guides are written by a Senior L3 engineer with production experience across high-traffic deployments running NGINX as a reverse proxy, SSL terminator, and API gateway. The content comes from real incidents — debugging{' '}
-          <Link href="/blog/nginx-502-under-load" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502s under sustained load</Link>,
-          auditing nginx configurations against PCI-DSS requirements, tuning{' '}
-          <Link href="/blog/nginx-upstream-keepalive" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">upstream keepalive</Link>{' '}
-          on systems handling tens of thousands of concurrent connections, and writing the runbooks that actually get used during incidents. Not documentation rewrites. Not synthetic examples.
+          Written by <Link href="/about" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">Damon</Link>, an L3 support engineer at OPSWAT, who
+          previously tuned NGINX for hosting customers at Vietnix, an Anti-DDoS provider. Lab-tested
+          posts such as{' '}
+          <Link href="/blog/nginx-502-under-load" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502 under load</Link> and{' '}
+          <Link href="/blog/nginx-504-gateway-timeout-fix" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">504 gateway timeout</Link> were
+          reproduced on a test VM, and the output in them is from those runs.
         </p>
       </section>
 
