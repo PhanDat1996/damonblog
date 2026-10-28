@@ -48,7 +48,7 @@ A note on `used`: older procps versions computed it as `total - free - buffers -
 
 - `available` is a small fraction of `total` and **falling**.
 - Swap is being actively written (see below), not just "used".
-- The OOM killer has fired (`dmesg` / `journalctl -k`).
+- The OOM killer has fired (`dmesg` / `journalctl -k`). See [how to read an OOM kill report](/blog/linux-oom-killer-explained).
 
 ---
 
