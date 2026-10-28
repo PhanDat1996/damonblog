@@ -1,251 +1,189 @@
 ---
-title: "Linux Find File by Name and Size: Real Examples"
+title: "Linux find by Name and Size: Patterns That Match Right"
 date: "2026-04-22"
-excerpt: "Use Linux find command to locate files by name pattern, size, date, and permissions — with real production examples and combined search techniques."
+updated: "2026-10-28"
+excerpt: "Find files by name and size with Linux find: quote your patterns, group -o with parentheses, skip folders with -prune and avoid the -size rounding trap."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
-slug: "linux-find-file-by-name-size-guide"
 category: "linux"
 ---
 
-The `find` command is one of the most powerful tools on Linux. Most engineers know the basics — here's how to actually use it in production for real search tasks.
-
----
-
-## TL;DR
+You need "every `.log` file under `/var` bigger than 50 MB", or "where is that `config.yml` on this box". `find` does both in one command, but it has a few rules that quietly give you wrong results: unquoted patterns, `-o` without parentheses, and size rounding. Get those right and the rest is easy.
 
 ```bash
-# Find by name
-find /var/log -name "*.log"
-
-# Find by size (files > 100MB)
-find / -type f -size +100M 2>/dev/null
-
-# Find by name AND size
-find /var/log -name "*.log" -size +50M
-
-# Find by name, case-insensitive
-find / -iname "debug*" -type f 2>/dev/null
+find /var -type f -name '*.log' -size +50M                    # name AND size
+find / -xdev -type f -iname 'config.yml' 2>/dev/null          # by name, case-insensitive
+find /var/log -type f \( -name '*.log' -o -name '*.gz' \) -size +10M   # either name, plus size
 ```
 
 ---
 
-## Find by Name
+## Matching by name
+
+| Test | Matches against | Example |
+|---|---|---|
+| `-name 'pat'` | The file name only (last path part), case-sensitive glob | `-name '*.conf'` |
+| `-iname 'pat'` | Same, case-insensitive | `-iname 'readme*'` |
+| `-path 'pat'` | The whole path as find prints it | `-path '*/nginx/*.conf'` |
+| `-regex 'pat'` | The whole path, as a regular expression | `-regex '.*/app-[0-9]+\.log'` |
+
+### Always quote the pattern
 
 ```bash
-# Exact match
-find /etc -name "nginx.conf"
+find /var/log -name *.log      # WRONG
+find /var/log -name '*.log'    # right
+```
 
-# Wildcard pattern
-find /var/log -name "*.log"
-find /opt -name "app-*"
+Without quotes, the shell expands `*.log` **before** `find` runs, using files in your current directory. If your current directory has one `.log` file, `find` searches for that exact name. If it has two, you get `find: paths must precede expression`. If it has none, it happens to work, which is why this bug survives in scripts.
 
-# Case-insensitive
-find / -iname "*.Log" 2>/dev/null
+### -name doesn't see slashes
 
-# Multiple patterns (OR)
-find /var/log \( -name "*.log" -o -name "*.gz" \)
+`-name` only looks at the last part of the path, so `-name 'nginx/*.conf'` never matches anything. Use `-path`:
+
+```bash
+find /etc -path '*/nginx/*' -name '*.conf'
+```
+
+### -regex matches the whole path
+
+```bash
+find /var/log -regextype posix-extended -regex '.*/app-[0-9]{4}-[0-9]{2}-[0-9]{2}\.log'
+```
+
+The expression must match the full path, so start with `.*/`. GNU find's default regex flavor is Emacs-style, where `{4}` intervals and `|` alternation need backslashes; `-regextype posix-extended` gives you the syntax you know from `grep -E`.
+
+---
+
+## Matching by size
+
+| Suffix | Unit |
+|---|---|
+| `c` | bytes |
+| `k` | KiB (1024 bytes) |
+| `M` | MiB (1024 KiB) |
+| `G` | GiB |
+| none | 512-byte blocks |
+
+`+N` means larger than, `-N` smaller than, plain `N` "exactly" (after rounding).
+
+**The rounding trap:** find rounds each file's size **up** to the unit before comparing.
+
+```bash
+find /tmp -type f -size -1k      # matches only EMPTY files (1 byte rounds up to 1k)
+find /tmp -type f -size -1024c   # files smaller than 1 KiB, what you meant
+find /tmp -type f -empty         # if empty files are what you want, say so
+```
+
+`-size 512k` means "rounds up to 512 KiB", i.e. anything from just over 511 KiB to 512 KiB, not exactly 524288 bytes. For an exact byte size use `-size 524288c`.
+
+A range:
+
+```bash
+find /var -xdev -type f -size +10M -size -100M
+```
+
+For a sorted "biggest files first" list, see [Find Large Files on Linux](/blog/find-large-files-linux).
+
+---
+
+## Combining tests: AND, OR, NOT
+
+Tests next to each other are joined with AND. `-o` is OR, `!` (or `-not`) is NOT. AND binds tighter than OR, which is the source of a classic bug:
+
+```bash
+# WRONG: -type f and -size only apply to *.gz
+find / -name core -o -name '*.gz' -type f -size +100M
+
+# right: group the OR with escaped parentheses
+find / -xdev -type f \( -name core -o -name '*.gz' \) -size +100M
+```
+
+The parentheses need a backslash (or quotes) so the shell passes them to `find`, and spaces around them.
+
+NOT examples:
+
+```bash
+find /var/log -type f -name '*.log' ! -name '*debug*'      # .log files except debug ones
+find /opt/app -type f ! -user app                          # files not owned by app
 ```
 
 ---
 
-## Find by Size
+## Skipping folders: -xdev and -prune
 
-Size suffixes: `c` (bytes), `k` (kilobytes), `M` (megabytes), `G` (gigabytes).
+Searching `/` walks `/proc`, `/sys`, network mounts and container layers unless you stop it.
 
 ```bash
-# Larger than
-find / -type f -size +100M 2>/dev/null
-
-# Smaller than
-find /tmp -type f -size -1k
-
-# Exactly
-find / -type f -size 512k
-
-# Range: between 10MB and 100MB
-find /var -type f -size +10M -size -100M 2>/dev/null
+find / -xdev -type f -name 'config.yml' 2>/dev/null
 ```
+
+`-xdev` stays on the starting filesystem. To skip specific folders inside it, use `-prune`, which stops find from descending at all (unlike `! -path`, which still walks the whole tree and only hides the results):
+
+```bash
+find /srv \( -path /srv/backups -o -name node_modules -o -name .git \) -prune \
+     -o -type f -name '*.yml' -print
+```
+
+Read it as: "if it's one of these folders, prune it; **otherwise** if it's a `.yml` file, print it". The explicit `-print` at the end matters; without it, find also prints the pruned folder names.
 
 ---
 
-## Combine Name + Size
-
-This is where `find` becomes a real tool:
+## Doing something with the results
 
 ```bash
-# Log files larger than 50MB
-find /var/log -name "*.log" -size +50M
-
-# Python files smaller than 100KB
-find /opt/app -name "*.py" -size -100k
-
-# Config files matching a pattern, any size
-find /etc -name "*.conf" -type f
-
-# Core dump files (usually large, specific naming)
-find / -name "core" -o -name "core.[0-9]*" -type f 2>/dev/null
+find /var/log -type f -name '*.log' -size +100M -ls                  # details (size in bytes, 7th column)
+find /var/log -type f -name '*.log' -size +100M -exec ls -lh {} +    # human-readable sizes
+find /etc -type f -name '*.conf' -exec grep -l 'listen 443' {} +      # which configs contain a string
 ```
+
+`-exec cmd {} +` runs the command once with many files; `-exec cmd {} \;` runs it once per file, much slower on big result sets. If you pipe to `xargs`, use `-print0 | xargs -0` so names with spaces don't break:
+
+```bash
+find /var/log -type f -name '*.log' -mtime +7 -print0 | xargs -0 gzip
+```
+
+For searching **inside** files, `grep -rl 'pattern' /etc` is usually simpler; see [Search Text in Files with grep](/blog/search-text-in-files-linux-grep).
+
+Deleting what you found? Run the command without `-delete` first and put `-delete` at the very end; the reasons are in [Delete Large Files Safely](/blog/how-to-delete-large-files-linux-safely).
 
 ---
 
-## Real Examples
-
-### Find recently modified large files (incident investigation)
+## Useful one-offs
 
 ```bash
-# Files over 100MB modified in the last 2 hours
-find / -type f -size +100M -mmin -120 2>/dev/null
-
-# Files modified today
-find /var/log -type f -mtime 0
-
-# Files modified in the last 30 minutes
-find /var/log -type f -mmin -30
+find / -xdev -xtype l 2>/dev/null                  # broken symlinks (GNU find)
+find / -xdev -type f -perm -4000 2>/dev/null       # setuid binaries (security audit)
+find / -xdev -type f -perm -0002 2>/dev/null       # world-writable files
+find /opt/app -type f -name '*.*' | sed 's/.*\.//' | sort | uniq -c | sort -rn | head   # count by extension
+find /home -maxdepth 3 -type f -iname '*.pem'      # limit depth when you know it's shallow
 ```
 
-### Find and delete old log files (cleanup)
-
-```bash
-# Preview what would be deleted
-find /var/log -name "*.log.gz" -mtime +30 -type f
-
-# Delete (add -delete or use xargs)
-find /var/log -name "*.log.gz" -mtime +30 -type f -delete
-
-# Or with size filter — only delete large old logs
-find /var/log -name "*.log.gz" -mtime +30 -size +10M -type f -delete
-```
-
-### Find files with specific permissions
-
-```bash
-# World-writable files (security audit)
-find / -type f -perm -0002 ! -path "/proc/*" ! -path "/sys/*" 2>/dev/null
-
-# SUID files
-find / -type f -perm -4000 2>/dev/null
-
-# Files owned by a specific user
-find /home -user appuser -name "*.conf"
-```
-
-### Find duplicate-named files in different locations
-
-```bash
-# Find all files named "config.yml" anywhere
-find / -name "config.yml" -type f 2>/dev/null
-
-# Find all nginx config files
-find / -name "nginx.conf" -o -name "*.conf" -path "*/nginx/*" 2>/dev/null
-```
-
-### Find files containing a string (find + grep)
-
-```bash
-# Files containing "password" in /etc
-find /etc -type f -exec grep -l "password" {} \; 2>/dev/null
-
-# More efficient with xargs
-find /etc -type f | xargs grep -l "password" 2>/dev/null
-
-# Find and show matching lines
-find /var/log -name "*.log" -exec grep -Hn "ERROR" {} \; 2>/dev/null | head -20
-```
+Need to filter by age too? `-mtime`, `-mmin` and `-newermt` are in [Find Files Older Than X Days](/blog/linux-find-files-older-than-x-days).
 
 ---
 
-## Output Explanation
+## find vs locate
 
-Basic `find` output is just file paths, one per line:
-
-```
-/var/log/nginx/access.log
-/var/log/nginx/error.log
-/var/log/app/debug.log
-```
-
-With `-ls` for detailed output:
+`locate` (from `mlocate` or `plocate`) searches a prebuilt database, so it answers in milliseconds:
 
 ```bash
-find /var/log -name "*.log" -size +10M -ls 2>/dev/null
+locate -i config.yml
 ```
 
-```
-12345678  45320 -rw-r--r--   1 www-data  www-data  46407680 Apr 20 14:22 /var/log/nginx/access.log
-12345679  2880  -rw-r--r--   1 root      root       2949120 Apr 20 14:22 /var/log/nginx/error.log
-```
-
-Columns: inode, blocks, permissions, links, owner, group, size(bytes), date, path.
+The database is usually updated once a day, so new files are missing and deleted ones still show up. It also can't filter by size. Use `locate` to find where something lives, `find` when results must be current or you need size, age or permission filters.
 
 ---
 
-## Common Mistakes
+## FAQ
 
-**Mistake 1: Running `find /` without `2>/dev/null`**
-Every directory you can't read generates a "Permission denied" error. Redirect stderr.
+**How do I find a file by name in Linux?**
+`find / -xdev -type f -name 'filename' 2>/dev/null`. Use `-iname` for case-insensitive matching and quote the name if it contains wildcards.
 
-**Mistake 2: Size units — `find` uses binary, not decimal**
-`-size +1G` means > 1 GiB (1073741824 bytes), not 1 GB. For most purposes this doesn't matter but is worth knowing.
+**How do I find files larger than 100MB with a certain extension?**
+`find /path -type f -name '*.ext' -size +100M`. Add `-exec ls -lh {} +` to see sizes.
 
-**Mistake 3: Using `-exec rm` without previewing first**
-Always test your search before deleting:
+**Why does find -size -1M only return empty files?**
+find rounds sizes up to the unit, so any non-empty file is at least "1M". Use a smaller unit: `-size -1024k` or `-size -1048576c`.
 
-```bash
-# Step 1: preview
-find /tmp -name "*.tmp" -mtime +7 -type f
-
-# Step 2: delete only after confirming output
-find /tmp -name "*.tmp" -mtime +7 -type f -delete
-```
-
-**Mistake 4: Forgetting to exclude `/proc` and `/sys`**
-These virtual filesystems cause weird results and errors:
-
-```bash
-find / -type f -size +100M \
-  ! -path "/proc/*" \
-  ! -path "/sys/*" \
-  ! -path "/dev/*" \
-  2>/dev/null
-```
-
-**Mistake 5: Slow performance searching `/`**
-Use `-maxdepth` when you know the file is near the top:
-
-```bash
-find / -maxdepth 4 -name "config.yml" 2>/dev/null
-```
-
----
-
-## Pro Tips
-
-```bash
-# Find and sort by size (largest first)
-find /var -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -20 | \
-  awk '{printf "%.1fMB\t%s\n", $1/1048576, $2}'
-
-# Find files not accessed in 90 days (cleanup candidates)
-find /opt -type f -atime +90 -size +10M 2>/dev/null
-
-# Count files by extension
-find /opt/app -type f | sed 's/.*\.//' | sort | uniq -c | sort -rn
-
-# Find and compress large old logs
-find /var/log -name "*.log" -mtime +7 -size +50M \
-  -exec gzip -9 {} \; 2>/dev/null
-
-# Find broken symlinks
-find / -type l ! -exec test -e {} \; -print 2>/dev/null
-```
-
----
-
-## Conclusion
-
-`find` with `-name` and `-size` together covers 80% of real search tasks. Add `-mtime` for time-based filtering, `-exec` or `xargs` to act on results. Always redirect `2>/dev/null` and preview before deleting.
-
----
-
-*Related: [How to Check Disk Usage in Linux: du vs df](/blog/check-disk-usage-linux-du-df) — once you know where space is going, du and df help you quantify it. [Linux Log Analysis](/blog/linux-log-analysis-debugging-guide) — for finding content inside those log files.*
+**Why does find say "paths must precede expression"?**
+Usually an unquoted wildcard: the shell expanded `*.log` into several file names. Quote it: `-name '*.log'`.

@@ -1,288 +1,246 @@
 ---
-title: "Check Open Ports in Linux: ss vs netstat Explained"
+title: "Check Open Ports on Linux: Listening Ports with ss"
 date: "2026-04-21"
-excerpt: "How to check open ports in Linux using ss and netstat — with real troubleshooting scenarios, filtering techniques, and a clear comparison of when to use each tool."
+updated: "2026-10-28"
+excerpt: "See which ports are listening on Linux, which process owns each one, and whether it is reachable from outside. ss, lsof and netstat, with real output."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
-slug: "check-open-ports-linux-ss-netstat"
 category: "linux"
 ---
 
-## TL;DR
+A deploy fails with `bind: address already in use`. Or a client gets `Connection refused` from a service you are sure is running. Or a scanner flags port 3306 as exposed and someone asks you what else is open.
 
-- **`ss`** is the modern replacement for `netstat` — faster, more accurate, pre-installed on all modern Linux
-- **`netstat`** still works and is more familiar to many engineers — use it if you know it
-- **`ss -tlnp`** — show TCP listening ports with process names (the command you will use most)
-- **`ss -tlnp | grep :80`** — check if a specific port is open
-- **`lsof -i :8080`** — alternative, shows process details including PID and user
-- A port being "open" means something is listening — verify the correct process owns it
-- Use `ss -tnp state established` to see active connections, not just listeners
+All three start with the same question: what is listening on this box, on which address, and which process owns it?
+
+```bash
+sudo ss -tulpn
+```
+
+That one command answers most of it. The rest of this page is about reading the output correctly, because the port number is the least interesting column.
 
 ---
 
-## Introduction: Why Checking Open Ports Matters
+## The commands you'll actually use
 
-Service will not start because "address already in use." A firewall rule is blocking traffic but you do not know what is supposed to be running on that port. A security audit asks you to enumerate all listening services.
+```bash
+sudo ss -tlnp                       # TCP listeners with process
+sudo ss -ulnp                       # UDP sockets with process
+sudo ss -tulpn                      # both
+sudo ss -tlnp 'sport = :8080'       # one specific port (exact match)
+sudo lsof -nP -iTCP -sTCP:LISTEN    # same thing, lsof style
+```
 
-**Checking open ports in Linux** is a daily task for any engineer managing servers. The right command tells you not just which ports are open, but what process owns them, whether they are accepting connections from all interfaces or just localhost, and how many connections they currently have.
+| Flag | Meaning |
+|---|---|
+| `-t` / `-u` | TCP / UDP sockets |
+| `-l` | Listening sockets only |
+| `-n` | Numeric ports and addresses (`80`, not `http`) |
+| `-p` | Show the owning process. Needs root to see other users' processes |
+
+`ss` is part of `iproute2` and is installed on practically every current distribution. `netstat` comes from the older `net-tools` package and is often missing. For a full comparison and a command translation table, see [netstat vs ss](/blog/netstat-vs-ss-command).
 
 ---
 
-## Using ss to Check Open Ports
-
-`ss` (socket statistics) replaced `netstat` as the standard tool on modern Linux. It reads from the kernel directly, is faster, and shows more detail.
-
-### The Most Useful Command
+## Read the output
 
 ```bash
-ss -tlnp
+sudo ss -tlnp
 ```
 
-Breakdown of flags:
-- **`-t`** — TCP sockets (add `-u` for UDP)
-- **`-l`** — listening sockets only
-- **`-n`** — show port numbers, not service names
-- **`-p`** — show process name and PID
-
-Output:
 ```
-State    Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process
-LISTEN   0       128     0.0.0.0:80         0.0.0.0:*          users:(("nginx",pid=1234,fd=6))
-LISTEN   0       128     127.0.0.1:5432     0.0.0.0:*          users:(("postgres",pid=5678,fd=4))
-LISTEN   0       128     0.0.0.0:22         0.0.0.0:*          users:(("sshd",pid=910,fd=3))
+State   Recv-Q  Send-Q  Local Address:Port   Peer Address:Port  Process
+LISTEN  0       128           0.0.0.0:22          0.0.0.0:*      users:(("sshd",pid=812,fd=3))
+LISTEN  0       511           0.0.0.0:80          0.0.0.0:*      users:(("nginx",pid=1190,fd=6))
+LISTEN  0       4096    127.0.0.53%lo:53          0.0.0.0:*      users:(("systemd-resolve",pid=640,fd=14))
+LISTEN  0       244         127.0.0.1:5432        0.0.0.0:*      users:(("postgres",pid=1342,fd=5))
+LISTEN  0       128              [::]:22             [::]:*      users:(("sshd",pid=812,fd=4))
+LISTEN  0       4096                *:9100              *:*      users:(("node_exporter",pid=905,fd=3))
 ```
 
-Reading this output:
-- **`0.0.0.0:80`** — listening on all interfaces, port 80 (accessible from anywhere)
-- **`127.0.0.1:5432`** — listening only on localhost, port 5432 (not accessible remotely)
-- **`[::]:22`** — listening on all IPv6 interfaces
+### Local Address: who can reach it
 
-**The local address matters.** A service bound to `0.0.0.0` is accessible from any network interface. A service bound to `127.0.0.1` is only accessible locally. This is a common security misconfiguration — databases that should be localhost-only accidentally bound to all interfaces.
+This column decides whether a port is "open" in any useful sense.
 
-### Check a Specific Port
+| Local Address | Reachable from |
+|---|---|
+| `0.0.0.0:80` | Any IPv4 address on any interface |
+| `[::]:22` | Any IPv6 address (IPv6 only, if a separate `0.0.0.0` socket exists, as with sshd above) |
+| `*:9100` | Any interface, IPv4 and IPv6: a single dual-stack socket (shown this way on current iproute2) |
+| `127.0.0.1:5432` | This host only |
+| `127.0.0.53%lo:53` | This host only (systemd-resolved's stub resolver, normal on Ubuntu) |
+| `[::1]:6379` | This host only, IPv6 |
+| `10.0.1.10:8080` | Only via that one address |
 
-```bash
-# Is anything listening on port 8080?
-ss -tlnp | grep :8080
+Two consequences:
 
-# Check port for both TCP and UDP
-ss -tlnp | grep :53    # TCP
-ss -ulnp | grep :53    # UDP
+- **A service on `127.0.0.1` gives remote clients `Connection refused`**, even though `systemctl status` says it's running. Very common with apps whose default bind is `localhost`.
+- **A database on `0.0.0.0` is exposed on every interface**, including the public one. Only the firewall stands between it and the internet.
 
-# Check all at once
-ss -tlunp | grep :53
-```
+### Recv-Q and Send-Q mean something different on listeners
 
-### All Listening Sockets (TCP + UDP)
+For a `LISTEN` socket:
 
-```bash
-ss -tlunp
-```
+- **Send-Q** is the maximum accept backlog: the smaller of the app's `listen()` backlog and `net.core.somaxconn`. That's why nginx shows 511 and sshd shows 128.
+- **Recv-Q** is how many fully established connections are waiting for the app to `accept()` them right now.
 
-### Active Connections (Not Just Listeners)
+`Recv-Q` near or equal to `Send-Q` means the application isn't accepting fast enough, and the kernel will start dropping new connection attempts. Clients see this as intermittent timeouts, not refusals. Confirm with `nstat -az TcpExtListenOverflows`, which counts overflows since boot.
 
-```bash
-# All established TCP connections
-ss -tnp state established
+### Process
 
-# Connections to a specific destination
-ss -tnp dst 10.0.1.50
-
-# Connections from a specific source
-ss -tnp src 192.168.1.0/24
-
-# Connections on a specific port
-ss -tnp dport :443
-```
-
-### Socket Statistics Summary
-
-```bash
-ss -s
-# Total: 287
-# TCP:   45 (estab 12, closed 8, orphaned 0, timewait 4)
-```
+`users:(("nginx",pid=1190,fd=6))` gives the command name, PID and file descriptor. If the Process column is empty, you ran `ss` without root and the socket belongs to another user.
 
 ---
 
-## Using netstat to Check Open Ports
-
-`netstat` is from the `net-tools` package — older, but still widely known and available on most systems. It is deprecated in favor of `ss` but functional.
+## Check one specific port
 
 ```bash
-# Install if missing
-apt install net-tools   # Ubuntu
-dnf install net-tools   # RHEL
-
-# Equivalent of ss -tlnp
-netstat -tlnp
-
-# Show all sockets
-netstat -anp
-
-# Show only listening
-netstat -lnp
+sudo ss -tlnp 'sport = :8080'
 ```
 
-`netstat` output:
+No output means nothing is listening on TCP 8080.
+
+Prefer the filter over `grep :80`, which also matches `:8080`, `:8000` and peer addresses. If you do grep, anchor it: `ss -tlnp | grep -E ':80\s'`.
+
+To check several:
+
+```bash
+sudo ss -tlnp '( sport = :80 or sport = :443 )'
 ```
-Proto  Recv-Q  Send-Q  Local Address    Foreign Address  State   PID/Program name
-tcp    0       0       0.0.0.0:80      0.0.0.0:*        LISTEN  1234/nginx
-tcp    0       0       127.0.0.1:5432  0.0.0.0:*        LISTEN  5678/postgres
-```
+
+If the port is taken and you need it back, [find and stop the process holding it](/blog/port-already-in-use-linux-fix).
 
 ---
 
-## ss vs netstat: Side-by-Side Comparison
+## UDP: there is no LISTEN state
 
-| Feature | ss | netstat |
-|---|---|---|
-| Pre-installed (modern Linux) | ✅ Yes | ❌ Often missing |
-| Speed | Faster (reads kernel directly) | Slower (reads /proc) |
-| Active development | ✅ Yes | ❌ Deprecated |
-| Output format | Slightly different | Familiar to most engineers |
-| Equivalent command | `ss -tlnp` | `netstat -tlnp` |
-| Socket filter | ✅ Rich filter syntax | Limited |
-| State filter | ✅ `state established` | Basic |
+UDP is connectionless, so UDP sockets show as `UNCONN`, not `LISTEN`:
 
-**Short answer:** Use `ss`. If you are on a system where `netstat` is not installed and `ss` is, that is intentional — the distribution chose `ss` as the default. Learn `ss -tlnp` and use it everywhere.
+```bash
+sudo ss -ulnp
+```
+
+```
+State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process
+UNCONN  0       0       127.0.0.53%lo:53         0.0.0.0:*      users:(("systemd-resolve",pid=640,fd=13))
+UNCONN  0       0             0.0.0.0:123        0.0.0.0:*      users:(("chronyd",pid=702,fd=5))
+```
+
+A script that does `ss -tulnp | grep LISTEN` silently skips every UDP service (DNS, NTP, syslog, WireGuard).
 
 ---
 
-## Real Troubleshooting Scenarios
+## Audit what is exposed
 
-### Scenario 1: "Address Already in Use" on Service Start
-
-Service fails to start with `bind: address already in use`.
+List everything not bound to loopback:
 
 ```bash
-# Find what is using the port
-ss -tlnp | grep :8080
-# LISTEN  0  128  0.0.0.0:8080  0.0.0.0:*  users:(("oldapp",pid=9901,fd=8))
-
-# Identify the process
-ps -p 9901 -o pid,comm,user,stat
-
-# Decide: kill it or reconfigure the new service to use a different port
-kill -15 9901
+sudo ss -Htulnp | grep -vE '127\.0\.0\.[0-9]+(%[a-z0-9]+)?:|\[::1\]:'
 ```
 
-### Scenario 2: Port Is Open But Service Is Unreachable
+`-H` drops the header line (supported by any reasonably recent iproute2). On a typical web server you'd expect 22, 80 and 443. Anything else needs an owner and a reason.
 
-Nginx is listening on port 80. Browser gets "connection refused."
+Compare against an expected list:
 
 ```bash
-# Confirm nginx is actually listening
-ss -tlnp | grep :80
-# LISTEN  0  128  127.0.0.1:80  ...
-
-# Found it — nginx is bound to localhost only
-# External traffic cannot reach 127.0.0.1
+EXPECTED="22 80 443"
+sudo ss -Htln | awk '{print $4}' | grep -oE '[0-9]+$' | sort -un | while read -r port; do
+  echo " $EXPECTED " | grep -q " $port " || echo "Unexpected listener on port $port"
+done
 ```
 
-Fix: change `listen 127.0.0.1:80` to `listen 0.0.0.0:80` in nginx.conf.
-
-### Scenario 3: Unexpected Port Open on Server
-
-Security scan flagged port 3306 open externally.
+Save a baseline and diff it after changes:
 
 ```bash
-# Confirm it is listening
-ss -tlnp | grep :3306
-# LISTEN  0  151  0.0.0.0:3306  0.0.0.0:*  users:(("mysqld",pid=2341,fd=30))
-
-# MySQL is bound to 0.0.0.0 — accessible from any interface
-# Should be 127.0.0.1 only if no remote connections needed
+sudo ss -Htulnp | sort > ports-before.txt
+# ... deploy, upgrade, etc.
+sudo ss -Htulnp | sort > ports-after.txt
+diff ports-before.txt ports-after.txt
 ```
 
-Fix in `/etc/mysql/mysql.conf.d/mysqld.cnf`:
-```
-bind-address = 127.0.0.1
-```
+PIDs change on restart, so expect some noise in the Process column.
 
-### Scenario 4: Check All Services Listening on External Interfaces
+---
 
-Security audit: what is exposed to the network?
+## Listening is not the same as reachable
+
+`ss` reports what the kernel has bound. It knows nothing about the firewall in front of it. A port can be listening on `0.0.0.0` and still be unreachable because:
+
+- the host firewall (nftables, iptables, firewalld, ufw) drops it ([check firewall status](/blog/check-firewall-status-linux))
+- a cloud security group or network ACL blocks it
+- you are on the wrong network path entirely
+
+So check from the client side too:
 
 ```bash
-# Find everything NOT bound to localhost
-ss -tlnp | grep -v '127.0.0.1' | grep -v '::1'
-
-# Or more explicitly
-ss -tlnp | grep 'LISTEN' | grep -E '0\.0\.0\.0|::'
+# from another machine
+nc -zv -w 3 10.0.1.10 5432
+nmap -Pn -p 22,80,443,5432 10.0.1.10
 ```
 
-### Scenario 5: Connection Count to a Service
+Scanning `localhost` from the server itself mostly proves nothing about the firewall, because loopback traffic is usually allowed. Run the scan from where the real clients are. [Testing a TCP connection](/blog/test-tcp-connection-linux) covers how to read `refused` vs `timed out`.
 
-How many clients are connected to nginx right now?
+The reverse also happens: a port can be reachable even though `ss` doesn't show what you expect. Docker publishes ports with iptables DNAT rules. You'll normally see a `docker-proxy` process listening on the host, but if the userland proxy is disabled, nothing appears in `ss` at all while the port still works. Docker's rules also bypass ufw on Ubuntu, which surprises a lot of people.
+
+---
+
+## Ports inside containers
+
+A container has its own network namespace, so `ss` on the host does not show sockets that only exist inside it. Check inside:
 
 ```bash
-# Count established connections to port 80
-ss -tnp state established dport :80 | wc -l
+docker exec mycontainer ss -tlnp            # if the image has iproute2
+```
 
-# See who is connected (source IPs)
-ss -tnp state established dport :80 | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -rn
+Slim images often have neither `ss` nor `netstat`. Run the host's `ss` inside the container's namespace instead:
+
+```bash
+PID=$(docker inspect -f '{{.State.Pid}}' mycontainer)
+sudo nsenter -t "$PID" -n ss -tlnp
 ```
 
 ---
 
-## lsof as an Alternative
+## lsof and netstat
 
-`lsof -i` is another way to check open ports — particularly useful because it shows more process detail.
-
-```bash
-# All listening ports
-lsof -i -sTCP:LISTEN
-
-# Specific port
-lsof -i :8080
-
-# Specific protocol and port
-lsof -i TCP:443
-
-# All connections by a specific process
-lsof -i -p 1234
-```
-
-`lsof -i` is slower than `ss` on systems with many open files but provides user, PID, command, and file descriptor in a single view.
-
----
-
-## Quick Reference
+`lsof` is handy when you want the user column, or when you are already thinking in terms of files:
 
 ```bash
-# ── CHECK LISTENING PORTS ────────────────────────────────────────
-ss -tlnp                          # TCP listening, with process
-ss -ulnp                          # UDP listening, with process
-ss -tlunp                         # TCP + UDP listening
-netstat -tlnp                     # netstat equivalent
-
-# ── SPECIFIC PORT ─────────────────────────────────────────────────
-ss -tlnp | grep :8080             # is port 8080 open?
-lsof -i :8080                     # alternative with more detail
-
-# ── ACTIVE CONNECTIONS ────────────────────────────────────────────
-ss -tnp state established         # all active TCP connections
-ss -tnp dst 10.0.1.50            # connections to specific host
-ss -tnp dport :443               # connections on port 443
-
-# ── SUMMARY ──────────────────────────────────────────────────────
-ss -s                             # socket counts by state
-
-# ── SECURITY AUDIT ───────────────────────────────────────────────
-ss -tlnp | grep -v 127.0.0.1    # what is exposed externally?
+sudo lsof -nP -iTCP -sTCP:LISTEN
 ```
 
+```
+COMMAND    PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+sshd       812     root    3u  IPv4  21431      0t0  TCP *:22 (LISTEN)
+nginx     1190     root    6u  IPv4  24510      0t0  TCP *:80 (LISTEN)
+postgres  1342 postgres    5u  IPv4  25102      0t0  TCP 127.0.0.1:5432 (LISTEN)
+```
+
+Always pass `-nP`. Without them lsof does DNS lookups and turns ports into service names, which is slow and makes `8080` show up as `http-alt`. Note that lsof shows the master process that owns the socket. Worker processes that inherited it appear as separate lines.
+
+`netstat -tlnp` gives the same information if you're on a box that has `net-tools`. The [netstat vs ss](/blog/netstat-vs-ss-command) page covers the differences.
+
 ---
 
-## Conclusion
+## Common mistakes
 
-`ss -tlnp` is the command. Learn it once, use it everywhere.
+**Checking without `sudo`.** You get the sockets, but no process names for anything you don't own.
 
-When a service will not start, when a port seems open but unreachable, when a security audit asks what is exposed — `ss -tlnp` gives you the answer in one line: what is listening, on which interface, and which process owns it.
+**Forgetting `-n`.** `ss -tlp` shows `http` and `ssh` instead of `80` and `22`, and `grep :8080` won't match `http-alt`.
 
-The interface binding is the detail most engineers miss. **A port open on `0.0.0.0` is exposed to every network interface.** A port on `127.0.0.1` is localhost only. That distinction matters for both connectivity and security.
+**Assuming `0.0.0.0` covers IPv6.** It doesn't. If clients connect over IPv6 (often because `localhost` resolves to `::1` first), you need `[::]` or a dual-stack `*` listener too.
+
+**Treating listeners and connections as the same thing.** `-l` shows sockets waiting for connections. To see who is actually connected right now, use [`ss` with a state filter](/blog/linux-check-open-connections).
 
 ---
 
-*Related reading: [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) — combining ss with lsof and strace for full network debugging. [Linux Process States Explained](/blog/linux-process-states-guide) — what happens when a process is stuck and not accepting connections.*
+## Quick checklist
+
+1. `sudo ss -tulpn` to list every TCP and UDP listener with its process.
+2. Read the Local Address: loopback, a specific IP, or everything.
+3. Match each unexpected port to a PID and a service.
+4. Test from a real client to confirm reachability through the firewall.
+5. In containers, look inside the network namespace, not on the host.
+
+---
+
+*Related: [Port Already in Use](/blog/port-already-in-use-linux-fix) when the port you need is taken. [strace, lsof, and ss](/blog/strace-lsof-ss-debugging) for deeper socket debugging. [Linux Kill Process by Port](/blog/linux-kill-process-by-port) once you know which PID to stop.*

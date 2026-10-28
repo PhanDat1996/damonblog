@@ -1,300 +1,266 @@
 ---
-title: "systemctl Restart Service Not Working: Fix Guide"
+title: "systemctl restart Not Working? start-limit and Stop Hangs"
 date: "2026-04-22"
-excerpt: "Fix systemctl restart not working — diagnose failed units, read journal logs, handle dependency failures, and resolve the most common systemd service restart failures."
+updated: "2026-10-28"
+excerpt: "systemctl restart fails with start-limit-hit, hangs for 90 seconds, or ignores your changes? What restart really does and how to fix each failure."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
-slug: "systemctl-restart-service-not-working-fix"
 category: "devops"
 ---
 
-`systemctl restart myapp` returns no error but the service stays dead, or keeps crashing, or the command itself fails. Here's the diagnostic path to find and fix it.
+The service was running. You changed something, ran `systemctl restart myapp`, and now one of these is happening:
+
+- `Job for myapp.service failed` and the status says `start-limit-hit`
+- the command hangs for a minute and a half before returning
+- it "restarted" but your unit file change didn't take effect
+- the service crashed and `Restart=on-failure` didn't bring it back
+
+These are restart-specific problems. A service that fails on every start, even the first, is a different diagnosis (exit codes, `ExecStart`, dependencies). For that, see [systemctl service not starting](/blog/systemctl-service-not-starting-fix).
 
 ---
 
 ## TL;DR
 
-```bash
-# Step 1: what's the actual state?
-systemctl status myapp
-
-# Step 2: what did it log?
-journalctl -u myapp -n 50 --no-pager
-
-# Step 3: why did it fail?
-journalctl -u myapp --since "5 minutes ago" -p err
-
-# Step 4: check dependencies
-systemctl list-dependencies myapp
-```
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Start request repeated too quickly`, `Result: start-limit-hit` | Start rate limit | Fix the crash, then `systemctl reset-failed myapp` |
+| Restart takes ~90s | Process ignores SIGTERM; systemd waits `TimeoutStopSec` | Fix signal handling or tune `TimeoutStopSec`/`KillSignal` |
+| Unit file change ignored | No `daemon-reload` | `systemctl daemon-reload && systemctl restart myapp` |
+| Crash not restarted | `Restart=` missing, or the exit counts as "clean" | Set `Restart=on-failure` (or `always`) |
+| `Address already in use` after restart | Old process survived the stop | Find it with `ss -ltnp`, check `KillMode=` |
+| `Can't open PID file` / start times out | `Type=forking` with wrong `PIDFile=` | Run in foreground with `Type=simple`/`exec`/`notify` |
 
 ---
 
-## Step 1: Read the Status Output Carefully
-
-```bash
-systemctl status myapp
-```
-
-Example output for a failed service:
+## What `restart` actually does
 
 ```
-● myapp.service - My Application
-   Loaded: loaded (/etc/systemd/system/myapp.service; enabled)
-   Active: failed (Result: exit-code) since Mon 2026-04-20 14:22:03 UTC
-  Process: 4521 ExecStart=/opt/app/start.sh (code=exited, status=1/FAILURE)
- Main PID: 4521 (code=exited, status=1/FAILURE)
-
-Apr 20 14:22:03 server01 systemd[1]: myapp.service: Main process exited, code=exited, status=1/FAILURE
-Apr 20 14:22:03 server01 systemd[1]: myapp.service: Failed with result 'exit-code'.
-Apr 20 14:22:03 server01 systemd[1]: Failed to start My Application.
+systemctl restart myapp
+  │
+  ├─ stop:   run ExecStop= (if any)
+  │          send KillSignal= (SIGTERM) to every process in the unit's cgroup
+  │          wait up to TimeoutStopSec= (default 90s)
+  │          still alive? SIGKILL
+  │
+  └─ start:  ExecStartPre= → ExecStart= → wait until "started" per Type=
+             counts toward the start rate limit
 ```
 
-**Key fields:**
+Two consequences: a slow stop makes restart slow, and every restart is a start that counts toward the limit.
 
-| Field | What it means |
-|---|---|
-| `Active: failed (Result: exit-code)` | Process exited with non-zero status |
-| `Active: failed (Result: signal)` | Process was killed by a signal (OOM, SIGKILL) |
-| `Active: activating (auto-restart)` | Systemd is restarting it in a loop |
-| `status=1/FAILURE` | Exit code from the process |
-| `code=killed, signal=KILL` | OOM killer or manual kill -9 |
+`restart` also uses the unit definition systemd has **in memory**, which is why editing the file isn't enough (see below).
 
 ---
 
-## Step 2: Read the Full Journal
+## start-limit-hit: "Start request repeated too quickly"
 
-Status output is truncated. Get the full story:
+```
+myapp.service: Start request repeated too quickly.
+myapp.service: Failed with result 'start-limit-hit'.
+Failed to start My Application.
+```
+
+systemd allows a unit `StartLimitBurst=` starts within `StartLimitIntervalSec=`. The defaults are **5 starts in 10 seconds** (`DefaultStartLimitBurst`/`DefaultStartLimitIntervalSec` in `/etc/systemd/system.conf`). Every start counts: automatic restarts from `Restart=` **and** your manual `systemctl restart`.
+
+How you hit it:
+
+- The app crashes on startup and `Restart=` brings it back. With the default `RestartSec=100ms`, five attempts take well under a second.
+- You (or a deploy script, or config management) run `restart` several times in quick succession.
+
+Clearing it:
 
 ```bash
-# Last 50 lines
-journalctl -u myapp -n 50 --no-pager
-
-# Since last restart attempt
-journalctl -u myapp --since "5 minutes ago" --no-pager
-
-# Errors only
-journalctl -u myapp -p err --since "today"
-
-# From a previous boot (if service crashed and caused a reboot)
-journalctl -b -1 -u myapp | tail -50
-```
-
----
-
-## Common Failure Patterns and Fixes
-
-### Pattern 1: Service starts then immediately exits
-
-```
-Active: failed (Result: exit-code)
-```
-
-The process started but exited with an error. The exit code tells you where to look:
-
-```bash
-journalctl -u myapp -n 30 --no-pager
-# Look for application-level error messages before the systemd "Failed" line
-```
-
-Common causes:
-- Missing config file
-- Wrong permissions on files the app needs
-- Port already in use
-- Missing environment variable
-
-```bash
-# Test manually with same user as the service
-runuser -u appuser -- /opt/app/start.sh
-# This shows the real error without systemd interference
-```
-
-### Pattern 2: Start limit hit — systemd stops trying
-
-```
-Active: failed (Result: start-limit-hit)
-```
-
-The service crashed and restarted too many times. Systemd backs off.
-
-```bash
-# Reset the failure counter to allow restarting
-systemctl reset-failed myapp
+journalctl -u myapp -b -n 100 --no-pager      # read the crash BEFORE the rate-limit lines
+systemctl reset-failed myapp                  # clear the failed state and the counter
 systemctl start myapp
 ```
 
-To prevent this in production, tune the restart limits in the unit file:
+`reset-failed` only lets you try again. If the underlying crash isn't fixed, you'll hit the limit again within seconds. The real error is in the log lines above `Start request repeated too quickly`.
+
+How many times has it restarted on its own?
+
+```bash
+systemctl show myapp -p NRestarts -p Result -p ActiveState     # NRestarts: systemd 235+
+```
+
+### Tuning the limit: put it in `[Unit]`
+
+```ini
+# systemctl edit myapp
+[Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+```
+
+`StartLimitIntervalSec=` and `StartLimitBurst=` belong in **`[Unit]`**. Put `StartLimitIntervalSec=` in `[Service]` and systemd logs `Unknown key name 'StartLimitIntervalSec' in section 'Service', ignoring` and silently uses the defaults. (The old names `StartLimitInterval=`/`StartLimitBurst=` are still accepted in `[Service]` for compatibility, which is why old examples look like they work.)
+
+The numbers have to fit together. With `RestartSec=10s`, at most one start fits in the default 10-second window, so the limit **never** triggers and a broken service restarts forever. That might be what you want (a worker that should always come back), but then decide it on purpose. `StartLimitIntervalSec=0` disables the limit explicitly.
+
+systemd 254 and later can also back off: `RestartSteps=` and `RestartMaxDelaySec=` grow the delay between attempts up to a maximum.
+
+---
+
+## Restart hangs for 90 seconds
+
+```
+myapp.service: State 'stop-sigterm' timed out. Killing.
+myapp.service: Killing process 4521 (myapp) with signal SIGKILL.
+myapp.service: Main process exited, code=killed, status=9/KILL
+```
+
+systemd sent SIGTERM, waited `TimeoutStopSec` (default 90s), then killed it. Causes:
+
+- **The app ignores or doesn't handle SIGTERM.** Some runtimes need a handler; some apps expect a different signal.
+- **The app shuts down gracefully, but slowly** (draining connections, flushing queues).
+- **`ExecStop=` itself hangs**, e.g. a stop script calling an API that doesn't answer.
+
+```bash
+systemctl show myapp -p TimeoutStopUSec -p KillSignal -p KillMode -p ExecStop
+```
+
+Fixes, in order of preference:
+
+```ini
+[Service]
+# The app shuts down cleanly on SIGINT/SIGQUIT but not SIGTERM:
+KillSignal=SIGINT
+
+# Graceful shutdown legitimately takes a while:
+TimeoutStopSec=30s
+```
+
+Lowering `TimeoutStopSec` just makes the SIGKILL come sooner. For a database or anything with on-disk state, SIGKILL can mean recovery on the next start. Fix the shutdown path if you can.
+
+---
+
+## Unit file change ignored: `daemon-reload`
+
+systemd keeps parsed unit files in memory. After editing a unit (or a drop-in), it warns you, and then restarts with the **old** definition anyway:
+
+```
+Warning: The unit file, source configuration file or drop-ins of myapp.service changed on disk. Run 'systemctl daemon-reload' to reload units.
+```
+
+```bash
+systemctl show myapp -p NeedDaemonReload       # yes = the file on disk differs from memory
+systemctl daemon-reload
+systemctl restart myapp
+```
+
+Know which config you changed:
+
+| You changed | You need |
+|---|---|
+| Unit file or drop-in (`ExecStart`, `Environment`, `LimitNOFILE`, ...) | `daemon-reload` **then** `restart` |
+| The app's own config (`nginx.conf`, `app.yml`) | `reload` if the unit supports it, otherwise `restart` |
+
+`daemon-reload` doesn't restart anything. Settings that apply at process start (limits, environment, user) only change after the next restart. `systemctl edit myapp` runs the reload for you when you save; editing files directly doesn't.
+
+### `reload` vs `restart`
+
+```bash
+systemctl reload myapp
+# Failed to reload myapp.service: Job type reload is not applicable for unit myapp.service.
+```
+
+`reload` only works if the unit defines `ExecReload=`. For NGINX, `reload` sends SIGHUP: the master re-reads the config and replaces workers with no dropped connections, and if the new config is invalid, the old one keeps running. `restart` with a broken config takes the site down. Test first:
+
+```bash
+nginx -t && systemctl reload nginx
+```
+
+`systemctl reload-or-restart myapp` reloads when supported, restarts otherwise.
+
+---
+
+## The service crashed and wasn't restarted
+
+The default is `Restart=no`. Even with `Restart=` set, what counts as "failure" is precise:
+
+| Exit reason | `no` | `always` | `on-success` | `on-failure` | `on-abnormal` | `on-abort` |
+|---|---|---|---|---|---|---|
+| Clean exit code (0, or listed in `SuccessExitStatus=`) | | yes | yes | | | |
+| Unclean exit code (non-zero) | | yes | | yes | | |
+| Unclean signal (SIGKILL, SIGSEGV, SIGABRT...) | | yes | | yes | yes | yes |
+| Timeout | | yes | | yes | yes | |
+| Watchdog | | yes | | yes | yes | |
+
+Three things that surprise people:
+
+- **SIGTERM, SIGINT, SIGHUP and SIGPIPE count as clean.** If someone runs `kill 4521`, the process dies from SIGTERM, and `Restart=on-failure` does **not** restart it. `kill -9` (unclean) would.
+- **`systemctl stop` never triggers `Restart=`.** That's by design. A unit that is stopped stays stopped.
+- **The start limit still applies.** A crash loop with `Restart=always` ends in `start-limit-hit` unless the timing keeps it under the limit.
+
+For services that must stay up:
 
 ```ini
 [Service]
 Restart=on-failure
 RestartSec=5s
-StartLimitBurst=5          # allow 5 restarts
-StartLimitIntervalSec=60s  # within 60 seconds
 ```
 
-### Pattern 3: Signal kill — OOM or external kill
+Use `Restart=always` if a clean exit is also unexpected (a worker that should never exit). `RestartPreventExitStatus=` excludes specific exit codes, such as a "config invalid" code that will never fix itself.
 
-```
-Active: failed (Result: signal)
-code=killed, signal=KILL
-```
+---
 
-Check if OOM killer was responsible:
+## "Address already in use" right after restart
+
+The new process can't bind because something still holds the port:
 
 ```bash
-journalctl -k --since "1 hour ago" | grep -i "oom\|killed"
-dmesg | grep -i "oom\|killed process" | tail -10
+ss -ltnp 'sport = :8080'
+# LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:* users:(("myapp",pid=3977,fd=7))
+systemctl status myapp | grep "Main PID"        # is 3977 the unit's own process?
 ```
 
-If OOM: the service doesn't have enough memory. Increase memory limits or reduce the service's memory usage.
+- **The process was started by hand** (outside systemd), so `stop` never touched it.
+- **`KillMode=process`** (or `none`) is set, so only the main process is signaled on stop and its children keep running with the socket. The default `KillMode=control-group` kills everything in the cgroup; check why the unit overrides it.
+
+Stop the stray process properly (a plain `kill <pid>` first; `kill -9` only if it doesn't exit), then start the unit. [Port already in use](/blog/port-already-in-use-linux-fix) has more on finding the holder.
+
+---
+
+## `Type=forking` and PID files
+
+Old-style daemons fork into the background and write a PID file. The unit has to match:
 
 ```ini
-# Unit file — set memory limit to prevent OOM kill
 [Service]
-MemoryMax=2G
-MemoryHigh=1.5G
+Type=forking
+PIDFile=/run/myapp/myapp.pid
+ExecStart=/opt/app/bin/myapp --daemon
 ```
 
-### Pattern 4: Dependency failed
+Typical failures:
 
 ```
-Active: inactive (dead)
-Condition: start condition failed
+myapp.service: Can't open PID file /run/myapp.pid (yet?) after start: No such file or directory
+myapp.service: start operation timed out. Terminating.
 ```
 
-A required service or condition wasn't met:
+- `PIDFile=` doesn't match where the app actually writes it.
+- The app can't create the file because its directory doesn't exist or isn't writable by `User=`. `/run` is a tmpfs, emptied at boot. Add `RuntimeDirectory=myapp` so systemd creates `/run/myapp` with the right owner on every start.
+- The app doesn't actually fork (`--daemon` missing), so systemd waits for a parent that never exits, until `TimeoutStartSec`.
+- A stale PID file from a previous crash points at an unrelated process.
 
-```bash
-# Check what dependencies are needed
-systemctl list-dependencies myapp
-
-# Check which dependencies are failing
-systemctl status $(systemctl list-dependencies myapp --plain | head -5)
-```
-
-Example: service requires a network mount that isn't ready:
-
-```ini
-[Unit]
-After=network-online.target mnt-data.mount
-Requires=mnt-data.mount
-```
-
-### Pattern 5: Unit file syntax error
-
-```
-Failed to load configuration: Invalid argument
-```
-
-```bash
-# Validate unit file syntax
-systemd-analyze verify /etc/systemd/system/myapp.service
-
-# After editing unit file, always reload daemon
-systemctl daemon-reload
-systemctl restart myapp
-```
-
-**Forgetting `daemon-reload` after editing a unit file is the most common mistake.** systemd caches unit files — changes don't take effect until you reload.
-
-### Pattern 6: Permission or file not found
-
-```
-code=exited, status=203/EXEC
-```
-
-Status 203 means the ExecStart binary couldn't be executed:
-
-```bash
-# Check the path in the unit file
-systemctl cat myapp | grep ExecStart
-
-# Verify it exists and is executable
-ls -la /opt/app/start.sh
-# Check it's not a script with wrong line endings (Windows CRLF)
-file /opt/app/start.sh
-```
+The better fix is to stop daemonizing. Most daemons have a foreground mode (`nginx -g 'daemon off;'`, `--foreground`, `-D`). Run them with `Type=simple`, `Type=exec` (systemd 240+, which also reports `ExecStart` failures properly), or `Type=notify` if the app supports `sd_notify`. No PID file needed, and systemd always knows the right main PID.
 
 ---
 
-## Full Diagnostic Workflow
+## Quick checklist
 
-```bash
-# 1. Get current state
-systemctl status myapp
-
-# 2. Get logs with context
-journalctl -u myapp -n 100 --no-pager
-
-# 3. Test the command directly
-systemctl cat myapp | grep ExecStart
-# Run that command manually as the service user
-
-# 4. Check for start-limit issues
-systemctl is-failed myapp
-systemctl reset-failed myapp
-
-# 5. After any unit file change
-systemctl daemon-reload
-
-# 6. Restart and watch
-systemctl restart myapp && journalctl -fu myapp
-```
+1. `journalctl -u myapp -b -n 100`: read the error **before** any `start-limit-hit` line.
+2. Rate-limited? Fix the cause, `reset-failed`, start. Limits go in `[Unit]`.
+3. Slow restart? Look for `stop-sigterm timed out`; fix signal handling.
+4. Edited the unit? `daemon-reload` first. Check `NeedDaemonReload`.
+5. Not restarting after a crash? Check `Restart=` and whether the exit was "clean".
+6. Port busy after restart? Find the stray process, check `KillMode=`.
+7. `Type=forking`? Match `PIDFile=`, add `RuntimeDirectory=`, or switch to foreground mode.
 
 ---
 
-## Common Mistakes
-
-**Mistake 1: Not running `daemon-reload` after editing the unit file**
-Changes to `/etc/systemd/system/myapp.service` have zero effect until you reload.
-
-```bash
-systemctl daemon-reload    # always do this after editing unit files
-```
-
-**Mistake 2: Looking at truncated status output**
-`systemctl status` shows ~10 lines. The real error is usually in `journalctl`.
-
-**Mistake 3: `systemctl restart` on a failed service without resetting limits**
-If it hit `StartLimitBurst`, restart will be silently ignored. Always check for `start-limit-hit`.
-
-**Mistake 4: Testing as root when service runs as another user**
-A script might work as root but fail for `appuser` due to file permissions.
-
-```bash
-# Test as the actual service user
-runuser -u appuser -- /opt/app/start.sh
-```
-
----
-
-## Pro Tips
-
-```bash
-# Watch service status live while troubleshooting
-journalctl -fu myapp
-
-# Check all failed units at once
-systemctl --failed
-
-# See the full unit file including overrides
-systemctl cat myapp
-
-# Override specific settings without editing the unit file
-systemctl edit myapp
-# Creates /etc/systemd/system/myapp.service.d/override.conf
-
-# Check what the service is actually doing right now
-systemctl status myapp --full
-```
-
----
-
-## Conclusion
-
-When `systemctl restart` doesn't work: check status for the failure reason, get the full journal log, run the command manually as the service user, and remember `daemon-reload` after any unit file change. `start-limit-hit` is the silent blocker that catches most people — `systemctl reset-failed` clears it.
-
----
-
-*Related: [Linux Log Analysis: Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — journalctl deep dive for log investigation. [Linux Process States Explained](/blog/linux-process-states-guide) — understanding what happens to a process after systemd sends a signal.*
+*Related: [check running services](/blog/linux-check-running-services-systemctl) to list failed units across the host, and [journalctl time filters](/blog/journalctl-filter-time-range) for pulling the exact window around a failed restart.*

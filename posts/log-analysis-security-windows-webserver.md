@@ -1,266 +1,273 @@
 ---
-title: "Log Analysis for Security Investigations: Windows Event Logs and Web Server Access Logs"
+title: "Security Log Analysis: Windows Event IDs and Web Logs"
 date: "2026-04-24"
-excerpt: "A practical guide to log analysis for security investigations — Windows Event Viewer, critical Event IDs, Apache access log parsing, and the Linux command-line tools that make manual log analysis fast and effective."
+updated: "2026-10-28"
+excerpt: "Investigating a suspected break-in: the Windows Event IDs that matter, logon types and failure codes, and the web log patterns behind scans and webshells."
 tags: ["security", "linux", "logs", "incident", "troubleshooting", "debugging"]
 featured: false
 category: "security"
 ---
 
-Attackers are careful. They move quietly, minimize their footprint, and avoid triggering obvious alerts. But no matter how careful they are, they leave traces — and those traces end up in logs.
+A web server is making outbound connections it shouldn't, or a domain account logged in at 03:12 from an IP nobody recognizes. Now you need to answer three questions from logs: **how did they get in, what did they do, and are they still there?**
 
-Logs are the foundation of every security investigation. They're how you reconstruct what happened, in what order, and from where. Without them, incident response is guesswork. With them, you can trace an attacker's path through a system and, in many cases, identify who was behind it.
-
-This guide covers practical log analysis for two of the most important log sources you'll encounter: **Windows Event Logs** and **web server access logs**.
+This post covers the two log sources that answer those questions most often: the Windows Security log and web server access logs. It's about investigating attacker activity. For outage triage, see [incident triage with logs](/blog/log-analysis-incident-triage). For Linux system logs, see the [Linux log analysis guide](/blog/linux-log-analysis-guide).
 
 ---
 
-## TL;DR
+## Before you start: preserve the evidence
 
+Attackers clear logs, and logs rotate. Copy first, analyze the copy.
+
+```powershell
+# Windows: export the logs you need (run as Administrator)
+wevtutil epl Security C:\IR\Security.evtx
+wevtutil epl System   C:\IR\System.evtx
+wevtutil epl "Microsoft-Windows-PowerShell/Operational" C:\IR\PowerShell.evtx
 ```
-Windows Event Logs   → use Event Viewer + filter by Event ID
-Web server logs      → use cat, grep, less for manual analysis
-Key Event IDs        → 4624 (login), 4625 (failed login), 4720 (account created)
-Apache access log    → /var/log/apache2/access.log
+
+```bash
+# Linux web server: copy logs including rotated ones, and record hashes
+mkdir -p /root/ir && cp -a /var/log/nginx /var/log/auth.log* /root/ir/
+sha256sum /root/ir/nginx/* > /root/ir/SHA256SUMS
 ```
+
+Write down the timezone of every source. Windows Event Viewer shows local time, IIS logs are in UTC, and NGINX/Apache use the server's local time with an offset.
 
 ---
 
-## What Logs Actually Are
+## Windows: the Event IDs that matter
 
-Every activity on a system leaves a digital trace. A user authenticates — logged. A service crashes — logged. A web request hits your server — logged. Logs are the automated record of these events, written continuously in the background whether anything is wrong or not.
+The **Security** log holds authentication and account events. The **System** log holds service installs and its own clearing event. Some IDs only appear if the matching audit policy is enabled (noted below). Check what's enabled with `auditpol /get /category:*`.
 
-The challenge isn't that logs don't exist — it's that there are too many of them. A busy production system generates thousands of log entries per hour. Finding the relevant ones requires knowing where to look and how to filter.
+### Logons and authentication
 
-Logs serve several distinct purposes in a security context:
+| Event ID | Log | Meaning | Why you care |
+|---|---|---|---|
+| **4624** | Security | Successful logon | The key field is **Logon Type** (table below) plus the source IP |
+| **4625** | Security | Failed logon | Bursts = brute force or password spraying. **Sub Status** tells you why it failed. |
+| **4634** / **4647** | Security | Logoff / user-initiated logoff | Gives session duration when paired with 4624 (same Logon ID) |
+| **4648** | Security | Logon with explicit credentials | `runas`, or a tool using someone else's credentials. Common in lateral movement. |
+| **4672** | Security | Special privileges assigned to new logon | Logged right after a 4624 when the account is an admin. Admin logon from an unusual source = priority. |
+| **4740** | Security | Account locked out | Logged on the domain controller; shows the caller computer |
+| **4768** / **4769** | Security (DC) | Kerberos TGT / service ticket requested | Unusual volumes of 4769 for many services from one account can indicate Kerberoasting |
+| **4771** | Security (DC) | Kerberos pre-authentication failed | The domain-side view of failed passwords |
+| **4776** | Security | NTLM credential validation | Failures here with Kerberos available deserve a look |
 
-| Use Case | What You're Looking For |
+### Logon Type (in 4624 and 4625)
+
+| Type | Name | Typical source |
+|---|---|---|
+| 2 | Interactive | Keyboard at the console |
+| 3 | Network | SMB share, `net use`, PsExec-style tools, many remote management tools |
+| 4 | Batch | Scheduled task |
+| 5 | Service | A service starting under an account |
+| 7 | Unlock | Workstation unlocked |
+| 8 | NetworkCleartext | Credentials sent in clear text (e.g., IIS Basic auth) |
+| 9 | NewCredentials | `runas /netonly` |
+| 10 | RemoteInteractive | RDP |
+| 11 | CachedInteractive | Logon with cached domain credentials (laptop off the network) |
+
+With Network Level Authentication enabled, failed RDP attempts often show up as **type 3** failures, not type 10, because authentication happens before the RDP session is created. Don't filter brute-force searches on type 10 only.
+
+### Why did the logon fail? (4625 Sub Status)
+
+| Sub Status | Meaning |
 |---|---|
-| **Security Monitoring** | Anomalous behavior in real time — logins at unusual hours, access from unexpected IPs |
-| **Incident Investigation** | Root cause analysis after something goes wrong — what happened, when, from where |
-| **Troubleshooting** | Application errors, failed service starts, driver issues |
-| **Performance Monitoring** | Latency spikes, resource exhaustion, error rate increases |
-| **Auditing & Compliance** | User activity trails for regulatory requirements (PCI-DSS, HIPAA, SOC 2) |
+| `0xC0000064` | Username does not exist |
+| `0xC000006A` | Username exists, wrong password |
+| `0xC0000234` | Account locked out |
+| `0xC0000072` | Account disabled |
+| `0xC0000071` | Password expired |
+| `0xC0000193` | Account expired |
+| `0xC000006F` | Outside allowed logon hours |
+| `0xC0000070` | Not allowed from this workstation |
+| `0xC000015B` | User not granted this logon type (e.g., not allowed RDP) |
 
----
+This distinction is valuable. Many `0xC0000064` across many usernames is someone guessing usernames. A run of `0xC000006A` against one real account is a targeted password attack, and a 4624 for that same account afterwards is the event you're dreading.
 
-## Types of Logs
+### Persistence, privilege and cover-up
 
-Before you can analyze logs, you need to know which log file contains the information you're after. Logs are categorized by what they record:
-
-| Log Type | What It Contains | When to Use It |
+| Event ID | Log | Meaning |
 |---|---|---|
-| **System Logs** | OS activity: startup/shutdown, driver loading, hardware events | Service failures, boot issues |
-| **Security Logs** | Authentication, authorization, account changes, policy changes | Login investigations, privilege escalation |
-| **Application Logs** | App-specific events: errors, updates, user interactions | App crashes, unexpected behavior |
-| **Audit Logs** | Data access, system changes, user activity | Compliance, change tracking |
-| **Network Logs** | Inbound/outbound traffic, firewall events | Lateral movement, C2 communication |
-| **Access Logs** | Web server, database, API access | Web attacks, scraping, unauthorized access |
+| **4720** | Security | User account created |
+| **4722** | Security | User account enabled |
+| **4724** | Security | Attempt to reset an account's password (by someone else) |
+| **4726** | Security | User account deleted |
+| **4728** | Security | Member added to a security-enabled **global** group (e.g., Domain Admins) |
+| **4732** | Security | Member added to a security-enabled **local** group (e.g., local Administrators) |
+| **4756** | Security | Member added to a security-enabled **universal** group |
+| **4688** | Security | New process created. Needs "Audit Process Creation"; the command line is only logged if the "Include command line in process creation events" policy is on. |
+| **4697** | Security | Service installed (needs "Audit Security System Extension") |
+| **7045** | System | New service installed. Logged by the Service Control Manager, so it's there even without extra auditing. |
+| **4698** | Security | Scheduled task created (needs "Audit Other Object Access Events") |
+| **4104** | PowerShell/Operational | Script block logged (needs Script Block Logging). Shows deobfuscated PowerShell. |
+| **1102** | Security | **The audit log was cleared** |
+| **104** | System | The System log (or another log) was cleared |
 
-Knowing this upfront saves time. If you're investigating a failed login attempt, go straight to Security Logs — not System, not Application.
+A 1102 that nobody can explain is a finding on its own. Attackers clear the log to hide earlier events. The events before the clear may still exist in your SIEM or in exported copies.
+
+The classic persistence chain looks like this, often within a minute:
+
+```
+4624 (type 10, unknown IP) → 4672 → 4720 (new user "svc_backup") → 4732 (added to Administrators) → 7045 (new service)
+```
+
+### Querying from PowerShell
+
+Event Viewer's **Filter Current Log** is fine for one ID. For anything bigger, use `Get-WinEvent`, which can read live logs or the `.evtx` you exported.
+
+```powershell
+# Failed logons in the last 24h, grouped by source IP and failure reason
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; StartTime=(Get-Date).AddHours(-24)} |
+  ForEach-Object {
+    $d = @{}
+    ([xml]$_.ToXml()).Event.EventData.Data | ForEach-Object { $d[$_.Name] = $_.'#text' }
+    [pscustomobject]@{ IP=$d.IpAddress; User=$d.TargetUserName; Type=$d.LogonType; SubStatus=$d.SubStatus }
+  } | Group-Object IP, SubStatus | Sort-Object Count -Descending | Select-Object -First 15 Count, Name
+```
+
+```powershell
+# Successful logons from an IP you're investigating
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 5000 |
+  Where-Object { $_.Message -match '203\.0\.113\.45' } |
+  Select-Object TimeCreated, @{n='Msg';e={($_.Message -split "`n")[0..20] -join ' '}}
+
+# Was the log cleared? New services?
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=1102} -ErrorAction SilentlyContinue
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=7045} -MaxEvents 20 | Format-List TimeCreated, Message
+
+# Same queries against an exported file
+Get-WinEvent -FilterHashtable @{Path='C:\IR\Security.evtx'; Id=4624,4625}
+```
+
+`wevtutil` works too, and is handy over remote shells:
+
+```powershell
+wevtutil qe Security /q:"*[System[(EventID=4720 or EventID=4732)]]" /c:20 /rd:true /f:text
+```
+
+> Retention catches people out. The Security log's default maximum size is small, and on a busy domain controller it may cover only hours. If the logs don't reach back to the suspected entry time, check your SIEM or log forwarder before concluding "no evidence".
 
 ---
 
-## Windows Event Log Analysis
+## Web server access logs
 
-Windows logs security-relevant events in several segregated log files. The three most important:
+### Read the line correctly
 
-- **Security** — authentication, account changes, policy changes. The primary log for security investigations.
-- **System** — OS operations, driver issues, service starts/stops. Useful for understanding system state during an incident.
-- **Application** — events from applications running on the OS. Useful for application-layer issues.
+Apache and NGINX both default to the `combined` format:
 
-### Event Viewer
+```
+203.0.113.45 - - [28/Oct/2026:03:11:52 +0000] "GET /index.php?id=1%27%20UNION%20SELECT%201,2,3-- HTTP/1.1" 200 5123 "-" "sqlmap/1.8.4#stable (https://sqlmap.org)"
+```
 
-Windows ships with **Event Viewer** (`eventvwr.msc`) — a GUI for browsing and filtering event logs. Open it from Start, navigate to **Windows Logs**, and select the log category you need.
-
-Each event contains four key fields:
-
-- **Event ID** — a unique numeric identifier for the specific activity type
-- **Description** — detailed information about what happened
-- **Logged** — exact timestamp of the event
-- **Log Name** — which log file it came from
-
-### Critical Event IDs
-
-You don't need to memorize all Event IDs — there are thousands. But these are the ones that appear in nearly every security investigation:
-
-| Event ID | Event | Why It Matters |
+| Field | Example | Notes |
 |---|---|---|
-| **4624** | Successful login | Baseline for normal access; anomalies indicate unauthorized access or lateral movement |
-| **4625** | Failed login | Brute-force attempts show up as repeated 4625s from the same source |
-| **4634** | Successful logoff | Used with 4624 to establish session duration |
-| **4720** | User account created | Attackers create accounts for persistence |
-| **4722** | User account enabled | Re-enabling a disabled account is a common persistence technique |
-| **4724** | Password reset attempt | May indicate account takeover |
-| **4725** | User account disabled | Could be legitimate or an attacker disrupting access |
-| **4726** | User account deleted | Clean-up activity post-compromise |
+| Client IP | `203.0.113.45` | Behind a load balancer or CDN this is the **proxy's** IP unless you log `X-Forwarded-For` |
+| Identity / user | `- -` | User is filled only for HTTP auth |
+| Time | `[28/Oct/2026:03:11:52 +0000]` | Request start, server local time with offset |
+| Request | `"GET /index.php?id=... HTTP/1.1"` | Method, path **and query string**, protocol |
+| Status | `200` | `200` on an attack request means the server processed it, not that the attack failed |
+| Bytes | `5123` | Response size. A big jump on the same URL can mean data came back. |
+| Referer, User-Agent | `"-"`, `"sqlmap/..."` | Client-supplied, trivially faked |
 
-### Filtering by Event ID
+Locations: `/var/log/nginx/access.log`, `/var/log/apache2/access.log` (Debian/Ubuntu), `/var/log/httpd/access_log` (RHEL). IIS writes W3C logs to `C:\inetpub\logs\LogFiles\W3SVC<id>\` in **UTC**, with fields named in the `#Fields:` header line.
 
-Event Viewer's **Filter Current Log** feature lets you narrow down to specific Event IDs. In the filter dialog, enter the Event ID you want (e.g., `4624`) and click OK. The view will show only events matching that ID.
+What the access log does **not** contain: POST bodies, most headers, cookies. A login brute force or an exploit sent in a POST body shows only as a POST line with a status. Absence of a payload in the log isn't absence of an attack.
 
-For investigating a specific incident:
+### Patterns and what they indicate
 
-1. Navigate to **Security** log
-2. Click **Filter Current Log** in the right panel
-3. Enter the relevant Event ID (e.g., `4625` for failed logins)
-4. Sort by timestamp to establish chronology
-5. Cross-reference with `4624` entries to see if failed attempts preceded a successful one
+| Pattern in the request | Indicates |
+|---|---|
+| Hundreds of `404`s from one IP across many different paths | Content discovery / vulnerability scanning |
+| `/.env`, `/.git/config`, `/wp-config.php.bak`, `/phpinfo.php` | Hunting for leaked secrets and source |
+| `../`, `%2e%2e%2f`, `/etc/passwd`, `win.ini` | Path traversal / local file inclusion |
+| `UNION SELECT`, `%27` (`'`), `OR 1=1`, `sleep(`, `benchmark(` | SQL injection probing |
+| `${jndi:` anywhere, including the User-Agent | Log4Shell (CVE-2021-44228) attempts |
+| Many `POST /login` (or `/wp-login.php`, `/xmlrpc.php`) from one IP | Credential brute force |
+| `POST` to a `.php`/`.jsp`/`.aspx` in an **upload** directory, returning `200` | Possible webshell in use |
+| User-Agent `sqlmap`, `Nikto` | Default UA of scanning tools (careful attackers change it) |
+
+### Commands that answer the questions
+
+```bash
+LOG=/var/log/nginx/access.log
+
+# Who is scanning: IPs by number of DISTINCT paths that returned 404
+awk '$9==404 {print $1, $7}' $LOG | sort -u | awk '{print $1}' | uniq -c | sort -rn | head
+
+# Attack strings, matching both raw and URL-encoded forms
+grep -iE "union(\+|%20| )+select|%27|\.\./|%2e%2e|/etc/passwd|\\\$\{jndi:|/\.env|/\.git/" $LOG | awk '{print $1}' | sort | uniq -c | sort -rn | head
+
+# Did any of those requests succeed? (status 200 with attack strings)
+grep -iE "union(\+|%20| )+select|\.\./|%2e%2e|\\\$\{jndi:" $LOG | awk '$9 == 200' | head
+
+# Everything one suspicious IP did, with status and size, across current and rotated logs
+# (the text sort on the timestamp is only chronological within one month)
+zgrep -h "^203\.0\.113\.45 " $LOG* | sort -t'[' -k2 | awk '{print $4, $6, $7, $9, $10}'
+
+# POSTs to unusual scripts: rare URLs are more interesting than common ones
+awk '$6 == "\"POST" {print $7}' $LOG | sed 's/?.*//' | sort | uniq -c | sort -n | head -20
+```
+
+The last command is the webshell hunt. A legitimate app POSTs to a handful of endpoints thousands of times. A webshell is usually one odd filename hit a few times by one or two IPs. Check it on disk:
+
+```bash
+ls -la /var/www/html/uploads/
+find /var/www -type f \( -name "*.php" -o -name "*.jsp" \) -mtime -14 -ls     # recently modified scripts
+grep -lE "eval\(|base64_decode\(|system\(|shell_exec\(|assert\(" -r /var/www --include=*.php
+```
+
+Those grep hits aren't proof (legitimate code uses some of these functions), but a short obfuscated file in an upload directory is.
+
+### From the web log to the host
+
+If a request looks successful, pivot to the server itself at the same timestamps:
+
+```bash
+journalctl --since "2026-10-28 03:10" --until "2026-10-28 03:40" --no-pager | grep -E "www-data|nginx|apache|sudo|sshd"
+grep -E "Accepted|sudo:" /var/log/auth.log            # new logins or sudo after the attack
+ps -eo user,pid,ppid,lstart,cmd | grep -E "^www-data|^nginx|^apache"   # shells or downloaders running as the web user
+```
+
+A shell, `curl`, `wget` or `python` process owned by the web server user, with the web server as its parent, is a strong sign of code execution. On Linux, [last and lastb](/blog/linux-check-last-login-users) show logins that followed.
 
 ---
 
-## Web Server Access Log Analysis
+## Investigation order
 
-Every HTTP request to a web server is recorded in its access log. For Apache, this is typically at:
-
-```bash
-/var/log/apache2/access.log
-```
-
-Each line represents one request. A standard Apache access log entry looks like:
-
-```
-172.16.0.1 - - [06/Jun/2024:13:58:44] "GET /products HTTP/1.1" 404 "-" "Mozilla/5.0 ..."
-```
-
-Breaking that down:
-
-| Field | Example | What It Tells You |
-|---|---|---|
-| **IP Address** | `172.16.0.1` | Where the request originated |
-| **Timestamp** | `[06/Jun/2024:13:58:44]` | When the request was made |
-| **HTTP Method** | `GET` | What action was requested |
-| **URL** | `/products` | Which resource was accessed |
-| **Status Code** | `404` | How the server responded |
-| **User-Agent** | `Mozilla/5.0 ...` | Client OS, browser, and sometimes tooling |
-
-Status codes are particularly useful for triage:
-
-- `200` — successful request
-- `404` — resource not found (could indicate scanning or path traversal attempts)
-- `500` — server error (application-level failures)
-- `403` — forbidden (access control working, or misconfigured)
-- `401` — unauthorized (authentication required)
+1. **Preserve**: export or copy the logs, note timezones.
+2. **Entry**: web logs for exploit attempts that returned 200; 4625 bursts followed by 4624 from the same source.
+3. **Execution**: 4688 / 4104 on Windows; processes owned by the web user on Linux.
+4. **Persistence**: 4720, 4732/4728, 7045/4697, 4698, new files in the web root.
+5. **Cover-up**: 1102, 104, gaps in log timestamps, truncated web logs.
+6. **Scope**: every other host the same account or IP touched (4624 type 3 and 10 across servers).
 
 ---
 
-## Linux Command-Line Tools for Log Analysis
+## Mistakes that cost investigations
 
-For manual analysis of web server logs (or any text-based log), three tools do most of the work.
-
-### cat — view and combine logs
-
-Display a log file:
-
-```bash
-cat /var/log/apache2/access.log
-```
-
-Combine multiple log files (useful when logs have been rotated):
-
-```bash
-cat access.log access.log.1 > combined.log
-```
-
-### grep — search for specific patterns
-
-Find all requests from a specific IP:
-
-```bash
-grep "192.168.1.1" access.log
-```
-
-Find all 404 responses:
-
-```bash
-grep " 404 " access.log
-```
-
-Find POST requests (common in web attacks — form submissions, file uploads, SQL injection attempts):
-
-```bash
-grep "POST" access.log
-```
-
-Combine filters — all 404s from a specific IP:
-
-```bash
-grep "192.168.1.1" access.log | grep " 404 "
-```
-
-Count occurrences of a pattern:
-
-```bash
-grep -c "192.168.1.1" access.log
-```
-
-### less — navigate large files
-
-When a log file is too large to scroll through with `cat`:
-
-```bash
-less access.log
-```
-
-Navigation:
-- `Space` — next page
-- `b` — previous page
-- `/pattern` — search forward for a pattern
-- `n` — next match
-- `N` — previous match
-- `q` — quit
-
-For an active investigation, start with `grep` to filter down to relevant lines, then pipe to `less` if the output is still large:
-
-```bash
-grep "192.168.1.1" access.log | less
-```
+- **Trusting the client IP behind a proxy.** Every request seems to come from the load balancer. Log `X-Forwarded-For` (and only trust it from your own proxy).
+- **Ignoring 200s.** Defenders filter on errors. A successful attack returns 200.
+- **Filtering 4625 by logon type 10 only.** NLA failures appear as type 3.
+- **Single-event conclusions.** One 4625 is noise. Two hundred in five minutes followed by a 4624 is an incident.
+- **Analyzing only the current log file.** Entry often happened days before detection; it's in `access.log.5.gz`. `zgrep` reads compressed files directly.
 
 ---
 
-## Investigation Workflow: Putting It Together
+## FAQ
 
-**Scenario:** You suspect an attacker scanned your web server and then successfully authenticated.
+**What is the Event ID for a cleared Security log?**
+1102 in the Security log ("The audit log was cleared"). Clearing the System log produces Event ID 104 in the System log.
 
-```bash
-# Step 1: Find IPs generating a high volume of 404s (scanning behavior)
-grep " 404 " access.log | awk '{print $1}' | sort | uniq -c | sort -rn | head -20
+**Which Event ID shows RDP logons?**
+4624 with Logon Type 10 for successful RDP sessions. Failed RDP attempts appear as 4625, frequently with Logon Type 3 when Network Level Authentication is on.
 
-# Step 2: Investigate a specific suspicious IP
-grep "203.0.113.45" access.log | less
+**Why don't I see Event 4688 or the command line?**
+Process creation auditing is off by default. Enable "Audit Process Creation", and separately the "Include command line in process creation events" policy, to get the full command line.
 
-# Step 3: Check if that IP later made successful requests
-grep "203.0.113.45" access.log | grep " 200 "
-
-# Step 4: Look for POST requests from that IP (login attempts, form submissions)
-grep "203.0.113.45" access.log | grep "POST"
-
-# Step 5: Cross-reference with Windows Security log for Event ID 4625 (failed logins)
-# in Event Viewer, filter Security log for 4625 during the same timeframe
-```
-
-On the Windows side, correlate the timestamps from the access log with Event Viewer entries. If the web requests precede a 4624 (successful login) with an unusual source IP, you have a likely attack chain.
+**Does the access log show POST data?**
+No. Neither NGINX nor Apache log request bodies by default. You see the method, path, query string, status and size, not what was submitted.
 
 ---
 
-## Common Mistakes
-
-**Looking at the wrong log file.** Security events are in the Security log, not System. Access patterns are in the web server access log, not the application log. Know which file contains what before you start.
-
-**No timestamp correlation.** Logs from different sources use different timezone settings. Verify that your timestamps are comparable before drawing conclusions about sequence of events.
-
-**Ignoring log rotation.** Most systems rotate logs daily or weekly. If you're investigating an incident from three days ago, the relevant log may be in `access.log.3.gz`, not `access.log`. Check `/var/log/apache2/` for rotated files.
-
-**Trusting User-Agent strings.** User-Agent is client-supplied and trivially spoofed. Useful as a signal but not reliable as evidence on its own.
-
-**Missing the relationship between events.** A single 4625 (failed login) is noise. Two hundred 4625s from the same IP in five minutes followed by a 4624 is an incident. Log analysis is about patterns, not individual entries.
-
----
-
-## Related
-
-- [Log Analysis in Production: Incident Triage Workflow](/blog/log-analysis-incident-triage)
-- [journalctl Filter by Time Range](/blog/journalctl-filter-time-range)
-- [How to Search Text in Files with grep](/blog/search-text-in-files-linux-grep)
-- [Linux Log Analysis Guide](/blog/linux-log-analysis-guide)
-- [Monitor Real-Time Logs in Linux](/blog/monitor-real-time-logs-linux)
+*Related: [grep for log searching](/blog/search-text-in-files-linux-grep), [CIS Windows Server Level 1 hardening](/blog/cis-windows-server-level1-hardening) for enabling the audit policies above, and the [Cyber Kill Chain](/blog/cyber-kill-chain) for mapping what you find to attack stages.*

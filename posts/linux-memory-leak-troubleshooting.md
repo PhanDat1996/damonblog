@@ -1,358 +1,221 @@
 ---
-title: "Linux Memory Leak Troubleshooting: RSS vs VSZ Explained"
+title: "Linux Memory Leak Troubleshooting: Prove It, Then Find It"
 date: "2026-04-21"
-excerpt: "How to troubleshoot memory leaks on Linux — understanding RSS vs VSZ, tracking memory growth over time, identifying the leaking process, and real debugging steps from production systems."
+updated: "2026-10-28"
+excerpt: "Service gets OOM-killed every few days? Use RSS, PSS and smaps to tell a real memory leak from cache and allocator growth, then find which process leaks."
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
-slug: "linux-memory-leak-troubleshooting-rss-vsz"
 category: "linux"
+---
+
+The service restarts every three days. Nobody touched it. In the kernel log there's a line ending in `Killed process 8823 (java)`, and the memory graph is a sawtooth: a slow climb, a cliff, another slow climb.
+
+That looks like a leak. Sometimes it is. Sometimes it's a cache with no size limit, an allocator that doesn't return memory to the OS, or a container limit set lower than the application's normal working set. Each one has a different fix, so the first job is to prove which one you have.
+
+If you just need to know how much memory the box has free, see [Check Memory Usage in Linux](/blog/linux-check-memory-usage-free-top). This post is about a process whose memory keeps growing.
+
 ---
 
 ## TL;DR
 
-- **RSS (Resident Set Size)** = actual physical RAM the process is using — **this is the number that matters**
-- **VSZ (Virtual Size)** = virtual address space including shared libs and unmapped memory — almost always misleadingly large, ignore it
-- A memory leak is confirmed when **RSS grows consistently over time without leveling off**
-- `ps aux --sort=-%mem` sorts by `%MEM` which is based on RSS — use this first
-- Track RSS over time with a simple loop: `while true; do ps -p <pid> -o rss=; sleep 60; done`
-- `avail Mem` in top/free — not `free` — is the real available memory
-- OOM killer in `dmesg` is the last-resort symptom: the kernel already killed something
+```bash
+journalctl -k | grep -iE 'killed process|oom-kill'      # was it the OOM killer?
+ps -eo pid,rss,etime,comm --sort=-rss | head            # biggest processes and their age
+pidstat -r -p <PID> 60                                  # RSS every minute (sysstat)
+grep -E '^(Rss|Pss|Anonymous|Swap):' /proc/<PID>/smaps_rollup
+```
+
+A leak is **anonymous memory that keeps growing even when load is flat**, and does not come back down. Everything below is about measuring that properly.
 
 ---
 
-## Introduction: Memory Leaks in Production
+## Which memory number to watch
 
-Memory usage climbs over hours. By midnight, the service starts responding slowly. By 3am, it is OOM-killed and restarted. By the next afternoon, it is climbing again.
-
-**Memory leaks in Linux** are slow, insidious, and often go unnoticed until they cause an outage. The reason: Linux memory management is designed to use all available RAM productively, so memory usage naturally being high is expected. A leak is specifically when memory is allocated but never freed — and the only reliable way to detect it is tracking RSS over time.
-
-This guide covers exactly how to do that.
-
----
-
-## Understanding RSS vs VSZ
-
-This is the most important concept for memory leak troubleshooting on Linux. Getting it wrong leads to false alarms and missed leaks.
-
-### VSZ — Virtual Memory Size
-
-```bash
-ps aux | head -2
-# USER  PID  %CPU %MEM    VSZ   RSS ...
-# app  1234   2.1  4.2  4194304  65536 ...
-#                         4GB    64MB
-```
-
-VSZ is the total virtual address space the process has mapped. This includes:
-- The application binary itself
-- Shared libraries (libc, libssl, etc.) — mapped by the kernel but shared across all processes
-- Memory that has been `mmap`'d but not yet accessed
-- Heap allocations that have been requested but not touched (lazy allocation)
-- Memory-mapped files
-
-A Java process will typically show VSZ of 4–8GB even when it is using only 400MB of actual RAM. This is normal — the JVM reserves large virtual address space for heap management.
-
-**VSZ is not a useful indicator of memory pressure. Do not alert on it.**
-
-### RSS — Resident Set Size
-
-RSS is the actual physical RAM currently occupied by the process. This is:
-- Pages that are actively loaded in RAM
-- Not shared with other processes (though some pages, like shared library code, are shared — RSS double-counts these, but it is still a better indicator than VSZ)
-
-**RSS is the number to watch for memory leak detection.**
-
-A process with RSS growing from 400MB to 4GB over 24 hours has a memory leak. A process with VSZ of 8GB and RSS of 400MB is perfectly normal.
-
-### The Memory Columns in ps
-
-```bash
-ps aux | awk 'NR==1 || NR<=5'
-```
-
-| Column | Full name | What it measures | Use for leaks? |
+| Metric | Where | What it counts | For leak hunting |
 |---|---|---|---|
-| `VSZ` | Virtual Set Size | Total virtual address space | ❌ No |
-| `RSS` | Resident Set Size | Physical RAM in use | ✅ Yes |
-| `%MEM` | Memory percent | RSS as % of total RAM | ✅ Yes |
+| VSZ / VIRT | `ps`, `top` | All mapped address space, touched or not | Ignore. Huge VSZ is normal |
+| RSS / RES | `ps`, `top`, `pidstat` | Pages in RAM now, **shared pages counted in full** | Good trend signal for one process |
+| PSS | `smaps_rollup`, `smem` | RSS with shared pages divided among sharers | Use when comparing or summing processes |
+| Anonymous | `smaps_rollup` | Heap, stacks, private mmap; not file-backed | **The leak usually lives here** |
+| Swap | `smaps_rollup`, `VmSwap` in `status` | Pages pushed to swap | A leaking process often swaps first |
+
+Two traps with RSS:
+
+1. **A leak can hide in swap.** If the system swaps, a leaking process's RSS can level off while its swap keeps growing. Track `Rss + Swap`, or `Anonymous + Swap`.
+2. **RSS includes file-backed pages** such as mapped libraries and files read with `mmap`. Those can be dropped under pressure, so they aren't the leak.
+
+```bash
+grep -E '^(Rss|Pss|Shared_Clean|Private_Dirty|Anonymous|Swap):' /proc/8823/smaps_rollup
+```
+
+```
+Rss:             2097460 kB
+Pss:             2081988 kB
+Shared_Clean:      17204 kB
+Private_Dirty:   2074356 kB
+Anonymous:       2074120 kB
+Swap:              48300 kB
+```
+
+`smaps_rollup` needs kernel 4.14 or later. On older kernels, sum the same fields from `/proc/<PID>/smaps`.
 
 ---
 
-## Reading Memory in top and free
-
-### top Memory Section
-
-```
-MiB Mem :  15258.9 total,    423.1 free,   9842.6 used,   4993.2 buff/cache
-MiB Swap:   4096.0 total,   3841.2 free,    254.8 used.   4832.5 avail Mem
-```
-
-| Field | What it means |
-|---|---|
-| `total` | Physical RAM installed |
-| `free` | Completely unused RAM |
-| `used` | RAM used by processes |
-| `buff/cache` | RAM used for disk cache (reclaimable) |
-| `avail Mem` | **RAM available for new allocations** |
-
-**`avail Mem` is the number that matters.** The kernel uses unused RAM for disk cache (`buff/cache`), which it reclaims when processes need more memory. `free` alone is misleading — a system with `free: 200MB` and `avail Mem: 5GB` has plenty of memory. A system with `free: 200MB` and `avail Mem: 300MB` is running low.
+## Step 1: Confirm what killed it
 
 ```bash
-# Check available memory
-free -h
-# Or
-cat /proc/meminfo | grep -E "MemTotal|MemFree|MemAvailable|Cached|SwapUsed"
+journalctl -k --since "7 days ago" | grep -iE 'out of memory|oom-kill|killed process'
 ```
 
-### Swap as a Warning Sign
-
-```bash
-free -h | grep Swap
-# Swap:         4.0Gi       255Mi       3.8Gi
+```
+Memory cgroup out of memory: Killed process 8823 (java) total-vm:6843120kB, anon-rss:2081340kB, file-rss:15720kB, shmem-rss:0kB, UID:1001 pgtables:4512kB oom_score_adj:0
 ```
 
-`255Mi used` of swap means the system has needed to swap memory out at some point. It could be historical. What matters is the trend:
+Read two things:
 
-```bash
-# Watch swap usage over time
-watch -n 5 'free -h | grep Swap'
-```
+- **`Memory cgroup out of memory`** means a cgroup limit was hit (container, systemd `MemoryMax=`, Kubernetes `limits.memory`), not the whole machine. The host may have had plenty of free RAM. A plain `Out of memory:` line means the whole system ran out.
+- **`anon-rss`** is the process's private memory at the moment of death. Compare it with its normal size after startup.
 
-If swap usage is growing, memory pressure is increasing. The system will degrade before hitting OOM.
+If there's no OOM line but the process still died, check the application's own logs and `systemctl status`; a JVM throwing `OutOfMemoryError` and exiting is a different event from the kernel killing it.
 
 ---
 
-## Step-by-Step Memory Leak Detection
+## Step 2: Record a trend
 
-### Step 1: Identify the Suspicious Process
+One snapshot proves nothing. Record RSS over hours, with load in mind:
 
 ```bash
-# Sort by memory (RSS-based)
-ps aux --sort=-%mem | head -15
-
-# Or in top, press M to sort by memory
-top
+pidstat -r -p 8823 60 | tee mem-8823.log
 ```
 
-Look for:
-- Processes with high `%MEM`
-- Processes where `RSS` seems large relative to what the application should use
-- Multiple instances of the same application where one has significantly higher RSS
-
-### Step 2: Establish a Baseline
-
-Before concluding there is a leak, get a baseline.
+Without sysstat:
 
 ```bash
-PID=1234
-ps -p $PID -o pid,rss,vsz,comm
-# PID   RSS      VSZ    COMMAND
-# 1234  65536    4194304 java
-```
-
-Note the RSS value. Note the time.
-
-### Step 3: Track RSS Over Time
-
-```bash
-PID=1234
-
-# Track every minute for an hour
-while true; do
-  TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-  RSS=$(ps -p $PID -o rss= | tr -d ' ')
-  echo "$TIMESTAMP RSS: ${RSS} KB ($(( RSS / 1024 )) MB)"
+PID=8823
+while kill -0 "$PID" 2>/dev/null; do
+  printf '%s %s\n' "$(date +%FT%T)" \
+    "$(awk '/^(Anonymous|Swap):/{s+=$2} END{print s}' /proc/$PID/smaps_rollup)"
   sleep 60
-done | tee /tmp/memory_track.log
+done | tee anon-$PID.log
 ```
 
-What to look for:
-- **RSS grows consistently** without plateauing → memory leak
-- **RSS grows then stabilizes** → expected behavior (caching, connection pools warming up)
-- **RSS grows and shrinks** → normal garbage collection or cache eviction
-- **RSS grows in steps** → batch processing or load-correlated — not necessarily a leak
+That prints anonymous memory plus swap in kB, one line a minute, and stops when the process exits.
 
-```bash
-# Quick analysis of the tracking log
-awk '{print NR, $NF}' /tmp/memory_track.log | tail -20
-```
+How to read the curve:
 
-### Step 4: Calculate the Rate
-
-```bash
-# From tracking log, get first and last RSS
-head -1 /tmp/memory_track.log
-tail -1 /tmp/memory_track.log
-
-# If RSS grew from 400MB to 600MB over 60 minutes:
-# Growth rate: ~3.3 MB/minute
-# Time to exhaust 8GB available: (8000-600) / 3.3 = ~2242 minutes = ~37 hours
-```
-
-Extrapolating the growth rate tells you how urgent the fix is.
-
-### Step 5: Compare Across Instances
-
-If you run multiple instances of the same service, compare their RSS:
-
-```bash
-ps aux | grep -v grep | grep myapp | awk '{print $2, $6/1024 "MB", $11}' | sort -k2 -rn
-# 8823  1842MB  java -jar service.jar   ← this one is leaking
-# 8901   412MB  java -jar service.jar
-# 8902   408MB  java -jar service.jar
-```
-
-The instance with significantly higher RSS — especially the longest-running one — is your leak candidate.
-
----
-
-## Real Production Scenarios
-
-### Scenario 1: Java Heap Leak
-
-RSS climbing 50MB per hour on a Java service.
-
-```bash
-# Confirm the process and RSS
-ps -p 8823 -o pid,rss,vsz,comm
-# Attach jmap if JDK is available
-jmap -histo 8823 | head -30
-# Shows top heap-consuming classes
-```
-
-Top Java memory leak causes:
-- Objects cached in static collections (HashMap, List) without eviction policy
-- ThreadLocal variables not cleaned up
-- Event listeners registered but never removed
-- Connection pools growing without bound
-
-```bash
-# Check JVM heap with jstat
-jstat -gcutil 8823 1000 10
-# If 'OU' (Old generation Used) grows every 10 seconds and GC doesn't reclaim it: heap leak
-```
-
-### Scenario 2: C/C++ Application — File Descriptor Leak Causing Memory Growth
-
-RSS climbing but slowly — 5MB per day.
-
-```bash
-# Check file descriptor count
-ls /proc/8823/fd | wc -l
-
-# Watch it grow
-watch -n 5 'ls /proc/8823/fd | wc -l'
-```
-
-If FD count grows with RSS, it is a file descriptor leak — open files accumulate memory in the kernel. Each open file descriptor holds kernel buffers.
-
-```bash
-# What file types are leaking?
-ls -la /proc/8823/fd | awk '{print $NF}' | grep -oE '\.(log|sock|pipe|anon)' | sort | uniq -c
-```
-
-### Scenario 3: OOM Kill — Post-Mortem
-
-Service was OOM-killed. Memory appears normal now after restart. What happened?
-
-```bash
-# Check kernel messages for OOM kill
-dmesg | grep -A10 "oom_kill_process\|Out of memory\|Killed process"
-
-# Output includes:
-# [timestamp] Out of memory: Killed process 8823 (java) total-vm:8192000kB, anon-rss:7500000kB
-# Shows: which process, virtual size, and actual RSS at time of kill
-```
-
-```bash
-# Check if it happened before (previous boots)
-journalctl -k --since "7 days ago" | grep -i "oom\|killed\|out of memory"
-```
-
-The OOM message shows you exactly how much memory the killed process had. Compare that to normal RSS — if it was 10x normal, you have a confirmed leak.
-
-### Scenario 4: Memory Leak in Node.js
-
-```bash
-# Track RSS for a Node process
-NODE_PID=$(pgrep -f "node server.js")
-while true; do
-  echo "$(date): $(ps -p $NODE_PID -o rss= | tr -d ' ') KB"
-  sleep 30
-done | tee /tmp/node_mem.log
-```
-
-Node.js specific investigation:
-
-```bash
-# Check if V8 heap dump is enabled
-# Trigger heap snapshot (if --inspect enabled)
-kill -USR2 $NODE_PID  # sends SIGUSR2, triggers heap dump in some configurations
-```
-
-Common Node.js memory leak causes:
-- Event listeners accumulating (`EventEmitter` without `removeListener`)
-- Closures holding references to large objects
-- Global caches without size limits
-- Timers (`setInterval`) not cleared
-
----
-
-## Distinguishing a Leak from Normal Growth
-
-Not every RSS increase is a leak.
-
-| Pattern | Interpretation |
+| Shape | Usually means |
 |---|---|
-| RSS grows then flatlines | Normal — application reached steady state |
-| RSS grows proportionally with active connections | Normal — connection pool or per-connection buffers |
-| RSS grows overnight and drops after restart | Likely leak |
-| RSS grows and never comes back down, even under no load | Confirmed leak |
-| RSS growing in multiple instances, oldest has highest RSS | Confirmed leak (age-correlated) |
+| Rises after start, then flattens | Warm-up: caches, pools, JIT. Normal |
+| Rises and falls with traffic | Per-request buffers. Normal |
+| Steps up after specific events and never drops | Leak tied to that event (a job, reconnect, deploy of config) |
+| Rises steadily, including at night with low traffic | Leak |
+| Rises fast, then flat at a high level | Unbounded cache or allocator high-water mark; may not be a leak |
 
-**The key test:** Reduce load to near zero. Does RSS still grow or hold steady? If it grows under no load, it is a leak, not load-driven growth.
+**The strongest test: reduce load to near zero.** Real leaks keep growing (or at least never come back down). Load-driven growth stops.
+
+Estimate urgency from the slope: if anonymous memory grows 200 MB an hour and the limit is 2 GB above the current value, you have roughly 10 hours.
 
 ---
 
-## Quick Reference
+## Step 3: Rule out "it's not really a leak"
+
+### The allocator kept the memory
+
+When a C/C++ program (or a runtime built on glibc, like Python or Ruby) frees memory, glibc `malloc` often keeps it for reuse instead of returning it to the kernel, especially with many threads (each gets its own arena). RSS stays at the high-water mark of the busiest moment. This looks like a leak on a graph, but it plateaus once the peak workload has been seen.
+
+Signs: growth stops at a stable ceiling; lots of threads. Known mitigations: lower `MALLOC_ARENA_MAX` (for example `2`), or use jemalloc/tcmalloc. Test these in staging; they trade memory for some throughput.
+
+### A managed heap that's simply sized large
+
+A JVM with `-Xmx4g` will grow toward 4 GB plus metaspace, thread stacks and native buffers before a full GC is forced. That's configuration, not a leak. If the container limit is lower than heap plus off-heap overhead, it gets OOM-killed every time. Check with:
 
 ```bash
-# ── FIND HIGH MEMORY PROCESSES ───────────────────────────────────
-ps aux --sort=-%mem | head -10
-top  # press M
-
-# ── CHECK SPECIFIC PROCESS ────────────────────────────────────────
-ps -p <pid> -o pid,rss,vsz,%mem,comm
-
-# ── TRACK OVER TIME ───────────────────────────────────────────────
-while true; do echo "$(date): $(ps -p <pid> -o rss= | tr -d ' ') KB"; sleep 60; done
-
-# ── SYSTEM MEMORY ─────────────────────────────────────────────────
-free -h                              # overview
-cat /proc/meminfo | grep MemAvailable # available RAM
-top  # avail Mem in header
-
-# ── OOM INVESTIGATION ─────────────────────────────────────────────
-dmesg | grep -i "oom\|killed process"
-journalctl -k | grep -i "out of memory"
-
-# ── FILE DESCRIPTOR CHECK ─────────────────────────────────────────
-ls /proc/<pid>/fd | wc -l            # current FD count
-cat /proc/<pid>/limits | grep "open files"  # FD limit
+jcmd 8823 VM.flags | tr ' ' '\n' | grep -E 'MaxHeapSize|MaxRAMPercentage'
+cat /sys/fs/cgroup/memory.max          # inside the container, cgroup v2
 ```
 
+### It's the kernel, not the process
+
+Memory that grows on the host but in no process's RSS is usually kernel memory, typically slab:
+
+```bash
+grep -E '^(Slab|SReclaimable|SUnreclaim):' /proc/meminfo
+slabtop -o | head -15
+```
+
+A growing `SUnreclaim` points to a kernel-side issue (driver, filesystem, conntrack, socket buffers), not your application. Note that file descriptors and sockets consume kernel memory too, but it's charged to slab, not to the process's RSS. A socket leak shows up as a rising count in `/proc/<PID>/fd` long before it shows up as memory; see [Too Many Open Files](/blog/too-many-open-files-linux-fix).
+
 ---
 
-## Conclusion
+## Step 4: Find where in the process
 
-**Memory leak troubleshooting in Linux** starts with one rule: ignore VSZ, track RSS.
+Linux tools tell you *which mapping* is growing:
 
-RSS is actual physical RAM. A process that grows RSS consistently — especially under low load, especially correlated with uptime rather than traffic — has a memory leak. Extrapolate the growth rate, estimate time to OOM, and plan accordingly.
+```bash
+pmap -x 8823 | sort -k3 -n | tail -10       # largest mappings by RSS (column 3)
+```
 
-The tools are simple: `ps aux --sort=-%mem` to find the candidate, a tracking loop to confirm the trend, `dmesg` to investigate OOM kills after the fact. The hard part is not the tooling — it is distinguishing a genuine leak from normal memory growth and pressure.
+A large and growing `[ anon ]` region or `[heap]` points at the native heap. A growing mapping of a file (`.so`, data file) is usually harmless page cache.
 
-**RSS grows and never comes back down: that is your leak.**
+To find *which code* is allocating, you need the runtime's own tooling:
+
+| Runtime | Tool | What to look for |
+|---|---|---|
+| Java | `jcmd <PID> GC.class_histogram`, heap dump with `jcmd <PID> GC.heap_dump /tmp/heap.hprof` | Class counts growing between two histograms |
+| Java (off-heap) | Start with `-XX:NativeMemoryTracking=summary`, then `jcmd <PID> VM.native_memory summary` | Growth in Thread, Internal, Other |
+| Node.js | Start with `--heapsnapshot-signal=SIGUSR2`, then `kill -USR2 <PID>`; or `--inspect` + DevTools | Retained objects growing between two snapshots |
+| Python | `tracemalloc` snapshots, or `memray` | Allocation sites growing between snapshots |
+| C/C++ | `valgrind --leak-check=full` (staging only, very slow), `heaptrack`, or ASan builds | "definitely lost" blocks, top allocation sites |
+
+Taking a heap dump pauses the process and writes a file roughly the size of the heap. Do it on one instance taken out of the load balancer, and make sure the disk has room.
+
+The method is the same everywhere: **take two snapshots some time apart and diff them.** Whatever grew between them is the candidate. A single snapshot just shows what's big, which is often legitimate.
+
+Common causes once you find the type:
+
+- Maps or lists used as caches with no eviction or TTL.
+- Listeners, callbacks or timers registered per request and never removed.
+- `ThreadLocal`s on pooled threads that are never cleared (Java).
+- Closures keeping large request objects alive (Node.js).
+- Connections or buffers not returned to a pool on error paths.
 
 ---
 
-*Related reading: [ps Command Linux: The Engineer's Troubleshooting Guide](/blog/ps-command-linux-troubleshooting-guide) — using ps for memory investigation. [Linux High CPU Usage: Step-by-Step Troubleshooting](/blog/linux-high-cpu-usage-troubleshooting) — when the problem is CPU, not memory. [Linux Debugging Tools Every Engineer Should Know](/blog/linux-debugging-tools-guide) — full toolkit overview.*
+## Compare instances to confirm
+
+If you run several identical instances, the oldest one should be the biggest if it's a leak:
+
+```bash
+ps -C java -o pid,etime,rss --sort=-rss
+```
+
+```
+    PID     ELAPSED    RSS
+   8823  3-02:14:51 2097460
+   8901    05:12:40  612340
+   8902    05:12:38  598120
+```
+
+Memory that correlates with **uptime** rather than with traffic is the signature of a leak.
+
+---
+
+## Stopgaps while the fix is written
+
+- **Set a memory limit so the failure is predictable**: `MemoryMax=` in a systemd unit (cgroup v2) or a container limit, with `Restart=on-failure`. One service restarting is better than the OOM killer choosing a random victim on a shared host.
+- **Scheduled restarts** before the limit is reached. Not pretty, but it buys time.
+- **Don't just add swap.** A leaking process will fill it too, and the server becomes slow before it becomes dead.
+
+---
+
+## Quick checklist
+
+1. Check the kernel log: system OOM or cgroup OOM? What was `anon-rss`?
+2. Record `Anonymous + Swap` (or RSS) every minute for hours, alongside traffic.
+3. Plateau or steady climb? Rule out allocator high-water marks, heap sizing and kernel slab.
+4. Find the growing mapping (`pmap -x`), then use runtime tools and diff two snapshots.
+5. Put a limit and restart policy in place until the fix ships.
+
+---
+
+*Related: [Linux Performance Troubleshooting](/blog/linux-performance-troubleshooting-guide) for where memory fits in the bigger triage. [ps Command for Troubleshooting](/blog/ps-command-linux-troubleshooting) for the ps memory columns. [Linux High CPU Usage](/blog/linux-high-cpu-usage-guide) when GC churn makes a memory problem look like a CPU one.*

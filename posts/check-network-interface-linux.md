@@ -1,279 +1,233 @@
 ---
-title: "How to Check Network Interface in Linux: ip, ifconfig, ethtool"
+title: "Check Network Interfaces on Linux: ip, ethtool, Errors"
 date: "2026-04-22"
-excerpt: "Check network interfaces in Linux with ip link, ip addr, and ethtool — see IP addresses, interface state, link speed, and diagnose interface-level network problems."
+updated: "2026-10-28"
+excerpt: "Check interface state, IP addresses, link speed and error counters on Linux with ip and ethtool, and learn what UP, LOWER_UP and NO-CARRIER mean."
 tags: ["linux", "networking", "troubleshooting", "infrastructure"]
 featured: false
-slug: "check-network-interface-linux-guide"
 category: "linux"
 ---
 
-Network is down. Or you need to know the IP, the interface name, link speed, or whether an interface is actually up. Here's every command you need.
+A server dropped off the network, or it's reachable but slow, and you need to rule out the interface itself before chasing firewalls and DNS. Is the link up? Does it have the address you expect? Is the NIC quietly dropping packets?
+
+```bash
+ip -br link          # every interface and its state, one line each
+ip -br addr          # same, with IP addresses
+ip -s link show eth0 # error and drop counters
+sudo ethtool eth0    # speed, duplex, link detected
+```
+
+Interface names differ per machine (`eth0`, `ens5`, `enp1s0`…). Substitute yours.
 
 ---
 
-## TL;DR
+## Overview in two commands
 
 ```bash
-ip link show              # all interfaces + state (UP/DOWN)
-ip addr show              # interfaces + IP addresses
-ip addr show eth0         # specific interface
-ethtool eth0              # link speed, duplex, autoneg
+ip -br link
 ```
+
+```
+lo               UNKNOWN        00:00:00:00:00:00 <LOOPBACK,UP,LOWER_UP>
+ens5             UP             0a:1b:2c:3d:4e:5f <BROADCAST,MULTICAST,UP,LOWER_UP>
+ens6             DOWN           0a:1b:2c:3d:4e:60 <BROADCAST,MULTICAST>
+docker0          DOWN           02:42:8c:1a:00:01 <NO-CARRIER,BROADCAST,MULTICAST,UP>
+```
+
+```bash
+ip -br addr
+```
+
+```
+lo               UNKNOWN        127.0.0.1/8 ::1/128
+ens5             UP             10.0.1.10/24 fe80::81b:2cff:fe3d:4e5f/64
+ens6             DOWN
+docker0          DOWN           172.17.0.1/16
+```
+
+`-br` (brief) is the fastest way to see everything at once. Use the full output when you need details.
 
 ---
 
-## ip link: Interface State
+## UP, LOWER_UP, NO-CARRIER: what the flags mean
 
 ```bash
-ip link show
+ip link show ens5
 ```
 
 ```
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP
-    link/ether 52:54:00:ab:cd:ef brd ff:ff:ff:ff:ff:ff
-3: eth1: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN
-    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff
+2: ens5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 0a:1b:2c:3d:4e:5f brd ff:ff:ff:ff:ff:ff
 ```
 
-Key flags in `<...>`:
-- `UP` — interface is administratively up
-- `LOWER_UP` — physical link is connected (cable plugged in)
-- `NO-CARRIER` — cable is disconnected or link is down
+There are two separate things here:
 
-`state UP` vs `state DOWN`:
-- `UP` — interface is enabled and has a link
-- `DOWN` — disabled or no physical link
-- `UNKNOWN` — loopback (always shows UNKNOWN, this is normal)
+| Field | Meaning |
+|---|---|
+| `UP` (in `<...>`) | **Administratively** enabled: someone or something ran `ip link set ... up` |
+| `LOWER_UP` | The physical/virtual link layer has a carrier: cable plugged in, switch port up |
+| `NO-CARRIER` | Enabled, but no link. Cable, switch port, or the other end of a virtual link |
+| `state UP/DOWN` | The kernel's operational state, combining both of the above |
+| `state UNKNOWN` | The driver doesn't report link state. Normal for `lo`, tun/tap devices and some virtual NICs |
+
+So `<...,UP,NO-CARRIER> state DOWN` means "configured up, but there's no link": a physical or switch problem, not a config one. `<BROADCAST,MULTICAST> state DOWN` with no `UP` means nobody brought it up: a config or network-manager problem.
+
+`docker0` showing `NO-CARRIER` when no containers are running is normal; a bridge has no carrier until something is attached.
 
 ---
 
-## ip addr: IP Addresses
+## IP addresses
 
 ```bash
-# All interfaces with IPs
-ip addr show
-
-# Specific interface
-ip addr show eth0
+ip addr show ens5
 ```
 
 ```
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP
-    link/ether 52:54:00:ab:cd:ef brd ff:ff:ff:ff:ff:ff
-    inet 192.168.1.100/24 brd 192.168.1.255 scope global dynamic eth0
-       valid_lft 84721sec preferred_lft 84721sec
-    inet6 fe80::5054:ff:feab:cdef/64 scope link
+2: ens5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9001 qdisc mq state UP group default qlen 1000
+    link/ether 0a:1b:2c:3d:4e:5f brd ff:ff:ff:ff:ff:ff
+    inet 10.0.1.10/24 metric 100 brd 10.0.1.255 scope global dynamic ens5
+       valid_lft 3412sec preferred_lft 3412sec
+    inet6 fe80::81b:2cff:fe3d:4e5f/64 scope link
        valid_lft forever preferred_lft forever
 ```
 
-- `inet` — IPv4 address and prefix
-- `inet6` — IPv6 address
-- `scope global` — routable address
-- `scope link` — link-local only (not routable)
-- `dynamic` — assigned by DHCP
+- `inet` / `inet6`: address and prefix length.
+- `scope global`: usable for routing. `scope link`: link-local only (the `fe80::` address every IPv6 interface gets).
+- `dynamic` with a `valid_lft` countdown: assigned by DHCP. If `valid_lft` gets close to 0 and the lease doesn't renew, the address will disappear.
+
+Just the address, for scripts:
 
 ```bash
-# Just the IP, no other info
-ip addr show eth0 | grep "inet " | awk '{print $2}'
-# 192.168.1.100/24
+ip -4 -o addr show ens5 | awk '{print $4}'
+# 10.0.1.10/24
 ```
+
+Which interface does traffic to a given host actually use?
+
+```bash
+ip route get 10.0.2.15
+# 10.0.2.15 via 10.0.1.1 dev ens5 src 10.0.1.10 uid 0
+```
+
+This is the answer to "which interface is my default", and it also accounts for policy routing and more specific routes.
 
 ---
 
-## ifconfig: Legacy Alternative
+## Error and drop counters
 
 ```bash
-# Install if needed
-apt install net-tools
-
-ifconfig                  # all interfaces
-ifconfig eth0             # specific interface
+ip -s link show ens5
 ```
 
-`ip` is the modern replacement. Use it instead — `ifconfig` is deprecated.
+```
+2: ens5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9001 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 0a:1b:2c:3d:4e:5f brd ff:ff:ff:ff:ff:ff
+    RX:    bytes  packets errors dropped  missed   mcast
+    8251739102 12873310      0     214       0       0
+    TX:    bytes  packets errors dropped carrier collsns
+    2918374650  9182733      0       0       0       0
+```
 
----
-
-## ethtool: Physical Link Details
+These are totals since the interface came up, so a non-zero value on its own means little. What matters is whether they **grow**:
 
 ```bash
-ethtool eth0
+watch -d -n 2 'ip -s link show ens5'
 ```
 
-```
-Settings for eth0:
-    Supported link modes: 10baseT/Half 10baseT/Full 100baseT/Half 100baseT/Full 1000baseT/Full
-    Advertised link modes: 10baseT/Half 10baseT/Full 100baseT/Half 100baseT/Full 1000baseT/Full
-    Speed: 1000Mb/s
-    Duplex: Full
-    Auto-negotiation: on
-    Link detected: yes
-```
-
-Key fields:
-- `Speed` — current link speed
-- `Duplex` — Full (normal) or Half (old/problem)
-- `Auto-negotiation` — should be `on` for most NICs
-- `Link detected: yes/no` — physical cable connected?
-
-```bash
-# Check statistics (errors, drops)
-ethtool -S eth0 | grep -E "rx_errors|tx_errors|rx_dropped|tx_dropped"
-```
-
----
-
-## Bring Interface Up or Down
-
-```bash
-# Bring interface up
-ip link set eth0 up
-
-# Bring interface down
-ip link set eth0 down
-
-# Bounce interface (down + up)
-ip link set eth0 down && ip link set eth0 up
-```
-
-**Note:** On systems managed by NetworkManager, use `nmcli` instead to avoid config conflicts:
-
-```bash
-nmcli device connect eth0
-nmcli device disconnect eth0
-```
-
----
-
-## Real Examples
-
-### Find all interfaces and their IPs
-
-```bash
-ip -br addr show
-```
-
-```
-lo      UNKNOWN  127.0.0.1/8 ::1/128
-eth0    UP       192.168.1.100/24 fe80::1/64
-eth1    DOWN
-```
-
-`-br` (brief) gives a compact, readable summary.
-
-### Find the default network interface
-
-```bash
-ip route | grep default
-# default via 192.168.1.1 dev eth0 proto dhcp
-
-# Interface for outbound traffic
-ip route get 8.8.8.8 | grep dev
-# ... dev eth0 ...
-```
-
-### Check for interface errors
-
-```bash
-ip -s link show eth0
-```
-
-```
-2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
-    link/ether 52:54:00:ab:cd:ef
-    RX:  bytes  packets  errors  dropped  missed  mcast
-    1234567890  9876543       0        0       0      0
-    TX:  bytes  packets  errors  dropped  carrier collsns
-     987654321  8765432       0        0       0       0
-```
-
-Non-zero `errors` or `dropped` = interface-level problems (bad cable, speed mismatch, NIC issues).
-
-### Find interface by IP
-
-```bash
-ip addr show | grep "192.168.1.100"
-# inet 192.168.1.100/24 brd 192.168.1.255 scope global eth0
-```
-
-### Check MTU
-
-```bash
-ip link show eth0 | grep mtu
-# mtu 1500
-
-# Change MTU
-ip link set eth0 mtu 9000   # jumbo frames
-```
-
----
-
-## Network Interface Naming
-
-Modern Linux uses predictable names instead of `eth0`:
-
-| Name pattern | Meaning |
+| Counter rising | Likely cause |
 |---|---|
-| `eth0` | Old kernel naming (still used in VMs) |
-| `ens3`, `ens33` | PCI slot naming (most cloud VMs) |
-| `enp1s0` | PCI bus naming |
-| `eno1` | Embedded NIC (on-board) |
-| `wlan0`, `wlp3s0` | Wireless interfaces |
-| `lo` | Loopback |
+| RX `errors` | Bad cable or optic, CRC errors, duplex mismatch |
+| RX `dropped` | The kernel discarded packets, e.g. a full backlog under load. Depending on kernel and driver, frames nobody handles (unknown protocol or VLAN) can also land here, which is harmless |
+| RX `missed` | The NIC ran out of buffer before the kernel could take packets: CPU or IRQ saturation |
+| TX `carrier` | Link flapping |
+
+For the driver's own detailed counters:
 
 ```bash
-# List all interface names quickly
+sudo ethtool -S ens5 | grep -iE 'err|drop|miss|crc' | grep -v ': 0$'
+```
+
+Names vary by driver, so grep loosely and look only at non-zero values.
+
+---
+
+## ethtool: speed, duplex, link
+
+```bash
+sudo ethtool eno1
+```
+
+```
+Settings for eno1:
+        Supported link modes:   10baseT/Half 10baseT/Full
+                                100baseT/Half 100baseT/Full
+                                1000baseT/Full
+        Speed: 1000Mb/s
+        Duplex: Full
+        Auto-negotiation: on
+        Link detected: yes
+```
+
+Things to check on physical servers:
+
+- **Speed lower than expected** (100Mb/s on a gigabit port) usually means a damaged cable or a bad patch panel port, with autonegotiation falling back.
+- **Duplex: Half** on modern hardware is almost always a negotiation problem, and it causes errors and collisions under load.
+- **Link detected: no** confirms what `NO-CARRIER` already said.
+
+On VMs and cloud instances, ethtool is less informative. Many virtual NICs report `Speed: Unknown!` or a nominal value, and the real bandwidth limit comes from the instance type.
+
+---
+
+## MTU
+
+```bash
+ip link show ens5 | grep -o 'mtu [0-9]*'
+```
+
+A mismatch, such as 9001 on the host but 1500 somewhere on the path or 1450 inside a VPN/overlay, causes a recognizable failure: small requests work, large transfers or TLS handshakes stall. `tracepath` finds the path MTU; see [traceroute examples](/blog/traceroute-linux-examples).
+
+`ip link set ens5 mtu 1500` changes it immediately but not persistently, and setting an MTU the network doesn't support breaks connectivity. Change it in your network configuration (netplan, NetworkManager), not ad hoc.
+
+---
+
+## Interface names
+
+| Name | Meaning |
+|---|---|
+| `eno1` | Onboard NIC, index from firmware |
+| `ens5` | Hot-plug slot index from firmware. Common on cloud VMs |
+| `enp3s0` | PCI bus 3, slot 0 |
+| `eth0` | Kernel's traditional naming. Still used where predictable naming is disabled, and inside containers |
+| `wlp2s0` | Wireless on PCI bus 2 |
+| `veth*`, `docker0`, `br-*` | Container plumbing |
+
+```bash
 ls /sys/class/net/
-# or
-ip link show | grep "^[0-9]" | awk '{print $2}' | tr -d ':'
 ```
 
 ---
 
-## Common Mistakes
-
-**Mistake 1: Interface shows UP but no link**
-`state UP` means administratively enabled. `LOWER_UP` means physical link is connected. An interface can be UP without LOWER_UP (cable disconnected):
+## Bringing an interface down or up
 
 ```bash
-ip link show eth0
-# <BROADCAST,MULTICAST,UP,NO-CARRIER>   ← admin up, but no cable
-# <BROADCAST,MULTICAST,UP,LOWER_UP>     ← up with working link
+sudo ip link set ens6 up
 ```
 
-**Mistake 2: Using ifconfig on interfaces that ip doesn't show**
-If `ip addr show` shows an interface but `ifconfig` doesn't, you have old `net-tools`. `ip` is correct.
-
-**Mistake 3: Not checking errors with `-s`**
-High packet errors or drops indicate hardware or cable problems, not software issues.
+**Warning:** `ip link set <iface> down` on the interface your SSH session uses cuts you off, and taking a link down removes the routes through it. When it comes back up, the default route and other static routes return only if your network manager re-applies them. Only bounce interfaces you aren't connected through, or do it from a console. To re-apply configuration properly, use the network manager instead; see [restart networking](/blog/restart-network-service-linux).
 
 ---
 
-## Quick Reference
+## ifconfig?
 
-```bash
-ip link show              # all interfaces + state
-ip -br addr show          # brief: name + state + IPs
-ip addr show eth0         # specific interface
-ip -s link show eth0      # with statistics
-ethtool eth0              # speed, duplex, link detected
-ip route show             # routing table
-ip link set eth0 up/down  # enable/disable
+`ifconfig` (from `net-tools`) still works where it's installed, but it isn't on most minimal images, and it hides things: it shows only one IPv4 address per interface, so addresses added with `ip addr add` don't appear without a label. When `ifconfig` and `ip` disagree, `ip` is right.
 
-# Legacy (ifconfig)
-ifconfig                  # all interfaces
-ifconfig eth0             # specific interface
-```
+| ifconfig | ip |
+|---|---|
+| `ifconfig` | `ip addr` |
+| `ifconfig -a` | `ip link` |
+| `ifconfig eth0 up` | `ip link set eth0 up` |
+| `ifconfig eth0 mtu 1500` | `ip link set eth0 mtu 1500` |
 
 ---
 
-## Conclusion
-
-`ip link show` for interface state. `ip addr show` for IP addresses. `ip -br addr show` for a clean one-liner overview. `ethtool eth0` when you suspect a physical link problem. For interface errors (dropped packets, RX errors), add `-s` to ip link. `ip` completely replaces `ifconfig` — use it.
-
----
-
-*Related: [Restart Network Service Linux](/blog/restart-network-service-linux-guide) — apply interface configuration changes. [Cannot Connect to Server Linux](/blog/cannot-connect-to-server-linux-troubleshooting) — interface check is step 1 in connectivity debugging.*
+*Related: [Cannot Connect to Server](/blog/cannot-connect-to-server-linux-troubleshooting) when the interface looks fine but connections still fail. [netstat vs ss](/blog/netstat-vs-ss-command) for the rest of the net-tools to iproute2 translations.*

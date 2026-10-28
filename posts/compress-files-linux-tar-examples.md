@@ -1,217 +1,188 @@
 ---
-title: "How to Compress Files in Linux: tar Examples"
+title: "Compress Files in Linux with tar: gzip, xz and zstd Examples"
 date: "2026-04-22"
-excerpt: "Compress files in Linux with tar — create .tar.gz and .tar.bz2 archives, choose the right compression level, and handle common tar use cases with real examples."
+updated: "2026-10-28"
+excerpt: "Create tar.gz, tar.xz and tar.zst archives in Linux, keep clean paths with -C, exclude folders correctly, and pick compression by speed versus size."
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
-slug: "compress-files-linux-tar-examples"
 category: "linux"
 ---
 
-`tar` is the standard tool for archiving and compressing files on Linux. The syntax is dense but the core patterns are simple once you know them.
-
----
-
-## TL;DR
+You need to ship a directory somewhere: a config backup before a risky change, a log bundle for a support case, a release to another server. One file, smaller than the original, that unpacks to the same tree.
 
 ```bash
-# Create .tar.gz archive
-tar -czf archive.tar.gz /path/to/directory
-
-# Create .tar.bz2 (better compression, slower)
-tar -cjf archive.tar.bz2 /path/to/directory
-
-# Create .tar.xz (best compression, slowest)
-tar -cJf archive.tar.xz /path/to/directory
-
-# View contents without extracting
-tar -tzf archive.tar.gz
+tar -czf nginx-backup.tar.gz -C /etc nginx      # gzip: the safe default
+tar -tzf nginx-backup.tar.gz | head             # check what went in
 ```
+
+That's most of it. The rest of this page covers the parts that bite: path handling, where `--exclude` has to go, and which compressor to pick.
 
 ---
 
-## The Flag System
+## The flags
 
-Every tar command has three parts: **action**, **compression**, **filename**.
+`tar` options read as a sentence: **action**, **compressor**, **file**.
 
-| Flag | Action |
+| Flag | Meaning |
 |---|---|
-| `-c` | Create archive |
-| `-x` | Extract archive |
-| `-t` | List contents |
+| `-c` | Create an archive |
+| `-t` | List an archive's contents |
+| `-x` | Extract (see [Extract tar.gz in Linux](/blog/how-to-extract-tar-gz-linux)) |
+| `-f FILE` | Archive file name; `-f -` means stdout/stdin |
+| `-v` | List files as they're processed |
+| `-C DIR` | Change to DIR before adding the paths that follow |
+| `-z` | gzip (`.tar.gz`, `.tgz`) |
+| `-j` | bzip2 (`.tar.bz2`) |
+| `-J` | xz (`.tar.xz`) |
+| `--zstd` | zstd (`.tar.zst`), GNU tar 1.31+ |
+| `-a` | Pick the compressor from the file extension |
 
-| Flag | Compression |
-|---|---|
-| `-z` | gzip (.gz) — fast, widely compatible |
-| `-j` | bzip2 (.bz2) — better compression, slower |
-| `-J` | xz (.xz) — best compression, slowest |
-| (none) | No compression (.tar only) |
-
-Always add:
-- `-f archive.tar.gz` — filename (must follow `-f` immediately)
-- `-v` — verbose (show files being processed)
-
----
-
-## Create Archives
+**`-f` takes the next word as the file name**, so it must be last in a group of short options:
 
 ```bash
-# Directory to .tar.gz
-tar -czf backup.tar.gz /var/log/app/
-
-# Multiple files/dirs
-tar -czf backup.tar.gz /var/log/app/ /etc/nginx/
-
-# With verbose output (see each file being added)
-tar -czvf backup.tar.gz /var/log/app/
-
-# Current directory
-tar -czf archive.tar.gz .
-
-# Exclude a pattern
-tar -czf backup.tar.gz /var/log/ --exclude="*.gz" --exclude="*.bz2"
-
-# Exclude a directory
-tar -czf backup.tar.gz /var/www/ --exclude=/var/www/html/uploads
+tar -czvf backup.tar.gz dir/   # right
+tar -czfv backup.tar.gz dir/   # WRONG: creates an archive named "v" containing backup.tar.gz and dir/
 ```
 
 ---
 
-## Compression Comparison
+## Paths: what ends up inside the archive
+
+tar stores paths exactly as you give them, except that GNU tar strips a leading `/` (you'll see `Removing leading '/' from member names`).
 
 ```bash
-# Same 500MB log directory:
-tar -czf  logs.tar.gz  logs/   # gzip:  ~120MB, 8 seconds
-tar -cjf  logs.tar.bz2 logs/   # bzip2: ~95MB,  45 seconds
-tar -cJf  logs.tar.xz  logs/   # xz:    ~80MB,  90 seconds
+tar -czf a.tar.gz /etc/nginx          # members: etc/nginx/nginx.conf ...
+tar -czf b.tar.gz -C /etc nginx       # members: nginx/nginx.conf ...
+cd /etc/nginx && tar -czf c.tar.gz .  # members: ./nginx.conf ...
 ```
 
-**Choose gzip** for most tasks — fast and compatible everywhere.
-**Choose xz** when transferring over slow links and compression ratio matters.
+`-C` is the clean way: the archive contains just `nginx/...`, so whoever extracts it gets one tidy folder wherever they run it. Archiving with `.` gives a "tarbomb" that spills files into the current directory on extraction; avoid that for anything you send to other people.
 
 ---
 
-## Real Examples
-
-### Backup a config directory before changes
+## Excluding files: put `--exclude` first
 
 ```bash
-tar -czf /tmp/nginx-config-backup-$(date +%Y%m%d).tar.gz /etc/nginx/
-# /tmp/nginx-config-backup-20260422.tar.gz
+tar -czf www.tar.gz --exclude='html/uploads' --exclude='*.log' -C /var/www html
 ```
 
-### Archive logs for offsite storage
+Two rules:
+
+- **Exclude options go before the paths.** Since GNU tar 1.29 they only apply to paths that come after them; put them at the end and tar warns that they had no effect.
+- **Patterns match the member names**, so with `-C /var/www html`, write `html/uploads`, not `/var/www/html/uploads`.
+
+Handy built-ins:
 
 ```bash
-# Archive last month's logs
-tar -czf /backup/logs-$(date +%Y%m).tar.gz \
-  --newer-mtime="$(date -d '1 month ago' '+%Y-%m-01')" \
-  /var/log/app/
-
-# Verify the archive
-tar -tzf /backup/logs-202603.tar.gz | head -10
+tar -czf src.tar.gz --exclude-vcs --exclude-caches -C ~/projects myapp
 ```
 
-### Compress in place without creating a separate archive (gzip single file)
+`--exclude-vcs` skips `.git`, `.svn` and similar; `--exclude-caches` skips folders containing a `CACHEDIR.TAG` file.
 
-```bash
-# Compress a single large file
-gzip /var/log/app/debug.log
-# Creates debug.log.gz, removes original
-
-# Keep original
-gzip -k /var/log/app/debug.log
-
-# Compress all .log files in a directory
-gzip /var/log/app/*.log
-```
-
-### Split archive into parts for transfer
-
-```bash
-# Create and split into 1GB chunks
-tar -czf - /var/data/ | split -b 1G - backup.tar.gz.
-
-# Files: backup.tar.gz.aa, backup.tar.gz.ab, etc.
-
-# Reassemble and extract
-cat backup.tar.gz.* | tar -xzf -
-```
+For a list of excludes, put one pattern per line in a file and use `-X excludes.txt`.
 
 ---
 
-## View Archive Contents
+## Which compressor?
+
+| Format | Flag | Speed | Size | Use it when |
+|---|---|---|---|---|
+| gzip | `-z` | Fast | Good | Default. Every system can open it. |
+| zstd | `--zstd` | Very fast | Better than gzip | Both ends are recent Linux; big backups where time matters |
+| xz | `-J` | Slow | Smallest | Distributing a release once, downloading many times |
+| bzip2 | `-j` | Slow | Between gzip and xz | Only for compatibility with something that expects it |
+| none | (none) | Fastest | Same as input | Content is already compressed (JPEG, video, `.gz` files) |
+
+Text and logs compress very well with any of them; already-compressed data barely shrinks, so don't spend CPU on it. Results vary a lot with the data, so if size or time really matters, test on a sample of your own files.
+
+Using all CPU cores:
 
 ```bash
-# List files without extracting
-tar -tzf archive.tar.gz
-
-# With detailed info (permissions, size, date)
-tar -tvzf archive.tar.gz
-
-# Check if a specific file is in the archive
-tar -tzf archive.tar.gz | grep "config.yml"
+tar -cf - -C /var/lib mysql-dump | pigz > dump.tar.gz            # parallel gzip (install pigz)
+tar -I 'zstd -T0 -10' -cf backup.tar.zst -C /srv data            # zstd, all cores, level 10
+tar -I 'xz -T0' -cf release.tar.xz -C build myapp                # xz, all cores
 ```
+
+`-I` (`--use-compress-program`) lets you pass options to the compressor. The output is a normal `.tar.gz` / `.tar.zst` / `.tar.xz` that the usual flags can extract.
 
 ---
 
-## Common Mistakes
+## Everyday recipes
 
-**Mistake 1: Getting `-f` flag position wrong**
-`-f` must immediately precede the filename. This is the most common tar mistake:
-
-```bash
-tar -czf backup.tar.gz /path    # CORRECT
-tar -czfv backup.tar.gz /path   # CORRECT (v after f before filename)
-tar -czvf backup.tar.gz /path   # CORRECT (reordered flags fine, f last before filename)
-tar -cfz backup.tar.gz /path    # WRONG: -f followed by z, then filename
-```
-
-**Mistake 2: Forgetting absolute vs relative paths**
-Archives preserve the path structure from how you specified it:
+### Back up a config folder before changing it
 
 ```bash
-tar -czf backup.tar.gz /var/log/app/   # extracts to /var/log/app/
-tar -czf backup.tar.gz var/log/app/    # extracts to var/log/app/ (relative)
-
-# To strip leading slashes (extract anywhere):
-tar -xzf backup.tar.gz --strip-components=1
+sudo tar -czf ~/nginx-$(date +%F-%H%M).tar.gz -C /etc nginx
 ```
 
-**Mistake 3: No disk space to create archive**
-Compressing 10GB of logs needs space for the archive. Check first:
+Run tar as root for system files, otherwise unreadable files are skipped with `Permission denied` and the backup is silently incomplete. Root also stores numeric owners and permissions so a restore puts them back.
+
+### Bundle logs for a support case
 
 ```bash
-df -h /tmp   # where you're writing the archive
-du -sh /var/log/app/  # size of source
+sudo tar -czf /tmp/app-logs-$(hostname)-$(date +%F).tar.gz \
+  -C /var/log --newer-mtime='3 days ago' app nginx
 ```
+
+`--newer-mtime` only includes files modified after that date, which keeps the bundle small. tar may warn `file changed as we read it` for logs being written; the archive is still usable, but the last lines of that file may be cut off.
+
+### Archive and send without a temp file
+
+```bash
+tar -czf - -C /srv data | ssh backup@host 'cat > /backups/data-$(date +%F).tar.gz'
+```
+
+Useful when the local disk has no room for the archive. For repeated syncs, `rsync` is the better tool; see [Copy Files Recursively in Linux](/blog/how-to-copy-files-recursively-linux).
+
+### Split a large archive
+
+```bash
+tar -czf - -C /srv data | split -b 2G -d - data.tar.gz.part-
+cat data.tar.gz.part-* | tar -xzf -        # reassemble and extract
+```
+
+### Compress a single file (no tar needed)
+
+```bash
+gzip -k big.log           # big.log.gz, keep original
+zstd big.log              # big.log.zst, keeps original by default
+xz -k -T0 big.log         # big.log.xz
+```
+
+Without `-k`, `gzip` and `xz` delete the original after compressing.
 
 ---
 
-## Quick Reference
+## Verify before you rely on it
 
 ```bash
-# Create
-tar -czf  archive.tar.gz  path/    # gzip
-tar -cjf  archive.tar.bz2 path/    # bzip2
-tar -cJf  archive.tar.xz  path/    # xz
-tar -czf  archive.tar.gz  file1 file2 dir/   # multiple sources
-
-# View
-tar -tzf  archive.tar.gz            # list
-tar -tvzf archive.tar.gz            # detailed list
-
-# Extract (see next article)
-tar -xzf  archive.tar.gz            # extract here
-tar -xzf  archive.tar.gz -C /dest/  # extract to directory
+tar -tzf backup.tar.gz > /dev/null && echo OK     # reads the whole archive
+gzip -t backup.tar.gz                              # checks gzip integrity only
+tar -dzf backup.tar.gz -C /etc                     # compares the archive to the files on disk
 ```
 
----
-
-## Conclusion
-
-The pattern to memorise: `tar -czf output.tar.gz /source/path`. Flags in any order, but `-f` immediately before the filename. Use gzip (`.gz`) for speed and compatibility. Always verify with `tar -tzf` before sending an archive anywhere.
+A backup you haven't listed or test-extracted is a hope, not a backup. `tar -d` (`--diff`) reports files that changed since the archive was made.
 
 ---
 
-*Related: [How to Extract tar.gz Linux](/blog/how-to-extract-tar-gz-linux) — the other half of the tar workflow. [How to Delete Large Files Linux Safely](/blog/how-to-delete-large-files-linux-safely) — what to do with source files after archiving.*
+## Space and deletion gotchas
+
+- **The archive needs room.** On a nearly full disk, write it to another filesystem (`-f /data/backup.tar.gz`) or stream it off the box as shown above. Check with `df -h` first.
+- **`--remove-files` deletes the originals** after adding them. Only use it after you've verified a test archive, and never on the only copy. Deleting manually after verifying is safer; see [Delete Large Files Safely](/blog/how-to-delete-large-files-linux-safely).
+- **tar doesn't follow symlinks by default**: they're stored as links. Add `-h` to store the files they point to instead.
+
+---
+
+## FAQ
+
+**How do I compress a folder into tar.gz?**
+`tar -czf folder.tar.gz -C /path/to/parent folder`. The `-C` keeps the archive paths short and clean.
+
+**What's the difference between tar and gzip?**
+`tar` bundles many files and folders into one file and keeps permissions and structure. `gzip` compresses a single stream. `tar -z` does both: bundles, then pipes the result through gzip.
+
+**Is zstd better than gzip?**
+For most data, zstd is faster and produces smaller files at its default level. gzip's advantage is that it's available everywhere, including old systems and Windows tools.
+
+**Why does tar say "Removing leading '/' from member names"?**
+It's protecting you: archives with absolute paths would overwrite system files wherever they're extracted. Use `-C` to choose the base folder and the message goes away.

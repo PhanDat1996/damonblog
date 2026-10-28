@@ -1,227 +1,186 @@
 ---
-title: "How to Extract tar.gz in Linux: All Formats Covered"
+title: "Extract tar.gz in Linux: Commands, Options and Errors"
 date: "2026-04-22"
-excerpt: "Extract tar.gz files in Linux — handle .tar.gz, .tar.bz2, .tar.xz, and .zip formats, extract to specific directories, and handle common extraction errors."
+updated: "2026-10-28"
+excerpt: "Extract tar.gz, tar.xz, tar.zst and zip files in Linux, choose the destination with -C, pull out a single file, and fix not in gzip format errors."
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
-slug: "how-to-extract-tar-gz-linux"
 category: "linux"
 ---
 
-One command. Multiple archive formats. Here's the complete reference.
-
----
-
-## TL;DR
+You downloaded a release tarball or got a log bundle from a colleague, and you want the files out, in the right place, without spraying them over your current directory.
 
 ```bash
-tar -xzf archive.tar.gz           # extract .tar.gz here
-tar -xzf archive.tar.gz -C /dest  # extract to specific directory
-tar -xjf archive.tar.bz2          # extract .tar.bz2
-tar -xJf archive.tar.xz           # extract .tar.xz
-unzip archive.zip                  # extract .zip
+tar -tf archive.tar.gz | head                 # look first: what folder will it create?
+mkdir -p /opt/myapp && tar -xf archive.tar.gz -C /opt/myapp
 ```
 
+GNU tar detects gzip, bzip2, xz and zstd automatically when reading from a file, so `tar -xf` works for all of them. The rest of this page covers the options you'll need next and what the common error messages mean.
+
 ---
 
-## tar Format Flags
+## By format
 
-| Extension | Extract flag | Example |
-|---|---|---|
-| `.tar.gz` or `.tgz` | `-xzf` | `tar -xzf file.tar.gz` |
-| `.tar.bz2` or `.tbz2` | `-xjf` | `tar -xjf file.tar.bz2` |
-| `.tar.xz` or `.txz` | `-xJf` | `tar -xJf file.tar.xz` |
-| `.tar` (no compression) | `-xf` | `tar -xf file.tar` |
+| File | Command |
+|---|---|
+| `.tar.gz`, `.tgz` | `tar -xzf file.tar.gz` or `tar -xf file.tar.gz` |
+| `.tar.xz`, `.txz` | `tar -xJf file.tar.xz` or `tar -xf file.tar.xz` |
+| `.tar.bz2`, `.tbz2` | `tar -xjf file.tar.bz2` or `tar -xf file.tar.bz2` |
+| `.tar.zst` | `tar --zstd -xf file.tar.zst` or `tar -xf file.tar.zst` (GNU tar 1.31+) |
+| `.tar` | `tar -xf file.tar` |
+| `.zip` | `unzip file.zip -d destdir` |
+| `.gz` (one file, not a tar) | `gunzip file.gz` (add `-k` to keep the `.gz`) |
+| `.xz` / `.zst` (one file) | `unxz file.xz` / `unzstd file.zst` |
 
-Modern GNU tar also auto-detects the compression:
+Auto-detection needs to look at the file, so it **doesn't work on a pipe**. When reading from stdin, give the compression flag:
+
 ```bash
-tar -xf archive.tar.gz   # no compression flag needed — auto-detected
+curl -fsSL https://example.com/app-2.1.0.tar.gz | tar -xzf - -C /opt
 ```
 
+Without `-z` you'll get `tar: Archive is compressed. Use -z option`. `curl -f` makes curl fail on HTTP errors instead of piping an HTML error page into tar.
+
 ---
 
-## Extract to a Specific Directory
+## Look before you extract
 
 ```bash
-# Extract to /opt/app/ (directory must exist)
-tar -xzf archive.tar.gz -C /opt/app/
-
-# Create directory if it doesn't exist, then extract
-mkdir -p /opt/app && tar -xzf archive.tar.gz -C /opt/app/
+tar -tf archive.tar.gz | head -20         # names only
+tar -tvf archive.tar.gz | head            # with permissions, owner, size, date
+tar -tf archive.tar.gz | cut -d/ -f1 | sort -u   # top-level entries
 ```
 
+What you're checking:
+
+- **One top-level folder** (`myapp-2.1.0/...`): safe to extract anywhere.
+- **Many top-level files** (`./bin`, `./README`, `./lib`): a "tarbomb". Extract into an empty folder with `-C`.
+- **Paths starting with `etc/`, `usr/`, `var/`**: a system backup. Extracting it with `-C /` overwrites live files.
+
 ---
 
-## Extract a Single File From an Archive
+## Choosing the destination with -C
 
 ```bash
-# First, find the file path inside the archive
-tar -tzf archive.tar.gz | grep config
-
-# Then extract just that file
-tar -xzf archive.tar.gz var/app/config.yml
-# Extracts maintaining the path structure
+mkdir -p /tmp/extract
+tar -xf archive.tar.gz -C /tmp/extract
 ```
 
----
+`-C` changes into the folder before extracting. The folder must exist; tar won't create it (`tar: /tmp/extract: Cannot open: No such file or directory`).
 
-## Preview Before Extracting
+### Dropping the top-level folder: --strip-components
 
-```bash
-# List contents
-tar -tzf archive.tar.gz
-
-# With details (permissions, size, date)
-tar -tvzf archive.tar.gz
-
-# Check what directory it will create
-tar -tzf archive.tar.gz | head -5
-```
-
-Always check before extracting to avoid an archive that dumps hundreds of files into your current directory.
-
----
-
-## Handle Archives That Extract to Root
+A release unpacks to `myapp-2.1.0/bin/...`, but you want `/opt/myapp/bin/...`:
 
 ```bash
-# Archive created from /
-# Extracting blindly would overwrite system files!
+tar -tf myapp-2.1.0.tar.gz | head -3
+# myapp-2.1.0/
+# myapp-2.1.0/bin/
+# myapp-2.1.0/bin/myapp
 
-# Check the paths
-tar -tzf system-backup.tar.gz | head
-# ./etc/nginx/nginx.conf
-# ./var/log/app/app.log
-
-# Extract safely with --strip-components to remove leading path
-tar -xzf backup.tar.gz --strip-components=1 -C /restore/
-```
-
----
-
-## zip and Other Formats
-
-```bash
-# .zip
-unzip archive.zip
-unzip archive.zip -d /destination/
-unzip -l archive.zip    # list contents
-
-# .gz (single file, not archive)
-gunzip file.gz          # decompress in place (removes .gz)
-gzip -d file.gz         # same
-gzip -dk file.gz        # keep original .gz file
-
-# .bz2 (single file)
-bunzip2 file.bz2
-bzip2 -d file.bz2
-
-# .xz (single file)
-unxz file.xz
-xz -d file.xz
-```
-
----
-
-## Real Examples
-
-### Deploy an application from a tarball
-
-```bash
-# Check what's inside first
-tar -tzf myapp-v2.1.0.tar.gz | head
-
-# Extract to /opt
 mkdir -p /opt/myapp
-tar -xzf myapp-v2.1.0.tar.gz -C /opt/myapp --strip-components=1
-
-# Verify
-ls /opt/myapp/
+tar -xf myapp-2.1.0.tar.gz -C /opt/myapp --strip-components=1
 ```
 
-### Restore from backup
+`--strip-components=N` removes the first N path parts from every member. If the archive was made with `./` in front (`./myapp-2.1.0/bin`), you need one more.
+
+### Extracting over an existing install
+
+tar overwrites existing files with the same name and leaves other files alone, so files removed in the new version stay behind. For deployments, extracting into a fresh versioned folder and switching a symlink is cleaner:
 
 ```bash
-# Stop the service first
-systemctl stop myapp
-
-# Restore config from backup
-tar -xzf nginx-config-backup-20260422.tar.gz -C /
-
-# Verify
-ls /etc/nginx/
-
-# Restart
-systemctl start myapp
+mkdir -p /opt/myapp/releases/2.1.0
+tar -xf myapp-2.1.0.tar.gz -C /opt/myapp/releases/2.1.0 --strip-components=1
+ln -sfn /opt/myapp/releases/2.1.0 /opt/myapp/current
 ```
 
-### Extract and pipe (no temp file)
+Rolling back is then just pointing the symlink at the old release.
+
+Use `--keep-old-files` (`-k`) to refuse to overwrite anything, or `--skip-old-files` to silently skip existing files.
+
+---
+
+## Extracting only some files
 
 ```bash
-# Download and extract in one line
-curl -L https://example.com/release.tar.gz | tar -xzf - -C /opt/
+tar -tf backup.tar.gz | grep nginx.conf
+# etc/nginx/nginx.conf
 
-# Same with wget
-wget -qO- https://example.com/release.tar.gz | tar -xzf - -C /opt/
+tar -xf backup.tar.gz -C /tmp/restore etc/nginx/nginx.conf
+tar -xf backup.tar.gz -C /tmp/restore etc/nginx                     # a whole folder
+tar -xf backup.tar.gz -C /tmp/restore --wildcards '*/sites-enabled/*'
+```
+
+Give the path **exactly as `tar -t` shows it**, including any `./` prefix. Wildcards need `--wildcards` and quotes.
+
+To read one file without extracting anything:
+
+```bash
+tar -xOf backup.tar.gz etc/nginx/nginx.conf | less
+```
+
+`-O` writes the file contents to stdout.
+
+### Restoring a config backup safely
+
+Extract to a scratch folder, compare, then copy what you need. Don't extract straight over `/`:
+
+```bash
+mkdir -p /tmp/restore
+sudo tar -xf nginx-2026-10-28.tar.gz -C /tmp/restore
+diff -ru /etc/nginx /tmp/restore/nginx        # or etc/nginx, depending on how it was created
+sudo cp -a /tmp/restore/nginx/. /etc/nginx/
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ---
 
-## Common Mistakes
+## Ownership and permissions
 
-**Mistake 1: Extracting into wrong directory**
-```bash
-# Extracts into current directory — could mix with existing files
-tar -xzf archive.tar.gz
-
-# Safe: always specify destination
-mkdir -p /tmp/extract && tar -xzf archive.tar.gz -C /tmp/extract/
-```
-
-**Mistake 2: Not checking paths before extracting**
-An archive might contain absolute paths like `/etc/passwd`. Always `tar -tzf` first.
-
-**Mistake 3: Wrong compression flag**
-`.tar.bz2` with `-xzf` (gzip flag) fails. If unsure:
-```bash
-tar -xf archive.tar.gz   # let tar auto-detect
-file archive.tar.gz       # or check the type first
-```
-
-**Mistake 4: Forgetting `-C` directory must exist**
-`-C /path` fails if the path doesn't exist. Create it first with `mkdir -p`.
+- **As root**, tar restores the owners and permissions stored in the archive. A tarball built on a developer laptop can leave files owned by UID 1000 on your server. Add `--no-same-owner` to make root the owner.
+- **As a normal user**, files are owned by you, and tar applies your umask to permissions unless you add `-p`.
 
 ---
 
-## Quick Reference
+## Errors and what they mean
+
+| Error | Cause | Fix |
+|---|---|---|
+| `gzip: stdin: not in gzip format` | File isn't gzip: often an HTML error page or a plain `.tar` with a `.gz` name | `file archive.tar.gz`; re-download with `curl -fL` |
+| `tar: Archive is compressed. Use -z option` | Reading from a pipe without a compression flag | Add `-z`, `-J`, `-j` or `--zstd` |
+| `Unexpected EOF in archive` | Truncated download or copy | Re-download; compare size or checksum |
+| `Cannot open: No such file or directory` (with `-C`) | Destination folder doesn't exist | `mkdir -p` it first |
+| `Cannot open: Permission denied` | No write access to the destination | Extract somewhere you own, or use `sudo` |
+| `Cannot change ownership to uid 1000` | Non-root user, or a filesystem that doesn't support owners (some NFS, CIFS) | Harmless for most uses; `--no-same-owner` silences it |
+| `Not found in archive` | The path you asked for doesn't match the member name | Copy the exact name from `tar -tf`, including `./` |
+| `No space left on device` | Destination filesystem is full | `df -h` the target; see [Disk Full on Linux](/blog/disk-full-linux-cleanup) |
+
+`file` is the fastest way to see what you actually have:
 
 ```bash
-# Extract to current directory
-tar -xzf file.tar.gz       # .tar.gz
-tar -xjf file.tar.bz2      # .tar.bz2
-tar -xJf file.tar.xz       # .tar.xz
-tar -xf  file.tar          # .tar
-
-# Extract to specific directory
-tar -xzf file.tar.gz -C /destination/
-
-# List contents
-tar -tzf file.tar.gz
-
-# Extract single file
-tar -xzf file.tar.gz path/to/specific/file
-
-# zip
-unzip file.zip
-unzip file.zip -d /destination/
+file archive.tar.gz
+# archive.tar.gz: HTML document, ASCII text      <- not an archive at all
 ```
 
 ---
 
-## Conclusion
+## A note on untrusted archives
 
-`tar -xzf archive.tar.gz` for `.tar.gz`. Add `-C /path/` to specify destination. Always `tar -tzf` before extracting to see what you're getting. For auto-detection of compression type, just `tar -xf` without a compression flag works on modern GNU tar.
+GNU tar strips leading `/` from member names and refuses names containing `..` unless you pass `-P`, which blocks the most obvious path tricks. Archives can still contain symlinks, setuid files or simply enormous amounts of data. For anything you didn't create, list it first, extract as a normal user into an empty folder, and never use `-P`.
 
 ---
 
-*Related: [How to Compress Files Linux: tar Examples](/blog/compress-files-linux-tar-examples) — creating archives. [How to Copy Files Recursively Linux](/blog/how-to-copy-files-recursively-linux) — moving files after extraction.*
+## FAQ
+
+**How do I extract a tar.gz file to a specific folder?**
+`mkdir -p /path/to/dir && tar -xf archive.tar.gz -C /path/to/dir`.
+
+**How do I extract tar.gz without the top-level folder?**
+`tar -xf archive.tar.gz -C dest --strip-components=1`.
+
+**How do I see what's in a tar.gz without extracting?**
+`tar -tf archive.tar.gz`, or `tar -tvf` for sizes and permissions.
+
+**Can I extract a single file from a tar.gz?**
+Yes: `tar -xf archive.tar.gz path/inside/archive`, using the exact path shown by `tar -tf`.
+
+*Related: [Compress Files in Linux with tar](/blog/compress-files-linux-tar-examples) for creating archives with clean paths. [Move Files Between Directories](/blog/linux-move-files-between-directories) for putting extracted files where they belong.*

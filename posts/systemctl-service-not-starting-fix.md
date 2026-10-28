@@ -1,219 +1,252 @@
 ---
-title: "systemctl Service Not Starting: Complete Fix Guide"
+title: "systemctl Service Not Starting? Diagnose by Exit Code"
 date: "2026-04-22"
-excerpt: "Fix systemctl service not starting — diagnose failed units, read exit codes, resolve dependency errors, and fix the most common reasons a Linux service won't start."
+updated: "2026-10-28"
+excerpt: "systemctl start failed and status says exit-code, 203/EXEC or 217/USER? Read the status line, find the real error in the journal and fix ExecStart or deps."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
-slug: "systemctl-service-not-starting-fix-linux"
 category: "devops"
 ---
 
-Service won't start and `systemctl start myapp` returns no useful output. The error is always in the logs — you just need to know where to look.
+You run `systemctl start myapp` and get:
+
+```
+Job for myapp.service failed because the control process exited with error code.
+See "systemctl status myapp.service" and "journalctl -xeu myapp.service" for details.
+```
+
+That message is generic. The useful information is one command away, in two places: the **result and exit status** in `systemctl status`, and the **lines just before the failure** in the journal. Together they tell you which of a handful of causes you're dealing with.
+
+This post is about a service that **won't start**. If it ran before and now `restart` misbehaves (start-limit-hit, hangs on stop, changes not taking effect), see [systemctl restart not working](/blog/systemctl-restart-service-not-working).
 
 ---
 
 ## TL;DR
 
 ```bash
-systemctl status myapp           # exit code and last log lines
-journalctl -u myapp -n 50 --no-pager  # full logs
-journalctl -u myapp -p err       # errors only
-systemctl cat myapp              # view unit file
-systemd-analyze verify /etc/systemd/system/myapp.service  # syntax check
+systemctl status myapp --no-pager -l           # Result, exit status, last log lines
+journalctl -u myapp -b -n 50 --no-pager        # the real error is right before "Failed"
+systemctl cat myapp                            # the unit file + drop-ins actually in use
+systemd-analyze verify myapp.service           # unit file syntax and missing binaries
+runuser -u appuser -- /opt/app/bin/myapp --config /etc/myapp/prod.yml   # reproduce by hand
 ```
 
 ---
 
-## Step 1: Read the Status Output
-
-```bash
-systemctl status myapp
-```
-
-The `Active:` line tells you everything:
+## Step 1: read `systemctl status` properly
 
 ```
-Active: failed (Result: exit-code)   → process exited non-zero
-Active: failed (Result: signal)      → killed by signal (OOM, SIGKILL)
-Active: failed (Result: start-limit-hit) → crashed too many times
-Active: inactive (dead)              → stopped, not failed
-Active: activating (start)           → stuck starting
+× myapp.service - My Application
+     Loaded: loaded (/etc/systemd/system/myapp.service; enabled; preset: disabled)
+     Active: failed (Result: exit-code) since Tue 2026-10-28 14:22:04 UTC; 8s ago
+    Process: 4521 ExecStart=/opt/app/bin/myapp --config /etc/myapp/prod.yml (code=exited, status=203/EXEC)
+   Main PID: 4521 (code=exited, status=203/EXEC)
+        CPU: 4ms
+
+Oct 28 14:22:04 web01 (myapp)[4521]: myapp.service: Failed to execute /opt/app/bin/myapp: Permission denied
+Oct 28 14:22:04 web01 (myapp)[4521]: myapp.service: Failed at step EXEC spawning /opt/app/bin/myapp: Permission denied
+Oct 28 14:22:04 web01 systemd[1]: myapp.service: Main process exited, code=exited, status=203/EXEC
+Oct 28 14:22:04 web01 systemd[1]: myapp.service: Failed with result 'exit-code'.
 ```
 
-The `code=` and `status=` at the bottom:
+Three lines carry the diagnosis.
 
-| Status | Meaning |
+**`Loaded:`** Is the unit even usable?
+
+| Loaded shows | Meaning | Fix |
+|---|---|---|
+| `loaded (...)` | Unit file parsed fine | Look further down |
+| `not-found` | No unit by that name | Check the name: `systemctl list-unit-files | grep -i myapp` |
+| `masked` | Deliberately disabled (linked to `/dev/null`) | `systemctl unmask myapp` if that's intended |
+| `bad-setting` | The unit file has an invalid setting | Journal says which; often `ExecStart` without an absolute path on older systemd |
+
+**`Active: failed (Result: ...)`** How it failed:
+
+| Result | Meaning |
 |---|---|
-| `status=1/FAILURE` | App returned exit code 1 — check app logs |
-| `status=2/INVALIDARGUMENT` | Wrong argument to systemd directive |
-| `status=203/EXEC` | Binary not found or not executable |
-| `status=217/USER` | Service user doesn't exist |
-| `status=226/NAMESPACE` | Namespace/permission setup failed |
-| `code=killed, signal=KILL` | OOM killer or manual `kill -9` |
+| `exit-code` | The process exited with a non-zero status |
+| `signal` / `core-dump` | The process was killed by a signal (SIGKILL from the OOM killer, SIGSEGV crash) |
+| `timeout` | It didn't finish starting within `TimeoutStartSec` (default 90s) |
+| `resources` | systemd couldn't even set it up: missing `EnvironmentFile`, can't create a directory, etc. |
+| `start-limit-hit` | Failed too many times in a row; systemd stopped trying ([restart post](/blog/systemctl-restart-service-not-working)) |
+| `dependency` | A unit it `Requires=` failed first |
+
+**`status=`** The exit status. Below 200 it comes from your program; 200 and above means systemd failed **before** your program ran.
 
 ---
 
-## Step 2: Read Full Logs
-
-`systemctl status` truncates. Get everything:
+## Step 2: get the full log
 
 ```bash
-journalctl -u myapp -n 100 --no-pager
-
-# Since last restart attempt
-journalctl -u myapp --since "5 minutes ago" --no-pager
-
-# Errors only
-journalctl -u myapp -p err --since "today"
+journalctl -u myapp -b -n 50 --no-pager
+journalctl -xeu myapp            # -x adds explanations, -e jumps to the end
 ```
 
-**Look for the line just BEFORE** `"Failed to start"` or `"Main process exited"` — that's the actual error.
+Read the lines **just above** `Main process exited`. That's where the program (or systemd) said what went wrong. If the app logs to its own file instead of stdout, check that file too. The journal may only show systemd's side.
+
+For narrower time windows, see [journalctl time filters](/blog/journalctl-filter-time-range).
 
 ---
 
-## Fix by Exit Code
+## Step 3: fix by exit status
 
-### status=203/EXEC — binary not found
+### systemd's own codes (200+): failed before your program ran
 
-```bash
-# Check path in unit file
-systemctl cat myapp | grep ExecStart
+| Status | Name | Typical cause |
+|---|---|---|
+| `200/CHDIR` | Can't change into `WorkingDirectory=` | Directory missing or not accessible to `User=` |
+| `203/EXEC` | Can't execute `ExecStart=` | Wrong path, not executable, bad shebang, `noexec` mount, SELinux label |
+| `209/STDOUT` | Can't set up stdout | `StandardOutput=file:` path not writable |
+| `216/GROUP` | `Group=` doesn't exist | Typo, or the group wasn't created |
+| `217/USER` | `User=` doesn't exist | Service user not created on this host |
+| `226/NAMESPACE` | Sandboxing setup failed | A path in `ReadWritePaths=`, `ReadOnlyPaths=` etc. doesn't exist |
 
-# Does the binary exist?
-ls -la /opt/app/start.sh
-
-# Is it executable?
-chmod +x /opt/app/start.sh
-
-# Is it a script with Windows line endings?
-file /opt/app/start.sh
-# "CRLF line terminators" = fix with:
-sed -i 's/\r//' /opt/app/start.sh
-```
-
-### status=217/USER — service user missing
+**203/EXEC** in detail, because it's the most common:
 
 ```bash
-# Which user does the unit expect?
-systemctl cat myapp | grep User
-
-# Create missing user
-useradd -r -s /bin/false appuser
+systemctl show -p ExecStart myapp            # the exact path systemd uses
+ls -l /opt/app/bin/myapp                     # exists? executable bit?
+head -1 /opt/app/bin/start.sh                # scripts need a valid shebang, e.g. #!/bin/bash
+file /opt/app/bin/start.sh                   # "with CRLF line terminators" = Windows line endings
+findmnt -T /opt/app/bin/myapp -o TARGET,OPTIONS   # look for noexec
 ```
 
-### start-limit-hit — too many crashes
+- CRLF line endings make the shebang `#!/bin/bash\r`, which doesn't exist: fix with `sed -i 's/\r$//' start.sh`.
+- No shebang at all gives `Exec format error`.
+- On RHEL/Fedora with SELinux enforcing, `Permission denied` on a file that's clearly executable is usually its label. Files moved (`mv`) out of a home directory keep their `user_home_t` label, which services aren't allowed to execute. Check and reset it:
 
 ```bash
-# Reset the counter
-systemctl reset-failed myapp
-systemctl start myapp
-
-# Prevent future start-limit issues
-# Add to [Service] section:
-# StartLimitBurst=5
-# StartLimitIntervalSec=60s
-# RestartSec=5s
+ls -Z /opt/app/bin/myapp
+ausearch -m avc -ts recent | tail
+restorecon -Rv /opt/app        # reset labels to the policy default for that path
 ```
 
-### exit-code — app crashes immediately
-
-Test the command manually as the service user:
+**217/USER**: create the user the unit expects, as a system account without a login shell:
 
 ```bash
-# Get the ExecStart command
-systemctl cat myapp | grep ExecStart
-# ExecStart=/opt/app/start.sh --config /etc/app/prod.conf
-
-# Run it as the service user
-runuser -u appuser -- /opt/app/start.sh --config /etc/app/prod.conf
-# This shows the real error without systemd buffering it
+systemctl show -p User myapp
+useradd --system --no-create-home --shell /usr/sbin/nologin appuser
 ```
+
+### Application exit codes (1 to 199): your program ran and gave up
+
+systemd only reports the number. What it means is up to the program. `status=1/FAILURE` and `status=2/INVALIDARGUMENT` are just systemd's names for 1 and 2 (taken from the LSB conventions), not a sign that systemd itself saw a bad argument. If `ExecStart` is a shell script, `126` usually means a command inside it wasn't executable and `127` means a command wasn't found (often a `PATH` difference, see below).
+
+The fastest way forward is to run the exact command the same way systemd does:
+
+```bash
+systemctl show -p ExecStart -p User -p WorkingDirectory -p EnvironmentFiles myapp
+cd /opt/app && runuser -u appuser -- /opt/app/bin/myapp --config /etc/myapp/prod.yml
+```
+
+Typical findings:
+
+- **Config file missing or unreadable** by `appuser` (it was readable by root, which is how you tested).
+- **Port already in use**: `bind: Address already in use`. Find the holder with `ss -ltnp 'sport = :8080'`. See [port already in use](/blog/port-already-in-use-linux-fix).
+- **Permission denied** on a log or data directory. Give the service user ownership of the directories it **writes** to, not the whole application tree:
+
+```bash
+chown -R appuser:appuser /var/lib/myapp /var/log/myapp
+```
+
+Avoid `chmod -R 777` or `chown -R` across `/opt/app` as a quick fix. It hides the actual problem and lets the service rewrite its own code. Better still, let systemd create the directories with `StateDirectory=myapp` and `LogsDirectory=myapp`. [Permission denied fixes](/blog/permission-denied-linux-fix-chmod-chown) covers the details.
 
 ---
 
-## Common Fixes
+## `ExecStart` isn't a shell
 
-### Missing environment variable
+This catches people who copy a working command line into a unit file:
 
-```bash
-journalctl -u myapp | grep -iE "env|variable|not set|required"
-# If found, add to unit file:
-# [Service]
-# Environment="DATABASE_URL=postgres://localhost/mydb"
-# EnvironmentFile=/etc/myapp/env
+```ini
+# Does NOT work the way it looks
+ExecStart=/opt/app/bin/myapp > /var/log/myapp.log 2>&1
+ExecStart=/opt/app/bin/myapp --home ~/data
+ExecStart=cd /opt/app && ./run.sh
 ```
 
-### Port already in use
+systemd doesn't run `ExecStart` through a shell. There's no redirection, no `~`, no `&&`, no pipes. `>` and `/var/log/myapp.log` are passed to your program as literal arguments. It does expand `$VAR`/`${VAR}` from `Environment=` and `EnvironmentFile=`, but **not** from your login shell.
 
-```bash
-journalctl -u myapp | grep -i "address already in use\|bind\|EADDRINUSE"
-ss -tlnp | grep :<port>
-# Something else is on the port — kill it or change the port
+Do it the systemd way:
+
+```ini
+[Service]
+WorkingDirectory=/opt/app
+Environment=APP_HOME=/var/lib/myapp
+EnvironmentFile=-/etc/myapp/env
+ExecStart=/opt/app/bin/myapp --home ${APP_HOME}
+StandardOutput=append:/var/log/myapp/myapp.log
 ```
 
-### Permission denied on file or directory
+(`StandardOutput=append:` needs systemd 240 or later.)
 
-```bash
-journalctl -u myapp | grep -i "permission denied\|EACCES"
-# Fix ownership
-chown -R appuser:appuser /var/log/myapp /opt/app
-chmod 755 /opt/app
+The `-` in `EnvironmentFile=-` makes the file optional. Without it, a missing file fails the start with `Result: resources`.
+
+The environment is also much smaller than your shell's. `PATH` is a fixed default, and nothing from `~/.bashrc` or `/etc/profile` is loaded. A script that works in your terminal and fails under systemd with `command not found` (exit 127) is usually this. Use absolute paths, or set `Environment=PATH=...`.
+
+If you really need shell features: `ExecStart=/bin/sh -c 'exec /opt/app/run.sh >> /var/log/app.log 2>&1'`. Keep the `exec` so the shell is replaced by your process and systemd tracks the right PID.
+
+---
+
+## Dependencies and ordering
+
+```
+Dependency failed for My Application.
+myapp.service: Job myapp.service/start failed with result 'dependency'.
 ```
 
-### Dependency not ready
+This means a unit listed in `Requires=` (or `BindsTo=`) failed. Fix that unit first:
 
 ```bash
-# Check what the service needs
 systemctl list-dependencies myapp
-
-# Is the dependency running?
-systemctl status postgresql    # if myapp needs postgres
+systemctl --failed
 ```
 
-### Unit file error after edit
+Two directives that are often confused:
+
+- `Requires=` / `Wants=` say **what** must be started along with this unit. `Requires=` fails your unit if the other fails; `Wants=` doesn't.
+- `After=` says **in what order**. Without it, both units start in parallel.
+
+You usually need both: `Requires=postgresql.service` **and** `After=postgresql.service`.
+
+The classic case is the network. `After=network.target` doesn't mean the network is up, only that network management has started. An app that binds to a specific IP or connects out at startup can fail with `Cannot assign requested address` or a DNS error right after boot, then start fine by hand. Wait for the real thing:
+
+```ini
+[Unit]
+Wants=network-online.target
+After=network-online.target
+```
+
+Even "up" only means what your network manager's wait-online service says it means. For remote databases, the most robust option is an app that retries on its own.
+
+### Started then timed out
+
+`Result: timeout` with nothing obviously wrong usually means a `Type=` mismatch. `Type=notify` expects the program to call `sd_notify(READY=1)`, `Type=forking` expects it to fork and exit the parent. If the program doesn't do what the type promises, systemd waits until `TimeoutStartSec` and kills it. The [restart post](/blog/systemctl-restart-service-not-working) covers `Type=forking` and PID files.
+
+---
+
+## After you edit the unit
 
 ```bash
-# ALWAYS run this after editing a unit file
-systemctl daemon-reload
-systemctl start myapp
+systemctl edit myapp                  # creates a drop-in override; or edit the file directly
+systemctl daemon-reload               # make systemd re-read unit files
+systemd-analyze verify myapp.service  # catch typos and bad paths
+systemctl start myapp && systemctl status myapp --no-pager
 ```
 
----
-
-## Full Diagnostic Script
-
-```bash
-#!/bin/bash
-SERVICE=$1
-echo "=== Status ==="
-systemctl status $SERVICE --no-pager
-
-echo -e "\n=== Last 30 log lines ==="
-journalctl -u $SERVICE -n 30 --no-pager
-
-echo -e "\n=== Errors only ==="
-journalctl -u $SERVICE -p err --since "1 hour ago" --no-pager
-
-echo -e "\n=== Unit file ==="
-systemctl cat $SERVICE
-```
+`systemctl cat myapp` shows the unit file **and** every drop-in in `/etc/systemd/system/myapp.service.d/`. If a setting doesn't behave like the file you're editing says it should, a drop-in is often overriding it.
 
 ---
 
-## Common Mistakes
+## Quick checklist
 
-**Not running `daemon-reload` after editing unit files.** Changes are ignored until you reload.
-
-**Testing as root when service runs as another user.** Root can read files the service user can't. Always test with `runuser -u <serviceuser>`.
-
-**Killing the process PID when start-limit is hit.** Systemd already marked it failed. Use `systemctl reset-failed` first.
-
----
-
-## Conclusion
-
-The fix is always in the logs. `journalctl -u myapp -n 100 --no-pager` tells you what happened. The exit code in `systemctl status` narrows it down. Test the binary manually as the service user before debugging systemd configuration.
+1. `Loaded:` line: not-found, masked or bad-setting?
+2. `Result:` and `status=`: 200+ means systemd setup, below 200 means your program.
+3. Journal lines just before `Main process exited`.
+4. Reproduce with `runuser -u <User> --` in the `WorkingDirectory`.
+5. No shell features in `ExecStart`; small environment.
+6. `Requires=` plus `After=`; `network-online.target` if it needs the network at startup.
+7. `daemon-reload` after every unit change.
 
 ---
 
-*Related: [systemctl Restart Service Not Working](/blog/systemctl-restart-service-not-working-fix) — when the service exists but restart fails. [journalctl Filter by Time Range](/blog/journalctl-filter-time-range-guide) — extract logs from the exact window when startup failed.*
+*Related: [check running services with systemctl](/blog/linux-check-running-services-systemctl) for listing failed units, and [strace](/blog/strace-tutorial-linux) when the program exits without saying why.*

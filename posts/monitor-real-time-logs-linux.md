@@ -1,262 +1,219 @@
 ---
-title: "How to Monitor Real-Time Logs in Linux: tail, journalctl, multitail"
+title: "Monitor Real-Time Logs in Linux: tail -F and journalctl -f"
 date: "2026-04-22"
-excerpt: "Monitor real-time logs in Linux using tail -f, journalctl -f, and multitail — follow multiple log files simultaneously, filter live output, and build production log monitoring workflows."
+updated: "2026-10-28"
+excerpt: "Watch Linux logs live without missing lines: tail -F vs -f after rotation, journalctl -f filters, and the pipe buffering that makes grep go silent."
 tags: ["linux", "logs", "monitoring", "troubleshooting", "debugging"]
 featured: false
-slug: "monitor-real-time-logs-linux-guide"
 category: "linux"
 ---
 
-Watching logs in real time is how you catch errors as they happen — during deployments, under load tests, or when chasing an intermittent bug. Here's every way to do it.
+You're about to deploy, or you just changed a config, and you want to see the first error the second it happens. So you run `tail -f /var/log/app.log | grep ERROR` and... nothing. The app is clearly logging errors, but the screen stays blank. Or `tail -f` worked fine for an hour, then went quiet at midnight while the app kept running.
+
+Both are classic. The first is pipe buffering, the second is log rotation. This post covers watching **one stream** live and reliably. If you need several files at once with labels or a split screen, see [tail multiple files](/blog/linux-tail-multiple-files).
 
 ---
 
 ## TL;DR
 
 ```bash
-tail -f /var/log/nginx/error.log                    # follow a flat file
-journalctl -fu nginx                                # follow systemd service logs
-journalctl -f -p err                                # all services, errors only
-tail -f /var/log/nginx/error.log | grep ERROR       # follow + filter
-multitail /var/log/nginx/error.log /var/log/app.log # multiple files, split view
+tail -n 0 -F /var/log/nginx/error.log                  # file: new lines only, survives rotation
+journalctl -u myapp -f                                 # systemd service
+journalctl -f -p err                                   # every unit, errors and worse
+journalctl -k -f                                       # kernel (OOM kills, disk errors)
+
+tail -F /var/log/app.log | grep --line-buffered ERROR | awk '{print $1, $2, $5; fflush()}'
+less +F /var/log/app.log                               # follow, Ctrl+C to search, F to resume
 ```
 
 ---
 
-## tail -f: The Standard Tool
+## Files: use `tail -F`, not `tail -f`
 
 ```bash
-tail -f /var/log/nginx/error.log
-```
-
-`-f` follows the file as it grows. Output stops when the file stops changing.
-
-```bash
-# Follow + filter (only show ERROR lines)
-tail -f /var/log/app/app.log | grep "ERROR"
-
-# Follow with color highlighting
-tail -f /var/log/nginx/error.log | grep --color=always -E "error|warn|$"
-
-# Follow last 100 lines, then stream
-tail -n 100 -f /var/log/app/app.log
-
-# Follow multiple flat files (alternates between them)
-tail -f /var/log/nginx/access.log /var/log/nginx/error.log
-```
-
----
-
-## journalctl -f: For systemd Services
-
-`journalctl -f` is the equivalent of `tail -f` for services managed by systemd:
-
-```bash
-# Follow a specific service
-journalctl -fu nginx
-
-# Follow + filter by priority (errors and above)
-journalctl -fu nginx -p err
-
-# Follow multiple services
-journalctl -f -u nginx -u php-fpm
-
-# All services, errors only
-journalctl -f -p err
-
-# Follow + grep
-journalctl -fu myapp | grep -i "exception\|fatal\|crash"
-```
-
-The `-u` flag (unit) targets a specific service. Without it, you see all system logs.
-
----
-
-## Real-Time Filtering Techniques
-
-### grep with color
-
-```bash
-# Highlight errors in red while showing everything
-tail -f /var/log/nginx/error.log | grep --color=always -iE "error|crit|alert|$"
-
-# Show only 502 and 504 in access log
-tail -f /var/log/nginx/access.log | grep -E " 50[24] "
-```
-
-### awk for structured parsing
-
-```bash
-# Show only lines where response time > 1 second (if logged as last field)
-tail -f /var/log/nginx/access.log | awk '$NF > 1.0 {print}'
-
-# Show 5xx errors with timestamp and IP
-tail -f /var/log/nginx/access.log | awk '$9 >= 500 {print $1, $7, $9}'
-```
-
-### Watch for specific patterns with alert
-
-```bash
-# Alert when error rate spikes
-tail -f /var/log/app/app.log | awk '
-  /ERROR/ {count++}
-  count > 10 {
-    print "ALERT: " count " errors in last lines"
-    count = 0
-  }
-'
-```
-
----
-
-## multitail: Multiple Logs in Split View
-
-`multitail` splits the terminal and shows multiple log files simultaneously:
-
-```bash
-# Install
-apt install multitail    # Ubuntu
-dnf install multitail    # RHEL
-
-# Two files side by side
-multitail /var/log/nginx/error.log /var/log/app/app.log
-
-# Three files
-multitail /var/log/nginx/error.log /var/log/nginx/access.log /var/log/app/app.log
-
-# With color schemes
-multitail -ci green /var/log/nginx/access.log -ci red /var/log/nginx/error.log
-
-# Follow journald output alongside a file
-multitail -j /var/log/app/app.log
-```
-
-Navigate with arrow keys. Press `q` to quit.
-
----
-
-## Real Examples
-
-### Monitor a deployment
-
-```bash
-# Watch application log while deploy runs
-tail -f /var/log/app/app.log &
-LOG_PID=$!
-
-# Run deployment
-./deploy.sh
-
-# Stop following when done
-kill $LOG_PID
-```
-
-### Watch nginx 502 errors in real time
-
-```bash
-# Tail error log, show only upstream errors
-tail -f /var/log/nginx/error.log | grep -i "upstream\|502\|connect"
-```
-
-### Monitor for OOM kills in real time
-
-```bash
-# Follow kernel log for OOM events
-journalctl -f -k | grep -i "oom\|killed"
-```
-
-### Watch all service errors simultaneously
-
-```bash
-journalctl -f -p err --no-hostname
-```
-
-### Live response code breakdown
-
-```bash
-# Count response codes every 5 seconds from nginx access log
-tail -f /var/log/nginx/access.log | awk '
-{codes[$9]++; count++}
-count % 100 == 0 {
-  print "--- Last 100 requests ---"
-  for (c in codes) print c":", codes[c]
-  delete codes
-}'
-```
-
----
-
-## Follow Logs That Rotate
-
-Standard `tail -f` loses the file handle when a log is rotated (the file gets renamed and a new one created). Use `tail -F` (capital F):
-
-```bash
-# -F follows by filename, not file descriptor
-# Works across log rotation
 tail -F /var/log/nginx/error.log
 ```
 
-`journalctl -f` handles rotation automatically since it reads from the journal, not a file.
+The difference matters as soon as logrotate runs:
+
+```
+tail -f   follows the FILE DESCRIPTOR
+          logrotate renames error.log -> error.log.1, creates a new error.log
+          tail keeps reading error.log.1, which nobody writes to anymore -> silence
+
+tail -F   follows the NAME (same as --follow=name --retry)
+          notices error.log was replaced, reopens it
+          "tail: '/var/log/nginx/error.log' has been replaced;  following new file"
+```
+
+With `copytruncate` rotation the file is truncated in place instead of renamed. Both `-f` and `-F` print `file truncated` and carry on, so you only see the problem with rename-style rotation. Use `-F` and stop thinking about it.
+
+Useful variants:
+
+```bash
+tail -n 0 -F app.log        # skip the last 10 lines, show only what's new from now
+tail -n 200 -F app.log      # some context first, then follow
+tail -F --pid=4521 app.log  # stop following when PID 4521 exits (GNU tail)
+```
+
+### `less +F` when you'll need to scroll back
+
+```bash
+less +F /var/log/app.log
+```
+
+It follows like `tail -f`. Press `Ctrl+C` to stop following and you're in normal `less`: `/pattern` to search, `?` to search backwards, `n` for next match. Press `F` to start following again. During an incident this beats restarting `tail` with different filters.
 
 ---
 
-## Common Mistakes
-
-**Mistake 1: Using `tail -f` on a log that gets rotated**
-Use `tail -F` (capital F) instead. `-f` follows the file descriptor; `-F` follows the filename and reopens when the file changes.
-
-**Mistake 2: Not using `--no-pager` with journalctl in scripts**
-`journalctl` sends output through `less` by default. In scripts, add `--no-pager`. For `-f` mode this doesn't matter, but when piping to grep it does:
+## systemd services: `journalctl -f`
 
 ```bash
-journalctl -u nginx --no-pager | grep ERROR
+journalctl -u myapp -f                       # one unit (last 10 lines, then follow)
+journalctl -u myapp -u nginx -f              # two units, merged in time order
+journalctl -u myapp -f -n 0                  # only new entries
+journalctl -u myapp --since "10 min ago" -f  # last 10 minutes, then keep following
+journalctl -f -p warning                     # all units, warning and above
+journalctl -k -f                             # kernel ring buffer, live
+journalctl -u myapp -f -o cat                # message only, no timestamp/host prefix
+journalctl -u myapp -f -o short-precise      # microsecond timestamps
 ```
 
-**Mistake 3: Missing logs because buffer is full**
-When piping `tail -f` through multiple filters, the pipe buffer can cause delayed output. Add `stdbuf -oL` to disable buffering:
+journald handles its own rotation, so there's no `-f`/`-F` problem here.
+
+What the journal does **not** contain matters more. A service's journal has whatever the process writes to stdout/stderr or sends via syslog. NGINX, Apache, PostgreSQL and many Java apps write their real logs to their own files, so `journalctl -u nginx -f` shows startup messages and little else. For those, follow the file.
+
+`-p` filters on the priority the program assigned. Apps that print everything to stdout are stored at `info`, so `-p err` hides their errors. When in doubt, use `--grep` instead (systemd 237+):
 
 ```bash
-tail -f /var/log/app.log | stdbuf -oL grep "ERROR" | stdbuf -oL awk '{print $0}'
-```
-
-**Mistake 4: Following a log that grows too fast**
-On a busy server, `tail -f` on an access log can flood your terminal. Filter first:
-
-```bash
-tail -f /var/log/nginx/access.log | grep " 5[0-9][0-9] "
-# Only show 5xx errors, not every request
+journalctl -u myapp -f --grep "error|timeout"       # regex, case-insensitive if all lowercase
 ```
 
 ---
 
-## Pro Tips
+## Why `| grep` shows nothing: pipe buffering
+
+This is the most common "live log" problem.
 
 ```bash
-# Follow log and timestamp each line as it arrives
-tail -f /var/log/app.log | ts '[%Y-%m-%d %H:%M:%.S]'
-# (requires 'ts' from moreutils package)
+tail -F app.log | grep ERROR                    # works: grep writes to the terminal
+tail -F app.log | grep ERROR | awk '{print $5}' # looks dead for minutes
+```
 
-# Follow with context — show N lines before/after a match
-tail -f /var/log/app.log | grep -A 3 "ERROR"
+When a program's output is a terminal, C stdio flushes after every line. When the output is a **pipe**, it flushes only when a buffer (typically 4 KB) is full. The grep in the middle sits on matches until it has 4 KB of them. At a few errors a minute, that can take an hour.
 
-# Save real-time output to file AND show on screen
-tail -f /var/log/app.log | tee /tmp/incident_$(date +%Y%m%d_%H%M%S).log
+Fix every stage that isn't the last one:
 
-# Combine systemd and file log in one stream
-{ journalctl -fu nginx & tail -f /var/log/app/app.log; } | grep -iE "error|warn"
+| Tool | Line-buffered output |
+|---|---|
+| `grep` | `grep --line-buffered` |
+| `sed` | `sed -u` (GNU) |
+| `awk` | call `fflush()` after `print`; with mawk you can also run `mawk -W interactive` |
+| `cut`, `tr` and other stdio tools | `stdbuf -oL cut ...` |
+| `python` | `python3 -u` |
 
-# Alert on pattern match with sound
-tail -f /var/log/nginx/error.log | grep --line-buffered "CRIT" | \
-  while read line; do echo "$line"; echo -e '\007'; done
+```bash
+tail -n 0 -F /var/log/nginx/access.log \
+  | grep --line-buffered -E '" 5[0-9]{2} ' \
+  | awk '{print $4, $7, $9; fflush()}'
 ```
 
 ---
 
-## Conclusion
+## Filtering live output
 
-`tail -F` (capital F) for flat files — it handles log rotation. `journalctl -f -u <service>` for systemd services. Filter with `grep --color=always -E "pattern|$"` to highlight matches while keeping all output. For watching multiple services during a deployment or incident, `journalctl -f -p err` gives you a filtered view across everything at once.
+### Highlight instead of hiding
+
+Sometimes you want to see everything but spot errors instantly. Match the pattern **or** the end of line (`$`), which matches every line but colors only the real hits:
+
+```bash
+tail -F /var/log/app.log | grep --line-buffered --color=always -iE "error|fatal|timeout|$"
+```
+
+### Only 5xx responses, live
+
+```bash
+tail -n 0 -F /var/log/nginx/access.log | awk '$9 >= 500 {print $4, $1, $7, $9; fflush()}'
+```
+
+This assumes the default `combined` log format (status in field 9). Check your `log_format` if the output looks wrong.
+
+### Rolling status-code count
+
+Live stream processing is fiddly; a repeated snapshot is often clearer:
+
+```bash
+watch -n 5 "tail -n 2000 /var/log/nginx/access.log | awk '{print \$9}' | sort | uniq -c | sort -rn"
+```
+
+### Watch for OOM kills and disk errors
+
+```bash
+journalctl -k -f | grep --line-buffered -iE "out of memory|killed process|i/o error|blocked for more than"
+```
 
 ---
 
-*Related: [Linux Log Analysis: Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — the full log investigation workflow beyond just watching. [journalctl Filter by Time Range](/blog/journalctl-filter-time-range-guide) — go back in time to investigate past events.*
+## Practical recipes
+
+### Watch a deploy and stop when the app is up
+
+```bash
+T=$(date '+%Y-%m-%d %H:%M:%S')
+systemctl restart myapp
+timeout 120 grep -m1 -E "Listening on|Started" <(journalctl -u myapp -f --since "$T")
+echo "exit: $?"    # 0 = matched, 124 = nothing matched within 120 seconds
+```
+
+`grep -m1` exits on the first match, and `timeout` makes sure a failed start doesn't leave you waiting forever. Starting the journal at `$T` (instead of `-n 0`) means you can't miss a line that was logged before `journalctl` attached.
+
+### Keep a copy of what you watched
+
+```bash
+tail -n 0 -F /var/log/app.log | tee -a ~/incident-$(date +%Y%m%d-%H%M).log
+```
+
+### Add arrival timestamps to lines that don't have them
+
+```bash
+tail -F /var/log/app.log | ts '%Y-%m-%d %H:%M:%.S'    # ts is in the moreutils package
+```
+
+### Beep or notify on a critical line
+
+```bash
+tail -n 0 -F /var/log/nginx/error.log | grep --line-buffered "\[crit\]" |
+  while read -r line; do
+    printf '\a%s\n' "$line"
+    logger -t logwatch -p user.warning "$line"     # also lands in the journal
+  done
+```
+
+For anything permanent, use real alerting (your monitoring stack, or a journald/rsyslog forwarder). A `tail | while read` loop dies with your SSH session.
+
+---
+
+## Common mistakes
+
+- **`tail -f` on a log that rotates by rename.** It goes quiet at rotation time. Use `-F`.
+- **Missing `--line-buffered` in the middle of a pipe.** Lines arrive minutes late or not at all.
+- **Following the journal for an app that logs to a file.** `journalctl -u nginx -f` won't show access or error log lines.
+- **Following an unfiltered access log on a busy server.** Thousands of lines a second flood the terminal and your SSH connection. Filter first.
+- **Expecting `-p err` to catch stdout errors.** journald stores plain stdout as `info`.
+
+---
+
+## FAQ
+
+**What's the difference between `tail -f` and `tail -F`?**
+`-f` follows the open file. If the file is renamed during rotation, it keeps reading the old one. `-F` follows the file name and reopens it when it's replaced or recreated, so it survives rotation.
+
+**How do I follow logs of a systemd service?**
+`journalctl -u <service> -f`. Add `-n 0` to skip old entries, `-p warning` to filter by priority, or `--grep` for a regex.
+
+**Why does `tail -f | grep | awk` print nothing?**
+grep's output into a pipe is block-buffered. Use `grep --line-buffered` and `fflush()` in awk.
+
+---
+
+*Related: [journalctl time filters](/blog/journalctl-filter-time-range) to look back at what you missed, the [Linux log analysis guide](/blog/linux-log-analysis-guide) for what the lines mean, and [incident triage with logs](/blog/log-analysis-incident-triage) for the full outage workflow.*

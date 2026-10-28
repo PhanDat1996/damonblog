@@ -1,76 +1,69 @@
 ---
-title: "Docker Ate My Disk: Fixing Log Rotation Before It Kills Production"
+title: "Docker Log Rotation: Stop Container Logs Filling the Disk"
 date: "2024-10-03"
-excerpt: "How a single verbose container filled a 500GB disk in 72 hours, and the exact daemon.json config that stops it from ever happening again."
+updated: "2026-10-28"
+excerpt: "Docker logs filled your disk? Free space safely now, set max-size in daemon.json, and know why the change won't touch existing containers until recreated."
 tags: ["docker", "logs", "infrastructure", "troubleshooting"]
 featured: true
 category: "devops"
 ---
 
-## 3am, Disk Full, Everything Down
+The disk alert fires, services start failing writes, and `df -h` says `/` is at 100%. You follow the space down with `du` and end up in `/var/lib/docker/containers/<id>/`, at a single `<id>-json.log` file that's tens or hundreds of gigabytes.
 
-The alert came in at 3:17am: disk utilization at 100%, multiple services failing. SSH into the host:
+That's Docker's default behavior. The `json-file` logging driver keeps **everything** a container writes to stdout/stderr, with no size limit. A chatty container (debug logging left on, a retry loop logging every failure) will eventually fill any disk.
 
-```bash
-df -h
-# Filesystem      Size  Used Avail Use% Mounted on
-# /dev/sda1       500G  500G     0 100% /
-```
+This post covers the emergency fix, the permanent fix, and the gotcha that makes people think the permanent fix didn't work.
 
-Find the culprit:
+---
+
+## Confirm it's container logs
 
 ```bash
-du -sh /* 2>/dev/null | sort -rh | head -10
-# 487G  /var
+df -h /var/lib/docker
+sudo du -sh /var/lib/docker/containers/*/*-json.log 2>/dev/null | sort -h | tail -5
+# 1.2G   /var/lib/docker/containers/9b1e.../9b1e...-json.log
+# 87G    /var/lib/docker/containers/3f2a.../3f2a...-json.log
 ```
+
+Map the ID to a container name:
 
 ```bash
-du -sh /var/* 2>/dev/null | sort -rh | head -5
-# 487G  /var/lib/docker
+docker ps -a --no-trunc --format '{{.ID}} {{.Names}}' | grep 3f2a
 ```
+
+Or list every container's log path and size in one go:
 
 ```bash
-du -sh /var/lib/docker/* 2>/dev/null | sort -rh | head -5
-# 484G  /var/lib/docker/containers
+docker ps -aq | xargs docker inspect -f '{{.Name}} {{.LogPath}}' \
+  | while read name path; do printf '%s %s\n' "$(sudo du -h "$path" 2>/dev/null | cut -f1)" "$name"; done \
+  | sort -h | tail
 ```
 
-There it was. Docker container logs — unrotated, unbounded, growing forever.
+If the space is in `overlay2/` or `volumes/` instead, it isn't logs. Start with `docker system df` and the general [disk full cleanup guide](/blog/disk-full-linux-cleanup).
+
+---
+
+## Emergency: free the space now
+
+**Don't `rm` the log file.** dockerd keeps it open, so deleting the name doesn't free the space. The blocks stay allocated until the container stops. (That "deleted but still open" trap is covered in [deleting large files safely](/blog/how-to-delete-large-files-linux-safely).)
+
+Truncate it in place instead:
 
 ```bash
-ls -lah /var/lib/docker/containers/a3f9b1c.../
-# -rw-r----- 1 root root 484G Nov 3 03:17 a3f9b1c...-json.log
+sudo truncate -s 0 /var/lib/docker/containers/<id>/<id>-json.log
 ```
 
-484 gigabytes. One log file. One container. 72 hours of verbose output with no rotation configured.
+> **Warning:** this permanently discards that container's log history. If you might need it for an incident, copy the tail first: `sudo tail -c 500M <file> > /root/<name>-last.log`.
 
-## The Emergency Fix
+Docker doesn't officially support editing these files, but truncation is the standard emergency move and space is freed immediately. Afterwards, `docker logs` may print a parse error for the first partial line. That's harmless.
 
-You can't just `rm` the file while Docker holds it open — the inode stays allocated. The right move:
+Truncation buys time. The file starts growing again right away, so apply the permanent fix next.
 
-```bash
-# Truncate the file (Docker keeps the handle, disk space is freed immediately)
-truncate -s 0 /var/lib/docker/containers/<container-id>/<container-id>-json.log
-```
+---
 
-Services came back up within seconds. But this was a symptom, not the problem.
+## Permanent fix: limits in daemon.json
 
-## Why This Happens
-
-By default, Docker's `json-file` logging driver has **no size limit and no rotation**. Every byte your container writes to stdout/stderr goes into that file and stays there forever. On a verbose app, that's a disaster.
-
-The dangerous default:
-
-```json
-{
-  "log-driver": "json-file"
-}
-```
-
-That's it. No `max-size`. No `max-file`. No expiry. Pure chaos at scale.
-
-## The Permanent Fix: daemon.json
-
-Edit `/etc/docker/daemon.json`:
+Edit (or create) `/etc/docker/daemon.json`:
 
 ```json
 {
@@ -83,22 +76,51 @@ Edit `/etc/docker/daemon.json`:
 }
 ```
 
-This sets a global default for **all containers** on the host:
-- `max-size: 50m` — rotate when the log hits 50MB
-- `max-file: 5` — keep 5 rotated files (250MB max total per container)
-- `compress: true` — gzip rotated files to save space
+- `max-size`: rotate when the active file reaches 50 MB.
+- `max-file`: keep at most 5 files (active + rotated), so about 250 MB per container at most. Only takes effect when `max-size` is set.
+- `compress`: gzip rotated files.
 
-Restart Docker to apply:
+All `log-opts` values must be **strings**. `"max-file": 5` without quotes makes dockerd refuse to start. If `daemon.json` already exists, merge these keys into it rather than overwriting the file.
+
+Validate before restarting (Docker 23.0+):
 
 ```bash
-systemctl restart docker
+sudo dockerd --validate --config-file /etc/docker/daemon.json
+# configuration OK
 ```
 
-> **Warning:** This restarts all running containers. Do this during a maintenance window or roll it out carefully.
+### daemon.json changes need a dockerd restart
 
-## Per-Container Override in Compose
+`log-driver` and `log-opts` aren't reloadable settings, so `systemctl reload docker` won't apply them:
 
-For containers that need different limits, set it per-service in `docker-compose.yml`:
+```bash
+sudo systemctl restart docker
+```
+
+> **Warning:** restarting dockerd stops all running containers (containers with a restart policy come back afterwards) **unless** `"live-restore": true` is set in `daemon.json`. Plan a maintenance window, or enable `live-restore` first.
+
+### The gotcha: existing containers are not affected
+
+Log settings are copied into each container's config **when the container is created**. After restarting dockerd:
+
+- **New containers** get the new limits.
+- **Existing containers keep their old (unlimited) config**, even across `docker restart`.
+
+Check what a container is actually using:
+
+```bash
+docker inspect -f '{{.HostConfig.LogConfig}}' mycontainer
+# {json-file map[]}                                        ← old, unlimited
+# {json-file map[compress:true max-file:5 max-size:50m]}   ← new
+```
+
+You have to **recreate** the container (`docker rm` + `docker run` with the same options, or let Compose do it) for the limits to apply. This is the main reason people report that "max-size doesn't work".
+
+---
+
+## Per-service limits in Compose
+
+Set limits on the service itself, so they travel with the project and don't depend on each host's `daemon.json`:
 
 ```yaml
 services:
@@ -107,81 +129,52 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "100m"
-        max-file: "10"
+        max-size: "50m"
+        max-file: "5"
         compress: "true"
 
-  debug-service:
-    image: my-debug:latest
+  worker:
+    image: my-worker:latest
     logging:
       driver: json-file
       options:
-        max-size: "200m"   # verbose in dev, generous limit
+        max-size: "200m"
         max-file: "3"
 ```
 
-## Monitoring Disk Usage by Container
+```bash
+docker compose up -d --force-recreate app worker
+```
 
-Add this to your monitoring toolkit:
+Plain `docker compose up -d` also recreates services whose configuration changed. `--force-recreate` makes sure they are recreated.
+
+`docker run` equivalent:
 
 ```bash
-#!/bin/bash
-# check-docker-logs.sh
-# Alerts when any container log exceeds threshold
-
-THRESHOLD_GB=5
-
-find /var/lib/docker/containers -name '*-json.log' | while read logfile; do
-  size_gb=$(du -BG "$logfile" | awk '{print $1}' | tr -d 'G')
-  container_id=$(echo "$logfile" | cut -d'/' -f6 | cut -c1-12)
-  
-  if [ "$size_gb" -gt "$THRESHOLD_GB" ]; then
-    echo "ALERT: Container $container_id log is ${size_gb}GB"
-    docker inspect --format='{{.Name}}' "$container_id" 2>/dev/null
-  fi
-done
+docker run -d --log-opt max-size=50m --log-opt max-file=5 my-app:latest
 ```
-
-Run it from cron every 30 minutes until you have proper observability set up.
-
-## Consider a Centralized Logging Driver
-
-For production, `json-file` with rotation is a band-aid. The real solution is shipping logs somewhere:
-
-```json
-{
-  "log-driver": "fluentd",
-  "log-opts": {
-    "fluentd-address": "localhost:24224",
-    "fluentd-async": "true",
-    "tag": "docker.{{.Name}}"
-  }
-}
-```
-
-Or use the `loki` driver if you're in the Grafana ecosystem. Central log aggregation means:
-- No local disk pressure from logs
-- Queryable log history across all containers
-- Retention policies enforced centrally
-
-## Quick Reference
-
-| Problem | Fix |
-|---|---|
-| Log file too large right now | `truncate -s 0 /path/to/container.log` |
-| Global log limits | Edit `/etc/docker/daemon.json` |
-| Per-container limits | Use `logging:` block in compose |
-| Ongoing monitoring | Script + cron or Prometheus node exporter |
-
-Don't wait for 3am to learn this one.
 
 ---
 
-## Centralized Log Collection: The Right Long-Term Fix
+## `json-file` vs `local`
 
-`json-file` with rotation is a band-aid. For production Docker fleets, you want logs shipped off the host entirely — no local disk pressure, queryable history, retention policies enforced centrally.
+| | `json-file` | `local` |
+|---|---|---|
+| Default rotation | **None** | 20 MB × 5 files, compressed |
+| `docker logs` | Yes | Yes |
+| Format on disk | One JSON object per line | Internal binary format |
+| Tailing by log shippers (Filebeat, Promtail, Fluent Bit reading `/var/lib/docker/containers`) | Yes | No |
 
-### Option 1: Fluentd / Fluent Bit
+Docker's own docs recommend `local` for hosts where nothing reads the files directly. If a log agent tails the JSON files, stay on `json-file` and set `max-size`.
+
+---
+
+## Shipping logs off the host
+
+Rotation caps disk use, but anything older than the last few files is gone. For production fleets, ship logs to central storage. There are two common patterns:
+
+- **Agent tails the files** (Fluent Bit, Vector, Grafana Alloy, Filebeat reading `json-file`). This keeps `docker logs` working and doesn't affect container startup.
+- **Remote logging driver** (`fluentd`, `gelf`, `syslog`, `awslogs`):
 
 ```json
 {
@@ -194,77 +187,55 @@ Don't wait for 3am to learn this one.
 }
 ```
 
-Fluent Bit is lighter than Fluentd — use it as a DaemonSet on Kubernetes or as a sidecar on each Docker host.
+With a remote driver, `fluentd-async` matters. Without it, containers fail to start while the collector is down. Since Docker 20.10, "dual logging" keeps a local cache, so `docker logs` still works with remote drivers.
 
-### Option 2: Grafana Loki
+---
 
-```json
-{
-  "log-driver": "loki",
-  "log-opts": {
-    "loki-url": "http://loki:3100/loki/api/v1/push",
-    "loki-external-labels": "host={{.Host}},container={{.Name}}"
-  }
-}
-```
+## Alert before the disk fills
 
-Requires the Loki Docker driver plugin:
-```bash
-docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions
-```
-
-### Option 3: AWS CloudWatch (for ECS/EC2)
-
-```json
-{
-  "log-driver": "awslogs",
-  "log-opts": {
-    "awslogs-group": "/docker/myapp",
-    "awslogs-region": "us-east-1",
-    "awslogs-stream": "{{.Name}}"
-  }
-}
-```
-
-### Monitoring Log Size in Production
-
-Add this to your monitoring regardless of which driver you use:
+Until central monitoring covers it, a cron script catches runaway logs early:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/docker-log-monitor.sh
-THRESHOLD_GB=2
+# /usr/local/bin/docker-log-check.sh: run from root's cron every 15 minutes
+THRESHOLD_MB=2048
 
-docker ps -q | while read cid; do
-  NAME=$(docker inspect --format='{{.Name}}' "$cid" | tr -d '/')
-  LOG_PATH=$(docker inspect --format='{{.LogPath}}' "$cid")
-  if [ -f "$LOG_PATH" ]; then
-    SIZE_MB=$(du -m "$LOG_PATH" | cut -f1)
-    if [ "$SIZE_MB" -gt $((THRESHOLD_GB * 1024)) ]; then
-      echo "ALERT: Container $NAME log is ${SIZE_MB}MB"
-    fi
+docker ps -q | while read -r cid; do
+  name=$(docker inspect -f '{{.Name}}' "$cid" | tr -d '/')
+  path=$(docker inspect -f '{{.LogPath}}' "$cid")
+  [ -f "$path" ] || continue
+  size=$(du -m "$path" | cut -f1)
+  if [ "$size" -gt "$THRESHOLD_MB" ]; then
+    echo "ALERT: container $name log is ${size}MB ($path)"
   fi
 done
 ```
 
-Run from cron every 15 minutes. Alert before the disk fills — not after.
+A container that logs gigabytes per day is usually a bug (debug level in production, a tight retry loop). Fix the source too. [Linux log analysis](/blog/linux-log-analysis-guide) helps find out what it's repeating.
+
+---
+
+## Checklist
+
+1. Find the big `*-json.log` and its container.
+2. Emergency: `truncate -s 0` (after saving the tail if needed). Never `rm`.
+3. Set `max-size`/`max-file` in `daemon.json` (quoted strings) or per service in Compose.
+4. Restart dockerd (mind `live-restore`) for `daemon.json` changes.
+5. **Recreate** existing containers, then verify with `docker inspect -f '{{.HostConfig.LogConfig}}'`.
 
 ---
 
 ## FAQ
 
-**Does `max-size` apply to existing containers?**
-No. Log driver options apply at container creation time. You must recreate existing containers for the new limits to take effect. For `docker-compose`, run `docker-compose down && docker-compose up -d` after updating `logging:` config.
+**Does max-size apply to existing containers?**
+No. Log options are fixed when a container is created. Recreate the container (not just restart it) after changing `daemon.json`. Compose services pick up their own `logging:` block when Compose recreates them.
 
-**What happens if I truncate a log file while Docker is running?**
-`truncate -s 0 /path/to/container.log` frees disk space immediately — Docker keeps the file handle open and continues writing. The next write goes to offset 0. This is safe as an emergency fix. The permanent fix is rotation configuration.
+**Is it safe to truncate a Docker container log?**
+It's the standard emergency fix, and space is freed immediately. You lose that log history, and Docker doesn't officially support editing the file, so treat it as a one-off and set up rotation afterwards.
 
-**Can I set different log limits for different services in Compose?**
-Yes — per-service `logging:` blocks override the global `daemon.json` defaults. See the "Per-Container Override in Compose" section above.
-
-**What is the difference between `json-file` and `local` log driver?**
-`local` is a newer driver that uses a more efficient binary format and automatically compresses rotated files. It has less tooling support (you cannot `docker logs` rotated files). Use `json-file` with rotation for most cases — it is more portable and compatible with log shipping tools.
+**Can I apply new log settings without restarting all containers?**
+For `daemon.json` defaults, you need a dockerd restart (use `live-restore` to keep containers running) and then recreated containers. Per-container `--log-opt` or Compose `logging:` only needs that one container recreated.
 
 ---
 
-*Related reading: [Linux Log Analysis: How to Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — once logs are centralized, how to query them effectively. [Linux Debugging Tools Every Engineer Should Know](/blog/linux-debugging-tools-guide) — broader debugging toolkit.*
+*Related: [Check disk usage with du and df](/blog/check-disk-usage-linux-du-df) for tracking down space in general. [Docker container not starting](/blog/docker-container-not-starting-fix) when a crash-looping container is what's producing the logs.*

@@ -1,270 +1,186 @@
 ---
-title: "How to Restart Network Service in Linux (All Distros)"
+title: "Restart Networking on Linux: The Right Command per Distro"
 date: "2026-04-22"
-excerpt: "Restart network service in Linux using systemctl, nmcli, and ip commands — covering Ubuntu, RHEL, Debian, and CentOS with real examples and what to do when restart fails."
+updated: "2026-10-28"
+excerpt: "Changed an IP or DNS setting and it didn't apply? Find which network manager your Linux uses, apply the change safely, and avoid locking yourself out."
 tags: ["linux", "networking", "infrastructure", "troubleshooting"]
 featured: false
-slug: "restart-network-service-linux-guide"
 category: "linux"
 ---
 
-Network is flaky, an IP change didn't apply, or a config edit needs to take effect. The right command depends on your distro and network manager. Here's every way to do it.
+You edited the network config, ran the restart command from a blog post, and nothing changed. Or worse, the SSH session froze. The reason is almost always the same: Linux doesn't have one "network service". Depending on the distro there are four different things that might own your interfaces, and a restart command for the wrong one either does nothing or fails with `Unit not found`.
+
+So step one is finding out what manages the network on this box.
 
 ---
 
-## TL;DR
+## Step 1: what manages your network?
 
 ```bash
-# Modern Ubuntu (22.04+) / Debian with NetworkManager
-sudo systemctl restart NetworkManager
+systemctl is-active NetworkManager systemd-networkd networking network 2>/dev/null
+ls /etc/netplan/ 2>/dev/null
+```
 
-# Ubuntu with netplan (cloud/server)
-sudo netplan apply
+The first command prints one line per unit, in order; look for `active`. Then use this table:
 
-# RHEL / CentOS / Rocky / AlmaLinux
-sudo systemctl restart NetworkManager
-# or (older RHEL 6/7 style)
+| What you find | Typical systems | Apply changes with |
+|---|---|---|
+| `/etc/netplan/*.yaml` exists | Ubuntu 18.04+ | `netplan try` / `netplan apply` (renders to networkd or NetworkManager) |
+| `NetworkManager` active | RHEL/Rocky/Alma 8+, Fedora, desktops | `nmcli` |
+| `systemd-networkd` active, no netplan | Minimal/cloud images, Arch, some appliances | `networkctl` |
+| `networking` active | Debian with `/etc/network/interfaces` (ifupdown) | `ifdown`/`ifup` |
+| `network` active | RHEL/CentOS 7 and older | `systemctl restart network` |
+
+Edit the config in the place that manager reads, and apply it with that manager's command. Editing one and restarting another is the most common reason "the restart didn't work".
+
+---
+
+## Before you touch a remote server
+
+Network changes are the easiest way to lose a box.
+
+- Have **out-of-band access** ready: cloud serial console, IPMI/iLO, hypervisor console.
+- Prefer commands that **re-apply** a configuration over taking an interface down and up.
+- If you must do a down/up over SSH, run it as **one** command line so the "up" half still runs after your session drops, ideally with `nohup` or in `tmux`/`screen`.
+- On Ubuntu, use `netplan try`, which rolls back automatically.
+
+---
+
+## Ubuntu with netplan
+
+```bash
+sudo netplan generate          # syntax check: renders config, no changes applied
+sudo netplan try               # apply, auto-revert after 120 s unless you confirm
+sudo netplan apply             # apply for real
+```
+
+`netplan try` applies the config and waits for you to press Enter. If your SSH session died because the change broke connectivity, you can't press Enter, so it reverts. Use it for anything remote. Some changes, notably to bridges and bonds, may not revert cleanly, so read its warnings.
+
+Netplan writes configuration for either systemd-networkd (Ubuntu Server default) or NetworkManager (Ubuntu Desktop default), depending on `renderer:` in the YAML. Don't also edit the generated files under `/run`; they're overwritten.
+
+---
+
+## NetworkManager (RHEL family, Fedora, desktops)
+
+Apply a changed connection profile:
+
+```bash
+nmcli connection show                         # profile names and devices
+sudo nmcli connection reload                  # only needed if you edited files by hand
+sudo nmcli connection up "System eth0"        # re-activate the profile with the new settings
+```
+
+`nmcli connection up` on an already-active profile re-applies it in one step, so you don't need a separate `down`. That's safer over SSH than `down && up`.
+
+For a change you made with `nmcli connection modify`, `nmcli device reapply eth0` applies many settings (addresses, routes, DNS) to the live device without deactivating it.
+
+Example: set a static IP, then apply:
+
+```bash
+sudo nmcli connection modify "System eth0" \
+  ipv4.method manual \
+  ipv4.addresses 10.0.1.10/24 \
+  ipv4.gateway 10.0.1.1 \
+  ipv4.dns "10.0.0.2 10.0.0.3"
+sudo nmcli connection up "System eth0"
+```
+
+**Why `systemctl restart NetworkManager` often doesn't help:** NetworkManager is designed to keep existing connections running when the daemon restarts. It picks up running interfaces as they are. Restarting it is useful when the daemon itself is misbehaving, not for applying a changed profile.
+
+On RHEL 9 and later, new profiles are stored as keyfiles in `/etc/NetworkManager/system-connections/`. Older `ifcfg-*` files in `/etc/sysconfig/network-scripts/` are still read on RHEL 9 but are deprecated. `nmcli -f NAME,DEVICE,FILENAME connection show` tells you which file backs each profile.
+
+---
+
+## systemd-networkd without netplan
+
+```bash
+sudo networkctl reload                 # re-read .network/.netdev files
+sudo networkctl reconfigure ens5       # re-apply to one interface
+networkctl status ens5
+```
+
+These subcommands exist on recent systemd versions. On older ones, `sudo systemctl restart systemd-networkd` is the fallback; it briefly reconfigures every interface it manages.
+
+---
+
+## Debian with ifupdown
+
+Configuration lives in `/etc/network/interfaces` and `/etc/network/interfaces.d/`.
+
+```bash
+sudo ifdown eth1 && sudo ifup eth1
+```
+
+For the interface you're connected through, run both in one command line (as above) from `tmux`/`screen`, or from the console. `sudo systemctl restart networking` re-runs every `auto` interface and is the most likely to drop your session.
+
+On Debian systems that also run NetworkManager (desktops), NetworkManager leaves interfaces listed in `/etc/network/interfaces` alone by default. Whichever tool the interface is listed under is the one to use.
+
+---
+
+## RHEL/CentOS 7 legacy network service
+
+```bash
 sudo systemctl restart network
-
-# Restart a single interface without full service restart
-sudo ip link set eth0 down && sudo ip link set eth0 up
 ```
+
+That's the initscripts service reading `/etc/sysconfig/network-scripts/ifcfg-*`. On RHEL 8 it's deprecated and not installed by default, and on RHEL 9 it's gone, so the same command returns `Unit network.service not found`. Use `nmcli` there.
 
 ---
 
-## Ubuntu / Debian
+## Renewing a DHCP lease
 
-### NetworkManager (most desktop/server installs)
-
-```bash
-sudo systemctl restart NetworkManager
-sudo systemctl status NetworkManager
-```
-
-### netplan (Ubuntu 18.04+ server, cloud images)
+`dhclient` isn't used by default on current RHEL or Ubuntu Server, so `dhclient -r` either doesn't exist or fights the real manager. Use the manager:
 
 ```bash
-# Edit config
-sudo nano /etc/netplan/00-installer-config.yaml
-
-# Apply changes (no full restart needed)
-sudo netplan apply
-
-# Debug mode — shows what would change
-sudo netplan --debug apply
+sudo nmcli device reapply eth0     # NetworkManager
+sudo networkctl renew ens5         # systemd-networkd (recent systemd)
 ```
 
-### Legacy networking (older Debian, Ubuntu < 18.04)
-
-```bash
-sudo systemctl restart networking
-# or
-sudo service networking restart
-```
+`dhclient -r` on the interface you're connected through releases your address and drops your SSH session.
 
 ---
 
-## RHEL / CentOS / Rocky / AlmaLinux
-
-### NetworkManager (RHEL 7+, all current versions)
+## Verify it actually applied
 
 ```bash
-sudo systemctl restart NetworkManager
-sudo systemctl status NetworkManager
+ip -br addr                      # expected address on the expected interface?
+ip route                         # default route present and correct?
+resolvectl status | grep -A2 'DNS Servers'   # on systemd-resolved systems; otherwise cat /etc/resolv.conf
+ping -c 3 "$(ip route | awk '/^default/ {print $3; exit}')"   # can you reach the gateway?
 ```
 
-### Restart a specific connection profile
-
-```bash
-# List connection profiles
-nmcli connection show
-
-# Restart a specific connection
-nmcli connection down "eth0"
-nmcli connection up "eth0"
-
-# Or by UUID
-nmcli connection down <uuid>
-nmcli connection up <uuid>
-```
-
-### Legacy network service (RHEL 6, CentOS 6)
-
-```bash
-sudo service network restart
-# or
-sudo /etc/init.d/network restart
-```
+If the address is right but names don't resolve, see [DNS not resolving](/blog/dns-not-resolving-linux-fix). If the link itself looks wrong (`NO-CARRIER`, no address at all), [check the network interface](/blog/check-network-interface-linux).
 
 ---
 
-## Restart a Single Interface (All Distros)
-
-This restarts one interface without touching the rest — useful when you only changed one NIC's config:
+## When the apply fails
 
 ```bash
-# Bring interface down and up
-sudo ip link set eth0 down
-sudo ip link set eth0 up
-
-# Renew DHCP lease
-sudo dhclient -r eth0    # release
-sudo dhclient eth0       # renew
-
-# With nmcli (NetworkManager)
-nmcli device disconnect eth0
-nmcli device connect eth0
+journalctl -u NetworkManager -n 50 --no-pager      # or -u systemd-networkd, -u networking
+sudo netplan --debug generate                      # netplan YAML errors
+dmesg | grep -iE 'link (is )?(up|down)|eth|ens|enp' | tail -20   # driver and link messages
 ```
+
+Common causes: YAML indentation in netplan (tabs aren't allowed), a profile bound to the wrong interface name after hardware changes, and two managers both configured for the same interface.
+
+If you've lost the network entirely and have console access, you can bring back temporary connectivity by hand, then fix the configuration properly:
+
+```bash
+sudo ip addr add 10.0.1.10/24 dev ens5
+sudo ip link set ens5 up
+sudo ip route add default via 10.0.1.1
+```
+
+These changes are lost on the next reboot or apply.
 
 ---
 
-## Real Examples
+## Avoid these
 
-### IP address change didn't apply after editing config
-
-```bash
-# Ubuntu / Netplan
-sudo netplan apply
-ip addr show eth0    # verify new IP
-
-# RHEL / nmcli
-nmcli connection reload
-nmcli connection down eth0 && nmcli connection up eth0
-ip addr show eth0
-```
-
-### Connectivity lost after config edit — recover without reboot
-
-```bash
-# Check what broke
-ip addr show
-ip route show
-systemctl status NetworkManager
-
-# Rollback: restart NetworkManager (it re-reads config)
-sudo systemctl restart NetworkManager
-
-# If that fails, manually assign IP to recover
-sudo ip addr add 192.168.1.100/24 dev eth0
-sudo ip route add default via 192.168.1.1
-```
-
-### Apply static IP configuration (RHEL / nmcli)
-
-```bash
-# Set static IP via nmcli
-nmcli connection modify eth0 ipv4.method manual \
-  ipv4.addresses "192.168.1.100/24" \
-  ipv4.gateway "192.168.1.1" \
-  ipv4.dns "8.8.8.8 8.8.4.4"
-
-# Apply
-nmcli connection down eth0 && nmcli connection up eth0
-```
-
-### Check if restart actually applied
-
-```bash
-ip addr show
-ip route show
-cat /etc/resolv.conf    # DNS servers applied?
-ping -c 3 8.8.8.8      # connectivity test
-```
+- `nmcli networking off` over SSH: disables networking on every interface, including yours.
+- Overwriting `/etc/NetworkManager/NetworkManager.conf` to "fix" a conflict: edit it, or add a file in `/etc/NetworkManager/conf.d/`.
+- `systemctl restart network` on RHEL 8+, or `service networking restart` on a netplan Ubuntu. Wrong manager, no effect.
 
 ---
 
-## What to Do When Network Restart Fails
-
-```bash
-# Step 1: Check NetworkManager status
-systemctl status NetworkManager
-journalctl -u NetworkManager -n 50 --no-pager
-
-# Step 2: Check for config syntax errors (netplan)
-sudo netplan --debug generate
-
-# Step 3: Check interface state
-ip link show
-# Look for "state DOWN" or "state UNKNOWN"
-
-# Step 4: Check dmesg for driver errors
-dmesg | grep -iE "eth0|ens|eno|network" | tail -20
-
-# Step 5: Force reload interface config
-nmcli connection reload
-nmcli connection show    # list all connections
-```
-
-### Common error: "Failed to start Network Manager"
-
-```bash
-# Check what's blocking it
-journalctl -u NetworkManager -n 30 --no-pager | grep -i "error\|fail"
-
-# Common cause: conflicting /etc/network/interfaces and NetworkManager
-# Fix: either disable one or configure NetworkManager to ignore interfaces file
-echo -e "[main]\nplugins=ifupdown,keyfile\n\n[ifupdown]\nmanaged=false" \
-  | sudo tee /etc/NetworkManager/NetworkManager.conf
-sudo systemctl restart NetworkManager
-```
-
----
-
-## Common Mistakes
-
-**Mistake 1: Using `service network restart` on modern systems**
-On RHEL 7+, the `network` service is deprecated in favor of `NetworkManager`. `systemctl restart network` may silently fail or do nothing.
-
-**Mistake 2: Editing `/etc/network/interfaces` on Ubuntu with NetworkManager**
-If NetworkManager is running, it manages interfaces and ignores `/etc/network/interfaces` by default. Edit via `nmcli` or netplan instead.
-
-**Mistake 3: `netplan apply` vs `netplan try`**
-`netplan apply` applies immediately — if you break connectivity, you lose access.
-`netplan try` applies for 120 seconds and rolls back automatically if you don't confirm. Use `try` on remote servers.
-
-```bash
-sudo netplan try    # safe for remote servers
-# (connects you get 2 min to confirm)
-ACCEPT=true sudo netplan try
-```
-
-**Mistake 4: Not checking DNS after restart**
-IP and routing can be fine but DNS broken:
-
-```bash
-cat /etc/resolv.conf
-nslookup google.com
-systemd-resolve --status | grep "DNS Servers"
-```
-
----
-
-## Pro Tips
-
-```bash
-# Bounce all connections managed by NetworkManager
-nmcli networking off && nmcli networking on
-
-# Check which NetworkManager version / plugins are active
-NetworkManager --version
-nmcli general status
-
-# Watch network events in real time
-journalctl -fu NetworkManager
-
-# Test connectivity before committing a change
-ping -c 3 8.8.8.8 && echo "connectivity OK" || echo "BROKEN"
-
-# Find which config file NetworkManager is using for an interface
-nmcli -f NAME,DEVICE,FILENAME connection show
-```
-
----
-
-## Conclusion
-
-On modern Linux (Ubuntu 20.04+, RHEL 8+): `systemctl restart NetworkManager` handles most cases. For single-interface changes: `nmcli connection down/up`. For netplan configs on Ubuntu server: `netplan try` before `netplan apply` on remote machines. Always verify with `ip addr show` and a ping after restarting.
-
----
-
-*Related: [Check Open Ports in Linux: ss vs netstat](/blog/check-open-ports-linux-ss-netstat-guide) — verify services are reachable after network restart. [systemctl Restart Service Not Working: Fix Guide](/blog/systemctl-restart-service-not-working-fix) — same diagnostic approach for when NetworkManager itself won't restart.*
+*Related: [Cannot Connect to Server](/blog/cannot-connect-to-server-linux-troubleshooting) when networking is up but a service still isn't reachable. [systemctl Restart Not Working](/blog/systemctl-restart-service-not-working) for general systemd restart problems.*

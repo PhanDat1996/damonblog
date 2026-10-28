@@ -1,240 +1,236 @@
 ---
-title: "Linux Check Open Connections: ss, netstat, lsof Examples"
+title: "Linux Check Open Connections: Who Is Connected Right Now"
 date: "2026-04-22"
-excerpt: "Check open network connections in Linux using ss, netstat, and lsof — see established connections, connection counts by state, and find which process owns each connection."
+updated: "2026-10-28"
+excerpt: "See established TCP connections on Linux, count them by remote IP or state, and find which process owns them. ss filters that work, plus CLOSE-WAIT."
 tags: ["linux", "networking", "troubleshooting", "monitoring"]
 featured: false
-slug: "linux-check-open-connections-command"
 category: "linux"
 ---
 
-Need to see all active connections on a Linux server? Whether you're debugging a service, auditing network activity, or investigating a slow application, these commands show you exactly what's connected and who owns it.
+Your database is refusing new clients with "too many connections". Or a service suddenly feels slow and you want to know who is hitting it, from where, and how hard. That isn't a question about which ports are open. It's about the **connections** that exist right now.
+
+```bash
+sudo ss -tnp state established
+```
+
+This page is about established connections: counting them, grouping them, and spotting the bad patterns. If you want to know which ports are *listening*, use the [open ports guide](/blog/check-open-ports-linux) instead.
 
 ---
 
-## TL;DR
+## Listeners vs connections
+
+```
+             LISTEN socket (one per port)
+                 0.0.0.0:443
+                     │ accept()
+     ┌───────────────┼───────────────┐
+     ▼               ▼               ▼
+ 10.0.1.10:443   10.0.1.10:443   10.0.1.10:443     ESTABLISHED sockets
+ ↔ 203.0.113.7   ↔ 198.51.100.4  ↔ 10.0.2.15       (one per client)
+   :51234          :40112          :38807
+```
+
+`ss -l` shows the top row. `ss state established` shows the bottom row. A web server can have one listener and ten thousand established connections.
+
+---
+
+## See established connections
 
 ```bash
-ss -tnp state established          # all active TCP connections
-ss -s                              # connection count by state
-ss -tnp | grep :8080               # connections to a specific port
-lsof -i -sTCP:ESTABLISHED         # established connections with process detail
-netstat -tnp                       # older alternative
+sudo ss -tnp state established
+```
+
+```
+Recv-Q  Send-Q  Local Address:Port   Peer Address:Port   Process
+0       0           10.0.1.10:443   203.0.113.7:51234    users:(("nginx",pid=1191,fd=12))
+0       0           10.0.1.10:443  198.51.100.4:40112    users:(("nginx",pid=1192,fd=9))
+0       0           10.0.1.10:41876   10.0.1.20:5432     users:(("python3",pid=2210,fd=7))
+0       36          10.0.1.10:22    192.0.2.50:60011     users:(("sshd",pid=3301,fd=4))
+```
+
+Note that with a `state` filter, `ss` omits the State column. The peer address is column 4, not 5, which matters for every `awk` one-liner below.
+
+The direction is in the ports: a well-known port on the **local** side (`:443`) means an inbound client; a well-known port on the **peer** side (`:5432`) means this host is the client.
+
+---
+
+## Filter by port: sport vs dport
+
+`sport` is the local port, `dport` is the remote port. Mixing these up is the most common mistake with `ss` filters.
+
+```bash
+# Inbound: clients connected to our HTTPS server
+sudo ss -tnp state established '( sport = :443 )'
+
+# Outbound: our connections to a PostgreSQL server
+sudo ss -tnp state established '( dport = :5432 )'
+
+# Everything to or from one host
+sudo ss -tnp dst 10.0.1.20
 ```
 
 ---
 
-## ss: The Primary Tool
+## Count connections
 
-### All established TCP connections
+`-H` suppresses the header line, so `wc -l` gives the real number (on older iproute2 without `-H`, subtract one):
 
 ```bash
-ss -tnp state established
+# Inbound HTTPS connections
+ss -Htn state established '( sport = :443 )' | wc -l
+
+# Our connections to PostgreSQL
+ss -Htn state established '( dport = :5432 )' | wc -l
+```
+
+Top remote IPs connected to the web server:
+
+```bash
+ss -Htn state established '( sport = :443 )' \
+  | awk '{print $4}' | sed -E 's/:[0-9]+$//' | sort | uniq -c | sort -rn | head
 ```
 
 ```
-Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process
-0       0       10.0.1.10:80        1.2.3.4:54321      users:(("nginx",pid=1234,fd=12))
-0       0       10.0.1.10:80        5.6.7.8:49201      users:(("nginx",pid=1235,fd=8))
-0       0       10.0.1.10:5432      10.0.1.20:34521    users:(("postgres",pid=3012,fd=22))
+    412 10.0.0.5
+     38 203.0.113.7
+      9 198.51.100.4
 ```
 
-Flags:
-- `-t` — TCP only
-- `-n` — show port numbers, not service names
-- `-p` — show process name and PID
+The `sed` strips the trailing port, which also works for IPv6 addresses like `[2001:db8::1]:51234` where cutting on `:` would not. A single IP with most of the connections is usually a load balancer or NAT gateway, so check that before you block anything.
 
-### Connection count by state (overview)
+Connections per process:
+
+```bash
+sudo ss -Htnp state established | grep -oE '"[^"]+",pid=[0-9]+' | sort | uniq -c | sort -rn | head
+```
+
+---
+
+## Count by state
+
+The fastest overview:
 
 ```bash
 ss -s
 ```
 
 ```
-Total: 287
-TCP:   45 (estab 12, closed 8, orphaned 0, timewait 23)
+Total: 1214
+TCP:   980 (estab 512, closed 402, orphaned 0, timewait 398)
 
-Transport Total  IP   IPv6
-RAW       0      0    0
-UDP       8      5    3
-TCP       45     42   3
+Transport Total     IP        IPv6
+RAW       1         0         1
+UDP       9         6         3
+TCP       578       541       37
+INET      588       547       41
+FRAG      0         0         0
 ```
 
-This is the fastest way to see if TIME-WAIT is accumulating or connection counts are abnormal.
-
-### Filter by port
+For a full breakdown by state:
 
 ```bash
-# Who is connected to port 80?
-ss -tnp state established dport :80
-
-# Who is connected to port 5432 (Postgres)?
-ss -tnp state established dport :5432
-
-# What is this server connected TO on port 443?
-ss -tnp state established sport :443
-```
-
----
-
-## Count Connections by Source IP
-
-```bash
-# Who is connecting most?
-ss -tn state established | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -rn | head -10
+ss -Htan | awk '{print $1}' | sort | uniq -c | sort -rn
 ```
 
 ```
-    142 10.0.1.50     ← internal load balancer (normal)
-     23 1.2.3.4       ← external IP, 23 connections (investigate)
-      8 10.0.1.100
+    512 ESTAB
+    398 TIME-WAIT
+     41 CLOSE-WAIT
+     22 LISTEN
+      3 SYN-SENT
 ```
 
----
-
-## Monitor Connections Over Time
-
-```bash
-# Connection count trend every 2 seconds
-watch -n 2 'ss -s | grep TCP'
-
-# TIME-WAIT count (causes 502s under load if too high)
-watch -n 1 'ss -tn state time-wait | wc -l'
-
-# Established connection count to a specific port
-watch -n 2 'ss -tn state established dport :80 | wc -l'
-```
-
----
-
-## lsof: Connections With More Process Detail
-
-```bash
-# All established TCP connections
-lsof -i -sTCP:ESTABLISHED
-
-# Connections from a specific process
-lsof -p 1234 -i
-
-# Everything connected to port 8080
-lsof -i :8080
-
-# All connections for nginx
-lsof -c nginx -i
-```
-
-Output:
-
-```
-COMMAND  PID   USER  FD  TYPE  NODE  NAME
-nginx   1234  www    8u  IPv4  TCP   server:http->client:54321 (ESTABLISHED)
-nginx   1234  www   12u  IPv4  TCP   server:http->client:49201 (ESTABLISHED)
-```
-
----
-
-## All Connection States
-
-```bash
-ss -tan    # all TCP connections, all states
-```
-
-States you'll see:
-
-| State | Meaning |
+| State | What it tells you |
 |---|---|
-| `ESTABLISHED` | Active connection, data flowing |
-| `TIME-WAIT` | Connection closed, waiting 60s before releasing port |
-| `CLOSE-WAIT` | Remote side closed, waiting for local close |
-| `LISTEN` | Waiting for incoming connections |
-| `SYN-SENT` | Connection attempt in progress |
-| `FIN-WAIT-1/2` | Local side initiated close |
+| `ESTAB` | Open connection. Idle keepalive connections count too |
+| `TIME-WAIT` | This side closed first. Lasts 60 s on Linux. Normal in moderation |
+| `CLOSE-WAIT` | The peer closed; the local app hasn't called `close()` yet |
+| `SYN-SENT` | We sent a SYN, no answer yet. Many of these = destination down or filtered |
+| `SYN-RECV` | Inbound handshakes in progress. A flood of these can mean a SYN flood |
+| `FIN-WAIT-2` | We closed, waiting for the peer's FIN |
 
-**High TIME-WAIT count** (> 5000) = TCP connections closing too fast, usually from missing keepalive in nginx or connection pool exhaustion.
+Two patterns worth acting on:
 
-**High CLOSE-WAIT count** = application not calling `close()` on sockets — typically a code bug.
+- **CLOSE-WAIT that keeps growing** is almost always an application bug: the remote side hung up and the code never closed its socket. It eventually ends in [too many open files](/blog/too-many-open-files-linux-fix). Group it by peer to find which client library is leaking:
+  ```bash
+  ss -Htn state close-wait | awk '{print $4}' | sort | uniq -c | sort -rn | head
+  ```
+- **Thousands of TIME-WAIT** are usually harmless on a server. They matter on the *client* side when they pile up toward one destination and exhaust ephemeral ports. [TIME_WAIT explained](/blog/linux-time-wait-explained) covers when to worry.
 
 ---
 
-## Real Examples
-
-### Verify connections drop after nginx restart
+## Which process owns a connection
 
 ```bash
-# Before restart
-ss -tn state established dport :80 | wc -l
-# 142
-
-systemctl reload nginx
-
-# After reload (should drain gracefully, not drop)
-watch -n 1 'ss -tn state established dport :80 | wc -l'
+sudo ss -tnp state established '( dport = :5432 )'
 ```
 
-### Find connection leak in application
+The `users:(...)` field shows it. To list everything one process is connected to:
 
 ```bash
-# Application connection count growing over time
-PID=$(pgrep -x myapp)
-while true; do
-  COUNT=$(ss -tnp | grep "pid=$PID" | wc -l)
-  echo "$(date +%H:%M:%S): $COUNT connections"
-  sleep 30
+PID=2210
+sudo ss -tnp state established | grep "pid=$PID,"
+```
+
+The trailing comma stops `pid=221` from matching `pid=2210`.
+
+With `lsof`, remember that options are OR'ed unless you add `-a`:
+
+```bash
+sudo lsof -nP -a -p 2210 -iTCP -sTCP:ESTABLISHED # this PID AND established TCP
+sudo lsof -nP -iTCP -sTCP:ESTABLISHED            # all established TCP
+```
+
+```
+COMMAND  PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+python3 2210  app    7u  IPv4  58123      0t0  TCP 10.0.1.10:41876->10.0.1.20:5432 (ESTABLISHED)
+```
+
+Without `-a`, `lsof -p 2210 -i` lists every file of PID 2210 *plus* every network socket on the box.
+
+---
+
+## Watch over time
+
+```bash
+# Inbound connection count every 2 seconds
+watch -n 2 "ss -Htn state established '( sport = :443 )' | wc -l"
+
+# Connection count of one process, logged every 30 s
+PID=$(pgrep -o -x myapp)
+while sleep 30; do
+  echo "$(date +%T) $(ss -Htnp state established | grep -c "pid=$PID,")"
 done
 ```
 
-If it grows without releasing: connection leak.
+If the count tracks traffic, it's load. If it only ever goes up, the application isn't returning connections to its pool, or isn't closing them.
 
-### Check database connection pool exhaustion
+### Database pool check
+
+When an app reports "too many connections", compare both ends:
 
 ```bash
-# How many connections to Postgres right now?
-ss -tnp state established dport :5432 | wc -l
+# On the app host: how many connections does it hold?
+ss -Htn state established '( dport = :5432 )' | wc -l
 
-# Compare against max_connections
+# On the database
 sudo -u postgres psql -c "SHOW max_connections;"
-sudo -u postgres psql -c "SELECT count(*) FROM pg_stat_activity;"
+sudo -u postgres psql -c "SELECT client_addr, state, count(*) FROM pg_stat_activity GROUP BY 1,2 ORDER BY 3 DESC;"
 ```
+
+Many connections in state `idle` from one client usually means its pool is oversized, or several app instances each have their own full-size pool.
 
 ---
 
-## Common Mistakes
+## Quick checklist
 
-**Mistake 1: Confusing TIME-WAIT for active connections**
-`ss -tn state established` shows only active connections. `ss -tan` shows all states including TIME-WAIT which aren't real connections.
-
-**Mistake 2: Not filtering state when counting**
-```bash
-ss -tn | wc -l        # includes header line + all states
-ss -tn state established | wc -l   # only real connections
-```
-
-**Mistake 3: Forgetting `-p` needs root for process names**
-```bash
-sudo ss -tnp state established   # shows process for all sockets
-```
+1. `ss -s` for the overall picture.
+2. `ss -tnp state established` with `sport` (inbound) or `dport` (outbound).
+3. Group by peer IP and by process to find who dominates.
+4. Look at CLOSE-WAIT (app bug) and TIME-WAIT (client-side port pressure) separately.
+5. Watch the count over time before deciding it's a leak.
 
 ---
 
-## Quick Reference
-
-```bash
-ss -tnp state established           # active connections + process
-ss -s                               # count by state
-ss -tnp state time-wait | wc -l    # TIME-WAIT count
-ss -tnp dport :5432                 # connections to postgres
-ss -tan                             # all states
-
-lsof -i -sTCP:ESTABLISHED          # with more process detail
-lsof -p <pid> -i                   # for specific process
-```
-
----
-
-## Conclusion
-
-`ss -tnp state established` is the go-to command. Pair it with `ss -s` for a state summary. Watch TIME-WAIT counts during load — if they climb past 5000, you likely have a keepalive misconfiguration. For per-process connection detail, `lsof -p <pid> -i` gives more readable output.
-
----
-
-*Related: [Check Open Ports in Linux: ss vs netstat](/blog/check-open-ports-linux-ss-netstat-guide) — listeners vs established connections. [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load) — high TIME-WAIT causing 502 errors explained.*
+*Related: [netstat vs ss](/blog/netstat-vs-ss-command) if you're translating old netstat commands. [strace, lsof, and ss](/blog/strace-lsof-ss-debugging) for following a connection into the process.*
