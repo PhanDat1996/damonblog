@@ -13,7 +13,7 @@ import type { Attempt, AttemptOutcome, SkillStatus, TrackerState } from './stora
 import { computeProgress, countdown, latestAttempt } from './progress.ts';
 import { recommend, RECENT_DAYS, REVIEW_INTERVAL_DAYS } from './recommend.ts';
 import { CAPTURES } from './simulation-captures.ts';
-import { SIMULATIONS, commandOutput, getSimulation, matchCommand, orderedOptions, practiceItemTitle, suggestOutcome } from './simulations.ts';
+import { NOT_RECORDED, SIMULATIONS, commandOutput, getSimulation, isRecorded, matchCommand, orderedOptions, practiceItemTitle, suggestOutcome } from './simulations.ts';
 
 let seq = 0;
 function attempt(date: string, outcome: AttemptOutcome, minutes = 30, extra: Partial<Attempt> = {}): Attempt {
@@ -317,7 +317,7 @@ test('simulations: map to real tasks and skills, one correct option per decision
 test('simulations: every recorded capture is used', () => {
   const used = new Set<string>();
   for (const sim of SIMULATIONS) {
-    for (const c of sim.commands) Object.values(c.outputs).forEach((k) => used.add(k as string));
+    for (const c of sim.commands) Object.values(c.outputs).forEach((k) => { if (k) used.add(k); });
     for (const d of sim.decisions) for (const o of d.options) for (const s of o.shows ?? []) used.add(s.output);
   }
   const unused = Object.keys(CAPTURES).filter((k) => !used.has(k));
@@ -354,5 +354,16 @@ test('simulations: displayed option order is stable and does not always lead wit
   for (const d of decisions) {
     assert.deepEqual(orderedOptions(d).map((o) => o.id), orderedOptions(d).map((o) => o.id));
     assert.equal(orderedOptions(d).length, d.options.length);
+  }
+});
+
+test('simulations: unrecorded outputs are reported, never invented', () => {
+  const sim = getSimulation('sim.node-notready-kubelet')!;
+  const enabled = sim.commands.find((c) => c.id === 'enabled')!;
+  assert.equal(isRecorded(enabled, 'start'), false);
+  assert.equal(commandOutput(enabled, 'start'), NOT_RECORDED);
+  assert.equal(commandOutput(enabled, 'fixed'), 'enabled');
+  for (const s of SIMULATIONS) {
+    assert.ok(s.commands.some((c) => isRecorded(c, 'start')), `${s.id} has commands to start with`);
   }
 });

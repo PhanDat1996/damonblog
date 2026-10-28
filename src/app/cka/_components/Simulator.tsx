@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { SKILLS } from '@/lib/cka/curriculum.ts';
 import { CAPTURE_ENV, CAPTURED_ON, CAPTURES } from '@/lib/cka/simulation-captures.ts';
-import { commandOutput, matchCommand, orderedOptions, suggestOutcome } from '@/lib/cka/simulations.ts';
+import { commandOutput, isRecorded, matchCommand, orderedOptions, suggestOutcome } from '@/lib/cka/simulations.ts';
 import type { Simulation } from '@/lib/cka/simulations.ts';
 import { getTask } from '@/lib/cka/tasks.ts';
 import { formatDate } from '@/lib/cka/dates.ts';
@@ -99,7 +99,7 @@ export function Simulator({
 
       <p className="rounded-md border border-zinc-700 bg-zinc-950/60 p-3 text-xs leading-relaxed text-zinc-400">
         Not a live cluster. Every output below was recorded from a real run ({CAPTURE_ENV}, {formatDate(CAPTURED_ON)}),
-        so names, IPs and ages are from that run. Only the listed commands have output.
+        so names, IPs and ages are from that run. Only the listed commands have output, and the list changes as the scenario moves on.
       </p>
 
       <div className="space-y-2">
@@ -135,7 +135,7 @@ export function Simulator({
       <div className="space-y-2">
         <h4 className={LABEL}>Investigate</h4>
         <ul className="flex flex-col gap-1.5">
-          {sim.commands.map((c) => (
+          {sim.commands.filter((c) => isRecorded(c, state)).map((c) => (
             <li key={c.id}>
               <button
                 type="button"
