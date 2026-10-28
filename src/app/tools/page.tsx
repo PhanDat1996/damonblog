@@ -208,6 +208,30 @@ export default function ToolsPage() {
         </div>
       </section>
 
+      {/* Study */}
+      <section aria-labelledby="study-tools" className="space-y-6">
+        <h2 id="study-tools" className="font-mono text-xs uppercase tracking-widest text-zinc-500">
+          Study
+        </h2>
+        <Link
+          href="/cka"
+          className="group flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 transition-all hover:border-green-500/40 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-400 sm:flex-row sm:items-center sm:gap-6"
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="font-display text-lg font-bold text-white group-hover:text-green-400 transition-colors">
+              CKA Study Tracker
+            </h3>
+            <p className="mt-1 text-sm text-zinc-400 leading-snug">
+              Track your Certified Kubernetes Administrator prep against the official curriculum, log practice
+              attempts, and work through hands-on lab tasks. Progress stays in your browser.
+            </p>
+          </div>
+          <span className="inline-flex flex-shrink-0 items-center gap-1 self-start rounded-lg bg-green-400 px-3 py-1.5 font-mono text-xs font-semibold text-zinc-950 group-hover:bg-green-300 transition-colors sm:self-center">
+            Open tracker →
+          </span>
+        </Link>
+      </section>
+
       {/* CLI tools */}
       <section aria-labelledby="cli-tools" className="space-y-6">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
