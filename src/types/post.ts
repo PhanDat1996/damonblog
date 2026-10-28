@@ -10,6 +10,7 @@ export interface Post {
   category: Category;
   featured?: boolean;
   lab?: boolean;
+  noindex?: boolean;
   coverImage?: string;
   readingTime: string;
   content?: string;
@@ -24,5 +25,6 @@ export interface PostMeta {
   category: Category;
   featured?: boolean;
   lab?: boolean; // commands and output were run on the lab VM
+  noindex?: boolean; // keep the page live but out of search results and the sitemap
   coverImage?: string;
 }

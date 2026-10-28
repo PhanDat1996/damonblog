@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "See who logged in to a Linux server, from where and when: read last, lastb and lastlog output correctly, spot brute force, and know what these logs miss."
 tags: ["linux", "security", "troubleshooting", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

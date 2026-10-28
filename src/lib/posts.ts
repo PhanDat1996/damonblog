@@ -67,6 +67,7 @@ export function getPostBySlug(slug: string): Post | null {
       category: (meta.category as Category) ?? 'linux',
       featured: meta.featured ?? false,
       lab: meta.lab ?? false,
+      noindex: meta.noindex ?? false,
       coverImage: meta.coverImage,
       readingTime: rt.text,
       content,

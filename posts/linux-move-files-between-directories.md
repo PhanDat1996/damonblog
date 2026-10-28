@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Move files and folders in Linux with mv: avoid silent overwrites, merge into an existing folder, move huge trees across disks, and move logs safely."
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

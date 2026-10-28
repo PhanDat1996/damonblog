@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Find a string in a file, a directory tree or compressed logs with grep: recursive search, regex that works, context lines, and the flags people get wrong."
 tags: ["linux", "troubleshooting", "debugging", "logs", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

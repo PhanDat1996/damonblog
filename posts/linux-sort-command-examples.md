@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Practical Linux sort examples: one column, numbers, du sizes, dates and frequency counts, plus why -k2 sorts past column 2 and how locale changes order."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

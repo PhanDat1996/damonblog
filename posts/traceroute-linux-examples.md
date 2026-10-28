@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Use traceroute and mtr on Linux to find where packets stop or slow down, tell real loss from ICMP rate limiting, and trace the actual TCP port."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

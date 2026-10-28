@@ -14,12 +14,14 @@ const TOOL_SLUGS = [
 export default function sitemap(): MetadataRoute.Sitemap {
   const posts = getAllPosts();
 
-  const postEntries: MetadataRoute.Sitemap = posts.map((post) => ({
-    url: `${BASE_URL}/blog/${post.slug}`,
-    lastModified: new Date(post.updated ?? post.date),
-    changeFrequency: 'monthly',
-    priority: post.featured ? 0.9 : 0.7,
-  }));
+  const postEntries: MetadataRoute.Sitemap = posts
+    .filter((post) => !post.noindex)
+    .map((post) => ({
+      url: `${BASE_URL}/blog/${post.slug}`,
+      lastModified: new Date(post.updated ?? post.date),
+      changeFrequency: 'monthly',
+      priority: post.featured ? 0.9 : 0.7,
+    }));
 
   const categoryEntries: MetadataRoute.Sitemap = VALID_CATEGORIES.map((cat) => ({
     url: `${BASE_URL}/blog/${cat}`,
