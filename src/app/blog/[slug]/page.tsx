@@ -84,7 +84,7 @@ export default async function BlogPostPage({ params }: Props) {
           </Link>
           {post.category && CATEGORIES[post.category] && (
             <Link
-              href={`/blog/${post.category}/`}
+              href={`/blog/${post.category}`}
               className="inline-flex items-center gap-1.5 font-mono text-xs text-green-400 border border-green-800/40 bg-green-900/20 px-2 py-0.5 rounded hover:bg-green-900/40 transition-colors"
             >
               {CATEGORIES[post.category].icon} {CATEGORIES[post.category].label}
@@ -135,7 +135,7 @@ export default async function BlogPostPage({ params }: Props) {
         {post.category && CATEGORIES[post.category] && (
           <div className="mt-10 pt-6 border-t border-zinc-800">
             <Link
-              href={`/blog/${post.category}/`}
+              href={`/blog/${post.category}`}
               className="font-mono text-xs text-zinc-400 hover:text-green-400 transition-colors"
             >
               ← Back to {CATEGORIES[post.category].label} production guides

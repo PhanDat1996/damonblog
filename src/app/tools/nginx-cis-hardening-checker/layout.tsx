@@ -1,4 +1,4 @@
-// src/app/tools/nginx-hardening-checker/layout.tsx
+// src/app/tools/nginx-cis-hardening-checker/layout.tsx
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -6,13 +6,13 @@ export const metadata: Metadata = {
   description:
     "Paste your NGINX config and get a structured security report — missing headers, TLS misconfigurations, information disclosure risks, and performance gaps. Free, browser-only.",
   alternates: {
-    canonical: "https://www.damonsec.com/tools/nginx-hardening-checker",
+    canonical: "https://www.damonsec.com/tools/nginx-cis-hardening-checker",
   },
   openGraph: {
     title: "NGINX Hardening Checker — damonsec.com",
     description:
       "Structured NGINX security audit: TLS config, security headers, information disclosure, rate limiting, and more. Scored report with exact config fixes.",
-    url: "https://www.damonsec.com/tools/nginx-hardening-checker",
+    url: "https://www.damonsec.com/tools/nginx-cis-hardening-checker",
     type: "website",
     siteName: "damonsec.com",
   },

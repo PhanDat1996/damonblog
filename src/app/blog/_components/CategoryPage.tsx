@@ -11,11 +11,11 @@ export function buildCategoryMetadata(category: Category): Metadata {
   return {
     title: config.metaTitle,
     description: config.metaDescription,
-    alternates: { canonical: `${BASE_URL}/blog/${category}/` },
+    alternates: { canonical: `${BASE_URL}/blog/${category}` },
     openGraph: {
       title: config.metaTitle,
       description: config.metaDescription,
-      url: `${BASE_URL}/blog/${category}/`,
+      url: `${BASE_URL}/blog/${category}`,
       type: 'website',
       siteName: 'damonsec.com',
     },
@@ -124,7 +124,7 @@ export default function CategoryPage({ category }: { category: Category }) {
           {others.map((cat) => {
             const c = CATEGORIES[cat];
             return (
-              <Link key={cat} href={`/blog/${cat}/`}
+              <Link key={cat} href={`/blog/${cat}`}
                 className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 rounded-lg hover:border-zinc-500 hover:text-white transition-all">
                 {c.icon} {c.label}
               </Link>

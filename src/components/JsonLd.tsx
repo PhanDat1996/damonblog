@@ -32,7 +32,7 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
     '@type': 'BlogPosting',
     headline: post.title,
     description: post.excerpt,
-    image: `https://www.damonsec.com/api/og?title=${encodeURIComponent(post.title)}`,
+    image: `${url}/opengraph-image`,
     author: {
       '@type': 'Person',
       name: 'Damon',
@@ -42,6 +42,10 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
         '@type': 'Organization',
         name: 'OPSWAT',
       },
+      sameAs: [
+        'https://github.com/PhanDat1996',
+        'https://www.linkedin.com/in/thanh-dat-phan-b95027224/',
+      ],
     },
     publisher: {
       '@type': 'Person',
@@ -109,6 +113,10 @@ export function WebsiteJsonLd() {
         name: 'OPSWAT',
       },
       url: 'https://www.damonsec.com/about',
+      sameAs: [
+        'https://github.com/PhanDat1996',
+        'https://www.linkedin.com/in/thanh-dat-phan-b95027224/',
+      ],
     },
     inLanguage: 'en-US',
   };

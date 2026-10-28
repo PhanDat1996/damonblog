@@ -84,7 +84,6 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://www.damonsec.com',
     siteName: 'damonsec.com',
     title: 'Linux Troubleshooting & Performance Tuning — Damon',
     description:
@@ -96,9 +95,6 @@ export const metadata: Metadata = {
     description:
       'Real-world Linux troubleshooting guides from a Senior L3 engineer.',
     creator: '@damonsec',
-  },
-  alternates: {
-    canonical: 'https://www.damonsec.com',
   },
   robots: {
     index: true,

@@ -4,6 +4,13 @@ import { VALID_CATEGORIES } from '@/lib/categories';
 
 const BASE_URL = 'https://www.damonsec.com';
 
+const TOOL_SLUGS = [
+  'nginx-config-analyzer',
+  'nginx-cis-hardening-checker',
+  'nginx-cve-checker',
+  'pg-hardening-checker',
+];
+
 export default function sitemap(): MetadataRoute.Sitemap {
   const posts = getAllPosts();
 
@@ -15,7 +22,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   }));
 
   const categoryEntries: MetadataRoute.Sitemap = VALID_CATEGORIES.map((cat) => ({
-    url: `${BASE_URL}/blog/${cat}/`,
+    url: `${BASE_URL}/blog/${cat}`,
     lastModified: new Date(),
     changeFrequency: 'weekly',
     priority: 0.8,
@@ -41,12 +48,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'monthly',
       priority: 0.8,
     },
-    {
-      url: `${BASE_URL}/tools/nginx-config-analyzer`,
+    ...TOOL_SLUGS.map((tool) => ({
+      url: `${BASE_URL}/tools/${tool}`,
       lastModified: new Date(),
-      changeFrequency: 'monthly',
+      changeFrequency: 'monthly' as const,
       priority: 0.7,
-    },
+    })),
     {
       url: `${BASE_URL}/about`,
       lastModified: new Date(),
@@ -58,6 +65,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified: new Date(),
       changeFrequency: 'yearly',
       priority: 0.4,
+    },
+    {
+      url: `${BASE_URL}/privacy`,
+      lastModified: new Date(),
+      changeFrequency: 'yearly',
+      priority: 0.3,
     },
     ...postEntries,
   ];

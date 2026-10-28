@@ -1,13 +1,18 @@
 import { ImageResponse } from 'next/og';
-import { getPostBySlug } from '@/lib/posts';
+import { getAllSlugs, getPostBySlug } from '@/lib/posts';
 
-export const runtime = 'edge';
+// Node runtime: getPostBySlug reads posts/ via fs, which edge cannot do.
 export const alt = 'Blog post';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
-export default async function OgImage({ params }: { params: { slug: string } }) {
-  const post = getPostBySlug(params.slug);
+export function generateStaticParams() {
+  return getAllSlugs().map((slug) => ({ slug }));
+}
+
+export default async function OgImage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const post = getPostBySlug(slug);
 
   const title = post?.title ?? 'damonsec.com';
   const tags = post?.tags?.slice(0, 3) ?? [];

@@ -5,6 +5,7 @@ export const metadata: Metadata = {
   title: 'About',
   description:
     'Damon — Senior Technical Support Engineer at OPSWAT. 7+ years debugging Linux systems, NGINX, Docker, and production infrastructure across enterprise environments.',
+  alternates: { canonical: '/about' },
 };
 
 const SKILLS = [

@@ -4,6 +4,7 @@ import Link from 'next/link';
 export const metadata: Metadata = {
   title: 'Tools',
   description: 'Open-source tools and utilities built by Damon for DevOps, security operations, and infrastructure engineering.',
+  alternates: { canonical: '/tools' },
 };
 
 type ToolStatus = 'stable' | 'beta' | 'wip';
@@ -217,7 +218,7 @@ export default function ToolsPage() {
           </p>
           <div className="mt-6 flex items-center justify-center gap-4">
             <a
-              href="https://github.com"
+              href="https://github.com/PhanDat1996"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 font-mono text-xs text-zinc-300 hover:border-zinc-500 hover:text-white transition-all"

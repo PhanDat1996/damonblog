@@ -10,6 +10,7 @@ export const metadata: Metadata = {
   title: 'Linux Troubleshooting & Performance Tuning — Damon',
   description:
     'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents. No theory, no fluff.',
+  alternates: { canonical: '/' },
 };
 
 const FEATURED_ARTICLES = [
