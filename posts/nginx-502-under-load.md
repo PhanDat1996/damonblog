@@ -14,6 +14,8 @@ The standard definition of a 502 ("invalid response from upstream") is useless h
 
 If your 502s happen at any traffic level, start with the general [NGINX 502 Bad Gateway lookup table](/blog/nginx-502-bad-gateway-fix-linux) instead. This post is for the load-only case.
 
+> **Lab-tested:** the accept-queue and port-exhaustion behavior below was reproduced on NGINX 1.28.3, Ubuntu 26.04 (kernel 7.0), with `ab` driving load through NGINX to a deliberately slow Python backend. The lab results section has the numbers. One finding contradicts a lot of advice online, including an earlier version of this post: **a full accept queue mostly produces 504s, not 502s.**
+
 ---
 
 ## TL;DR
@@ -61,7 +63,7 @@ Application servers (Gunicorn, Unicorn, Puma, PHP-FPM) have a fixed number of wo
 1. Workers are all busy, so nobody calls `accept()` on the listening socket.
 2. The kernel completes TCP handshakes on its own and parks them in the **accept queue**. Its size is the app's backlog, capped by `net.core.somaxconn`.
 3. When the queue is full, Linux by default **drops** new SYNs and the final ACK of handshakes. NGINX's `connect()` stalls while the kernel retransmits. That shows up as slow connects and, once `proxy_connect_timeout` expires, as 504s.
-4. With `net.ipv4.tcp_abort_on_overflow=1`, the kernel sends a RST instead. NGINX logs `recv() failed (104: Connection reset by peer)` or `upstream prematurely closed connection` and returns 502.
+4. With `net.ipv4.tcp_abort_on_overflow=1`, the kernel resets some connections instead. In the lab that showed up as `connect() failed (104: Connection reset by peer) while connecting to upstream` and a 502, but only for a small share of requests: most still ended as 504s, because new SYNs are still dropped while the queue is full.
 5. Meanwhile, requests that did get a worker are taking longer and longer. App-server watchdogs kill the slow ones (Gunicorn's default `--timeout` is 30 seconds), and every request on a killed worker becomes `upstream prematurely closed connection` → 502.
 
 This is why `curl` to the backend passes fine: a single request never fills the queue.
@@ -104,11 +106,13 @@ The message tells you which failure mode you're in:
 | Message | Status | Likely cause |
 |---|---|---|
 | `upstream prematurely closed connection` | 502 | Worker killed or crashed, RST from backend, keepalive timeout mismatch |
-| `recv() failed (104: Connection reset by peer)` | 502 | Backend reset (incl. `tcp_abort_on_overflow=1`) |
+| `recv() failed (104: Connection reset by peer) while reading response header` | 502 | Backend reset the connection after accepting the request |
+| `connect() failed (104: Connection reset by peer) while connecting to upstream` | 502 | Reset during connect, e.g. accept queue full with `tcp_abort_on_overflow=1` |
 | `connect() failed (111: Connection refused)` | 502 | Nothing listening: backend process down or restarting |
 | `connect() failed (99: Cannot assign requested address)` | 502 | Ephemeral port exhaustion on the NGINX host |
 | `no live upstreams while connecting` | 502 | All servers in the upstream block marked down |
-| `upstream timed out (110: Connection timed out)` | 504 | Connect or read timeout: queueing or a slow backend |
+| `upstream timed out (110: Connection timed out) while connecting to upstream` | 504 | Connect timeout: the backend's accept queue is full (check `ListenOverflows`) |
+| `upstream timed out (110: Connection timed out) while reading response header` | 504 | Read timeout: the backend accepted but is too slow to answer |
 
 ### Step 2: Bypass NGINX and hit the backend directly under load
 
@@ -278,6 +282,64 @@ upstream backend {
 
 ---
 
+## What the lab showed
+
+### Accept queue overflow: 504s, not 502s
+
+Backend: 2 worker threads, 0.5 s per request, `listen()` backlog 8. NGINX with `proxy_connect_timeout 3s`. Load: `ab -n 300 -c 60` through NGINX.
+
+| `tcp_abort_on_overflow` | `ListenOverflows` during the run | 200 | 502 | 504 |
+|---|---|---|---|---|
+| `0` (default) | +928 | 104 | 0 | 196 |
+| `1` | +853 | 96 | 8 | 196 |
+
+The error log for the default run had exactly one message, 196 times:
+
+```
+upstream timed out (110: Connection timed out) while connecting to upstream
+```
+
+and the access log shows the failed requests waited exactly the connect timeout, with no connection ever made (`uct=-`):
+
+```
+127.0.0.1 "GET / HTTP/1.0" 504 upstream=127.0.0.1:9100 ustatus=504 rt=3.001 uct=- urt=3.001
+```
+
+With `tcp_abort_on_overflow=1`, 8 requests turned into fast 502s (`connect() failed (104: Connection reset by peer) while connecting to upstream`), and the other 196 failures were still 504s.
+
+**What this means for diagnosis:** if your monitoring only alerts on 502, an overloaded backend can be failing a large share of requests as 504 while the 502 graph stays flat. Watch both, and watch `nstat -az TcpExtListenOverflows` on the backend host.
+
+### Port exhaustion: reproduced, and keepalive fixed it
+
+To make exhaustion reproducible, the ephemeral port range was narrowed to 100 ports (`40000-40099`) and NGINX proxied without upstream keepalive. `ab -k -n 2000 -c 20`:
+
+| Setup | 200 | 502 |
+|---|---|---|
+| No keepalive, backend closes after each response, `tcp_tw_reuse=0` | 334 | 1666 |
+| No keepalive, backend keeps the connection open, `tcp_tw_reuse=0` | 100 | 1900 |
+| No keepalive, backend keeps the connection open, `tcp_tw_reuse=2` (Ubuntu default) | 100 | 1900 |
+| `keepalive 16` + `proxy_http_version 1.1` + `Connection ""`, `tcp_tw_reuse=0` | 2000 | 0 |
+
+The failures were all the same line:
+
+```
+connect() to 127.0.0.1:9202 failed (99: Cannot assign requested address) while connecting to upstream
+```
+
+Three takeaways:
+
+- **Successes were capped by the port range.** With 100 ports, roughly 100 requests got through before every port was stuck in `TIME_WAIT` (about 120 `TIME_WAIT` sockets on the NGINX side afterwards). The backend that closed first did a little better because a few of those connections left `TIME_WAIT` on the backend side instead.
+- **`tcp_tw_reuse` did not help in a burst.** The default `2` applies to loopback, which this test was, and it still failed the same way: a `TIME_WAIT` socket is only reused once it is at least a second old, and the whole burst took less than that.
+- **Upstream keepalive removed the problem entirely**: 2000 requests over 4 established upstream connections. It's the fix, not a mitigation.
+
+Which side closes first mattered less than expected: even with the backend closing after every response, 119 of the 125 `TIME_WAIT` sockets were on the NGINX side.
+
+### Not reproduced: the keepalive timeout race
+
+A backend with a 2-second idle timeout behind NGINX's 60-second upstream `keepalive_timeout` is the textbook setup for random 502s. Sending GET and POST requests at intervals swept around the 2-second mark (280 requests, with and without 25 ms of added loopback delay) produced **zero** errors: NGINX saw each close and logged `client 127.0.0.1 closed keepalive connection` at `info` level before reusing the slot. The race is real on networks with longer latency and lossy paths, but it's rarer than its reputation, so rule out the causes above first.
+
+---
+
 ## Kernel tuning for high-traffic deployments
 
 These kernel settings directly affect the connection boundary between NGINX and the backend.
@@ -289,7 +351,9 @@ sysctl -w net.core.somaxconn=4096
 # Increase the SYN backlog
 sysctl -w net.ipv4.tcp_max_syn_backlog=4096
 
-# Reuse TIME_WAIT sockets for new outgoing connections (on the NGINX host)
+# Reuse TIME_WAIT sockets for new outgoing connections (on the NGINX host).
+# Only reuses sockets at least 1s old; it didn't help a short burst in the lab.
+# Upstream keepalive is the real fix.
 sysctl -w net.ipv4.tcp_tw_reuse=1
 
 # Widen the ephemeral port range (on the NGINX host)
