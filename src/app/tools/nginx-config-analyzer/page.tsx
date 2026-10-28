@@ -271,6 +271,7 @@ export default function NginxConfigAnalyzerPage() {
 
   const runSim = useCallback(() => setSimResult(simulateRequest(ast, simReq)), [ast, simReq]);
 
+  const syntaxErrors = result.parseErrors.filter((e) => e.kind === "syntax");
   const statusCfg = STATUS_CFG[result.status];
   const active = files.find(f => f.id === activeFileId);
 
@@ -295,7 +296,7 @@ export default function NginxConfigAnalyzerPage() {
         </div>
         <h1 className="font-mono text-2xl md:text-3xl font-bold tracking-tight text-zinc-100">NGINX Config Analyzer</h1>
         <p className="mt-2.5 text-sm text-zinc-400 leading-relaxed max-w-2xl">
-          Paste one or more NGINX config files and get a scored security, performance, and reliability audit across 35+ context-aware rules.
+          Paste one or more NGINX config files and get a scored security, performance, and reliability audit across 40+ context-aware rules.
           Supports multi-file configs with include resolution and a request flow simulator.
           Your configuration is analyzed locally — never uploaded.
         </p>
@@ -418,6 +419,16 @@ export default function NginxConfigAnalyzerPage() {
               );
             })}
           </div>
+
+          {syntaxErrors.length > 0 && (
+            <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 px-4 py-3 space-y-1.5">
+              <div className="font-mono text-xs font-semibold text-red-400">✖ Syntax errors — nginx -t would reject this config</div>
+              {syntaxErrors.map((e, i) => (
+                <p key={i} className="font-mono text-xs text-red-400/80">{e.file}:{e.line} — {e.message}</p>
+              ))}
+              <p className="font-mono text-[11px] text-zinc-500">Findings below may be incomplete until these are fixed.</p>
+            </div>
+          )}
 
           {result.hasIncompleteAnalysis && (
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 space-y-1.5">
@@ -577,8 +588,8 @@ export default function NginxConfigAnalyzerPage() {
         <section className="max-w-3xl space-y-4">
           <h2 className="font-mono text-xl font-bold text-zinc-100">What this analyzer checks</h2>
           <p className="text-sm text-zinc-400 leading-relaxed">
-            This analyzer builds an AST from your NGINX configuration, then runs 35+ context-aware rules.
-            Rules understand scope — HSTS only fires when an HTTPS listener exists, proxy header rules only apply when <code className="font-mono text-xs text-green-400 bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 mx-0.5">proxy_pass</code> is present, upstream keepalive rules only apply when upstream blocks are defined.
+            This analyzer builds an AST from your NGINX configuration, then runs 40+ context-aware rules.
+            Rules follow NGINX inheritance for add_header, proxy_set_header and ssl_* directives, and skip servers that only redirect. HSTS only fires when an HTTPS listener exists, proxy header rules only apply when <code className="font-mono text-xs text-green-400 bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 mx-0.5">proxy_pass</code> is present, upstream keepalive rules only apply when upstream blocks are defined.
           </p>
           <p className="text-sm text-zinc-400 leading-relaxed">
             Supports multi-file configs — add included files as additional tabs and the analyzer links them together.
@@ -588,9 +599,10 @@ export default function NginxConfigAnalyzerPage() {
 
         <section className="space-y-5">
           {([
-            { cat: "Security" as AnalysisCategory, items: ["HSTS on HTTPS servers", "X-Frame-Options / CSP frame-ancestors", "X-Content-Type-Options nosniff", "Content-Security-Policy", "server_tokens off", "Legacy TLS 1.0/1.1", "ssl_protocols missing", "Weak ssl_ciphers", "ssl_session_cache", "autoindex on", "Dotfile exposure (.git, .env)", "HTTP to HTTPS redirect"] },
+            { cat: "Security" as AnalysisCategory, items: ["HSTS on HTTPS servers", "X-Frame-Options / CSP frame-ancestors", "X-Content-Type-Options nosniff", "Content-Security-Policy", "server_tokens off", "add_header inheritance dropping security headers", "Security headers without always", "Legacy SSL/TLS 1.0/1.1", "ssl_protocols missing", "Weak ssl_ciphers", "ssl_session_cache", "autoindex on", "Dotfile exposure (.git, .env)", "HTTP to HTTPS redirect", "alias off-by-slash path traversal", "SSRF / open proxy via proxy_pass variables", "CRLF injection via $uri", "Rate limiting on login/auth endpoints"] },
             { cat: "Performance" as AnalysisCategory, items: ["worker_processes auto", "worker_connections sizing", "gzip / Brotli compression", "client_max_body_size", "sendfile / tcp_nopush / tcp_nodelay", "HTTP/2 on TLS", "proxy_read_timeout", "Upstream keepalive"] },
-            { cat: "Reverse Proxy" as AnalysisCategory, items: ["Host header forwarding", "X-Real-IP", "X-Forwarded-For", "X-Forwarded-Proto", "proxy_http_version 1.1 with keepalive", "WebSocket Upgrade/Connection headers", "proxy_pass variable without resolver", "proxy_buffering global disable"] },
+            { cat: "Maintainability" as AnalysisCategory, items: ["Syntax errors (missing ;, unclosed blocks)", "Deprecated listen ... http2", "if inside location", "Unused upstream blocks", "Missing include files", "Partial config (snippet) detection"] },
+            { cat: "Reverse Proxy" as AnalysisCategory, items: ["Host / X-Forwarded-For / X-Forwarded-Proto forwarding (with inheritance)", "proxy_http_version 1.1 with keepalive", "WebSocket Upgrade/Connection headers", "proxy_pass variable without resolver", "proxy_buffering global disable"] },
             { cat: "Reliability" as AnalysisCategory, items: ["error_log", "access_log with upstream timing", "proxy_next_upstream", "max_fails/fail_timeout on upstream servers", "default_server block", "error_page for 502/503/504"] },
           ] as { cat: AnalysisCategory; items: string[] }[]).map(({ cat, items }) => (
             <div key={cat} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 space-y-3">
@@ -638,7 +650,8 @@ export default function NginxConfigAnalyzerPage() {
               { q: "Is my NGINX config uploaded anywhere?", a: "No. All parsing and analysis runs in JavaScript in your browser. No data is sent to any server. Open DevTools → Network while pasting and you will see zero outbound requests." },
               { q: "Can this replace nginx -t?", a: "No. nginx -t validates syntax against your actual NGINX binary and loaded modules. This tool provides semantic analysis — finding issues that are syntactically valid but operationally or security-problematic. Use both." },
               { q: "Does it support multiple config files?", a: "Yes. Click + to add file tabs. Name them to match your include paths (e.g. conf.d/api.conf). The analyzer resolves include directives by matching against provided filenames." },
-              { q: "Can it detect security issues?", a: "Yes — missing security headers, TLS misconfiguration, weak ciphers, autoindex exposure, unprotected dotfiles, rate limiting gaps, HSTS on HTTPS servers. All rules are context-aware." },
+              { q: "Can it detect security issues?", a: "Yes — missing or silently dropped security headers (add_header inheritance), TLS misconfiguration, weak ciphers, autoindex exposure, unprotected dotfiles, alias path traversal, SSRF through proxy_pass variables, CRLF injection via $uri, and missing rate limits on login endpoints." },
+              { q: "I pasted only a conf.d file. Why are some checks skipped?", a: "Without an http{} or events{} block the analyzer treats the input as a snippet and skips main/http-level checks such as worker_processes, logging and gzip. Settings from your nginx.conf are not visible, so paste nginx -T output for a complete picture." },
               { q: "Can it analyze reverse proxy configs?", a: "Yes. Proxy header rules only fire when proxy_pass is present. Upstream keepalive rules apply when upstream blocks exist. WebSocket header rules fire only when WebSocket-like routes are detected." },
               { q: "How accurate is the request flow test?", a: "The simulator handles exact, prefix, ^~, regex, and default location matching with correct NGINX priority order. It cannot emulate complex rewrites, variable-based routing, map/geo lookups, or Lua/njs. Confidence level (definite/probable/uncertain) is shown with each result." },
             ] as { q: string; a: string }[]).map(({ q, a }) => (

@@ -1,7 +1,7 @@
 // rules.ts — scope-aware rule engine
 
-import type { Finding, AnalysisCategory, Severity, Confidence } from "./types";
-import type { NginxBlock, ParseResult } from "./types";
+import type { Finding, AnalysisCategory, Severity, Confidence } from "./types.ts";
+import type { NginxBlock, NginxDirective, ParseResult } from "./types.ts";
 import {
   getBlocksOfType,
   getServerBlocks,
@@ -10,7 +10,14 @@ import {
   getDirectiveValue,
   getAllDirectivesDeep,
   getEffectiveHeaders,
+  getEffectiveArrayDirectives,
+  getDeclaredHeadersInChain,
+  headerName,
   hasHeader,
+  hasCspFrameAncestors,
+  findInheritedDirective,
+  isReturnOnlyServer,
+  isFullConfig,
   isHttpsServer,
   hasProxyPass,
   getUpstreamBlocks,
@@ -18,7 +25,7 @@ import {
   findUsedUpstream,
   getListenPorts,
   getServerNames,
-} from "./parser";
+} from "./parser.ts";
 
 // ─── RULE TYPE ────────────────────────────────────────────────────────────────
 
@@ -58,13 +65,66 @@ function finding(
   };
 }
 
+// ─── SHARED HELPERS ──────────────────────────────────────────────────────────
+
+/** Server blocks that actually serve content (not a server-level return/redirect) */
+function contentServers(ast: ParseResult): NginxBlock[] {
+  return getServerBlocks(ast.root).filter((s) => !isReturnOnlyServer(s));
+}
+
+/** Directives set inside the server (any depth) or inherited from http/main */
+function directivesInScope(server: NginxBlock, name: string): NginxDirective[] {
+  const deep = getAllDirectivesDeep(server, name);
+  if (deep.length > 0) return deep;
+  const inherited = server.parent ? findInheritedDirective(server.parent, name) : null;
+  return inherited ? [inherited] : [];
+}
+
+/** All blocks below (and including) `block`, depth-first */
+function allBlocks(block: NginxBlock): NginxBlock[] {
+  const out: NginxBlock[] = [block];
+  for (const d of block.directives) if (d.block) out.push(...allBlocks(d.block));
+  return out;
+}
+
+/** Location path and modifier from a location block label */
+function locationMatch(loc: NginxBlock): { modifier: string; path: string } {
+  const parts = loc.contextLabel.replace(/^location\s+/, "").trim().split(/\s+/);
+  if (parts.length >= 2 && ["=", "~", "~*", "^~"].includes(parts[0])) return { modifier: parts[0], path: parts.slice(1).join(" ") };
+  return { modifier: "", path: parts.join(" ") };
+}
+
+/** Host part of a proxy_pass URL, e.g. "http://$arg_x/path" → "$arg_x" */
+function proxyPassHost(d: NginxDirective): string {
+  const url = (d.values[0] ?? "").replace(/^["']|["']$/g, "");
+  // $request_uri, $uri, $is_args... always start the path, so cut the host there
+  return url.replace(/^[a-z]+:\/\//i, "").split("/")[0].split(/\$(?=request_uri|uri|document_uri|is_args|args|query_string)/)[0];
+}
+
+const SECURITY_HEADERS = [
+  "strict-transport-security",
+  "content-security-policy",
+  "x-frame-options",
+  "x-content-type-options",
+  "referrer-policy",
+  "permissions-policy",
+];
+
+/**
+ * True when a header is absent from the effective set AND was never declared up
+ * the chain. If it was declared in a parent but dropped by a closer add_header,
+ * ruleHeaderInheritance reports it instead.
+ */
+function headerMissing(server: NginxBlock, name: string): boolean {
+  return !hasHeader(getEffectiveHeaders(server), name) && !hasHeader(getDeclaredHeadersInChain(server), name);
+}
+
 // ─── SECURITY RULES ──────────────────────────────────────────────────────────
 
 const ruleHsts: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
+  for (const server of contentServers(ast)) {
     if (!isHttpsServer(server)) continue;
-    const headers = getEffectiveHeaders(server);
-    if (!hasHeader(headers, "strict-transport-security")) {
+    if (headerMissing(server, "strict-transport-security")) {
       findings.push(finding(
         "sec-hsts", "Missing HSTS header on HTTPS server",
         "Security", "high", "high", server,
@@ -79,9 +139,9 @@ const ruleHsts: RuleFn = (ast, findings) => {
 };
 
 const ruleXFrameOptions: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
-    const headers = getEffectiveHeaders(server);
-    if (!hasHeader(headers, "x-frame-options") && !hasHeader(headers, "frame-ancestors")) {
+  for (const server of contentServers(ast)) {
+    const declared = getDeclaredHeadersInChain(server);
+    if (headerMissing(server, "x-frame-options") && !hasCspFrameAncestors(declared)) {
       findings.push(finding(
         "sec-xfo", "Missing X-Frame-Options or CSP frame-ancestors",
         "Security", "medium", "high", server,
@@ -96,9 +156,8 @@ const ruleXFrameOptions: RuleFn = (ast, findings) => {
 };
 
 const ruleXContentTypeOptions: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
-    const headers = getEffectiveHeaders(server);
-    if (!hasHeader(headers, "x-content-type-options")) {
+  for (const server of contentServers(ast)) {
+    if (headerMissing(server, "x-content-type-options")) {
       findings.push(finding(
         "sec-xcto", "Missing X-Content-Type-Options: nosniff",
         "Security", "medium", "high", server,
@@ -113,9 +172,8 @@ const ruleXContentTypeOptions: RuleFn = (ast, findings) => {
 };
 
 const ruleCsp: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
-    const headers = getEffectiveHeaders(server);
-    if (!hasHeader(headers, "content-security-policy")) {
+  for (const server of contentServers(ast)) {
+    if (headerMissing(server, "content-security-policy") && headerMissing(server, "content-security-policy-report-only")) {
       findings.push(finding(
         "sec-csp", "Missing Content-Security-Policy header",
         "Security", "medium", "high", server,
@@ -126,6 +184,49 @@ const ruleCsp: RuleFn = (ast, findings) => {
         "OWASP CSP Cheat Sheet"
       ));
     }
+  }
+};
+
+const ruleHeaderInheritance: RuleFn = (ast, findings) => {
+  for (const server of contentServers(ast)) {
+    for (const block of allBlocks(server)) {
+      if (!block.parent || getDirectives(block, "add_header").length === 0) continue;
+      if (block.contextType !== "server" && block.contextType !== "location") continue;
+      const inherited = getEffectiveHeaders(block.parent).filter((d) => SECURITY_HEADERS.includes(headerName(d)));
+      const effective = getEffectiveHeaders(block);
+      const lost = [...new Set(inherited.map(headerName).filter((h) => !hasHeader(effective, h)))];
+      if (lost.length === 0) continue;
+      const own = getDirectives(block, "add_header").map(headerName).join(", ");
+      findings.push(finding(
+        "sec-header-inheritance", `add_header in ${block.contextType} drops inherited security headers`,
+        "Security", lost.some((h) => h === "strict-transport-security" || h === "content-security-policy") ? "high" : "medium", "high", block,
+        `'${block.contextLabel}' (${block.file}:${block.line}) sets its own add_header (${own}), so these headers from the parent level are no longer sent: ${lost.join(", ")}.`,
+        "NGINX only inherits add_header from the parent level when the current level declares none. One add_header in a location (for example Cache-Control) silently removes HSTS, CSP and the other security headers for every response from that location.",
+        "Repeat the security headers in this block, move them into a shared snippet included at each level, or on NGINX 1.29.3+ use add_header_inherit merge;.",
+        `# Option 1: shared snippet\n# /etc/nginx/snippets/security-headers.conf\nadd_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;\nadd_header X-Content-Type-Options "nosniff" always;\nadd_header X-Frame-Options "SAMEORIGIN" always;\n\n${block.contextLabel} {\n    include snippets/security-headers.conf;\n    # ...existing add_header lines\n}\n\n# Option 2 (NGINX 1.29.3+):\nadd_header_inherit merge;`,
+        "NGINX ngx_http_headers_module — add_header inheritance"
+      ));
+    }
+  }
+};
+
+const ruleHeadersWithoutAlways: RuleFn = (ast, findings) => {
+  for (const server of contentServers(ast)) {
+    const missingAlways = [...new Set(
+      getEffectiveHeaders(server)
+        .filter((d) => SECURITY_HEADERS.includes(headerName(d)) && !d.values.some((v) => v.toLowerCase() === "always"))
+        .map(headerName)
+    )];
+    if (missingAlways.length === 0) continue;
+    findings.push(finding(
+      "sec-header-always", "Security headers set without 'always'",
+      "Security", "low", "high", server,
+      `Without the always parameter: ${missingAlways.join(", ")}.`,
+      "Without always, add_header only applies to 200, 201, 204, 206, 301, 302, 303, 304, 307 and 308 responses. Error pages (4xx/5xx) go out without the headers, which is where reflected content often lands.",
+      "Append always to each security add_header.",
+      missingAlways.map((h) => `add_header ${h} "..." always;`).join("\n"),
+      "NGINX add_header — always parameter"
+    ));
   }
 };
 
@@ -153,20 +254,18 @@ const ruleServerTokens: RuleFn = (ast, findings) => {
 const ruleLegacyTls: RuleFn = (ast, findings) => {
   for (const server of getServerBlocks(ast.root)) {
     if (!isHttpsServer(server)) continue;
-    const dirs = getAllDirectivesDeep(server, "ssl_protocols");
-    for (const d of dirs) {
-      const v = d.rawValue.toLowerCase();
-      if (/tlsv1\b/.test(v) || /tlsv1\.1\b/.test(v)) {
-        findings.push(finding(
-          "sec-legacy-tls", "Legacy TLS versions enabled (TLS 1.0 / 1.1)",
-          "Security", "high", "high", server,
-          `ssl_protocols configured as: ${d.rawValue} (file: ${d.file}:${d.line})`,
-          "TLS 1.0 and 1.1 are deprecated by RFC 8996. Vulnerable to BEAST, POODLE, SWEET32. Fails PCI-DSS and SOC 2 audits.",
-          "Use only TLS 1.2 and 1.3.",
-          `ssl_protocols TLSv1.2 TLSv1.3;`,
-          "RFC 8996 — Deprecating TLSv1.0 and TLSv1.1"
-        ));
-      }
+    for (const d of directivesInScope(server, "ssl_protocols")) {
+      const legacy = d.values.filter((v) => ["sslv2", "sslv3", "tlsv1", "tlsv1.1"].includes(v.toLowerCase()));
+      if (legacy.length === 0) continue;
+      findings.push(finding(
+        "sec-legacy-tls", "Legacy TLS/SSL versions enabled",
+        "Security", "high", "high", server,
+        `ssl_protocols enables ${legacy.join(", ")} (${d.file}:${d.line}: ${d.rawValue})`,
+        "SSLv3, TLS 1.0 and TLS 1.1 are deprecated by RFC 8996 and vulnerable to POODLE, BEAST and downgrade attacks. They also fail PCI DSS scans.",
+        "Use only TLS 1.2 and 1.3.",
+        `ssl_protocols TLSv1.2 TLSv1.3;`,
+        "RFC 8996 — Deprecating TLSv1.0 and TLSv1.1"
+      ));
     }
   }
 };
@@ -174,16 +273,15 @@ const ruleLegacyTls: RuleFn = (ast, findings) => {
 const ruleSslProtocolsMissing: RuleFn = (ast, findings) => {
   for (const server of getServerBlocks(ast.root)) {
     if (!isHttpsServer(server)) continue;
-    const dirs = getAllDirectivesDeep(server, "ssl_protocols");
-    if (dirs.length === 0) {
+    if (directivesInScope(server, "ssl_protocols").length === 0) {
       findings.push(finding(
         "sec-ssl-protocols-missing", "ssl_protocols not explicitly configured on HTTPS server",
-        "Security", "medium", "high", server,
-        "HTTPS listener detected but no ssl_protocols directive found.",
-        "Without explicit ssl_protocols, NGINX uses compiled-in defaults which may include TLS 1.0/1.1 depending on version.",
+        "Security", "low", "medium", server,
+        "HTTPS listener detected but no ssl_protocols directive found in the server or http block.",
+        "NGINX 1.23.4+ defaults to TLSv1.2 TLSv1.3, but older builds also enable TLSv1 and TLSv1.1. Setting it explicitly keeps behaviour the same across versions.",
         "Explicitly configure ssl_protocols to avoid relying on defaults.",
         `ssl_protocols TLSv1.2 TLSv1.3;`,
-        "NGINX SSL module documentation"
+        "NGINX ngx_http_ssl_module — ssl_protocols"
       ));
     }
   }
@@ -192,10 +290,12 @@ const ruleSslProtocolsMissing: RuleFn = (ast, findings) => {
 const ruleWeakCiphers: RuleFn = (ast, findings) => {
   for (const server of getServerBlocks(ast.root)) {
     if (!isHttpsServer(server)) continue;
-    const dirs = getAllDirectivesDeep(server, "ssl_ciphers");
+    const dirs = directivesInScope(server, "ssl_ciphers");
     for (const d of dirs) {
       const v = d.rawValue.toUpperCase();
-      const weak = ["RC4", "MD5", "DES", "3DES", "NULL", "EXPORT", "ANON", "ADH", "AECDH"].filter((p) => v.includes(p));
+      // Only enabled entries count: "!aNULL:!MD5" excludes them
+      const enabled = v.split(":").filter((c) => c && !c.startsWith("!") && !c.startsWith("-"));
+      const weak = ["RC4", "MD5", "DES", "3DES", "NULL", "EXPORT", "ANON", "ADH", "AECDH"].filter((p) => enabled.some((c) => c.includes(p)));
       if (weak.length) {
         findings.push(finding(
           "sec-weak-ciphers", "Weak cipher suites in ssl_ciphers",
@@ -214,7 +314,7 @@ const ruleWeakCiphers: RuleFn = (ast, findings) => {
 const ruleSslSessionCache: RuleFn = (ast, findings) => {
   for (const server of getServerBlocks(ast.root)) {
     if (!isHttpsServer(server)) continue;
-    const dirs = getAllDirectivesDeep(server, "ssl_session_cache");
+    const dirs = directivesInScope(server, "ssl_session_cache");
     if (dirs.length === 0) {
       findings.push(finding(
         "sec-ssl-session-cache", "ssl_session_cache not configured",
@@ -248,19 +348,29 @@ const ruleAutoindex: RuleFn = (ast, findings) => {
 };
 
 const ruleDotfileExposure: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
-    const locationBlocks = getChildBlocks(server, "location");
-    const hasDotfileProtection = locationBlocks.some((loc) => {
-      const label = loc.contextLabel.toLowerCase();
-      return /\.(git|env|htaccess|htpasswd|svn|DS_Store)/.test(label) ||
-        (label.includes("~") && label.includes("\\."));
+  for (const server of contentServers(ast)) {
+    // Only servers that read files from disk can leak .git/.env themselves;
+    // pure proxy_pass servers leave this to the backend.
+    const servesFiles =
+      ["root", "alias", "try_files", "fastcgi_pass", "autoindex"].some((n) => directivesInScope(server, n).length > 0);
+    if (!servesFiles) continue;
+
+    const hasDotfileProtection = getBlocksOfType(server, "location").some((loc) => {
+      const { modifier, path } = locationMatch(loc);
+      const blocksDotfiles =
+        /\.(git|env|htaccess|htpasswd|svn|ds_store)/i.test(path) ||
+        ((modifier === "~" || modifier === "~*") && /\/\\\./.test(path));
+      const denies =
+        getDirectives(loc, "deny").some((d) => d.rawValue.trim() === "all") ||
+        getDirectives(loc, "return").some((d) => /^(403|404|444)$/.test(d.values[0] ?? ""));
+      return blocksDotfiles && denies;
     });
     if (!hasDotfileProtection) {
       findings.push(finding(
         "sec-dotfiles", "No protection against .git/.env/.htaccess exposure",
-        "Security", "critical", "medium", server,
-        "No location block found protecting dotfile paths.",
-        ".git exposes full source history, .env exposes credentials and API keys. These are indexed by scanners within minutes of going online.",
+        "Security", "high", "medium", server,
+        "This server serves files from disk (root/alias/try_files/fastcgi) but no location denies hidden files.",
+        ".git exposes full source history, .env exposes credentials and API keys. Scanners probe for them within minutes of a site going online.",
         "Add a deny-all block for hidden files.",
         `location ~ /\\.(?!well-known) {\n    deny all;\n    return 404;\n}`,
         "OWASP Configuration Security — Sensitive File Exposure"
@@ -300,42 +410,37 @@ const ruleHttpToHttpsRedirect: RuleFn = (ast, findings) => {
 // ─── REVERSE PROXY RULES ─────────────────────────────────────────────────────
 
 const ruleProxyHeaders: RuleFn = (ast, findings) => {
-  // For each location that has proxy_pass, check required headers
-  function checkLocations(block: NginxBlock) {
-    for (const d of block.directives) {
-      if (d.block) checkLocations(d.block);
+  const required = [
+    { label: "Host", names: ["host"], sev: "medium" as Severity, value: "$host" },
+    { label: "X-Forwarded-For", names: ["x-forwarded-for", "x-real-ip"], sev: "medium" as Severity, value: "$proxy_add_x_forwarded_for" },
+    { label: "X-Forwarded-Proto", names: ["x-forwarded-proto", "forwarded"], sev: "low" as Severity, value: "$scheme" },
+  ];
+
+  for (const server of contentServers(ast)) {
+    const gaps: { block: NginxBlock; missing: typeof required }[] = [];
+    for (const block of allBlocks(server)) {
+      if (getDirectives(block, "proxy_pass").length === 0) continue;
+      const set = getEffectiveArrayDirectives(block, "proxy_set_header").map(headerName);
+      const missing = required.filter((r) => !r.names.some((n) => set.includes(n)));
+      if (missing.length) gaps.push({ block, missing });
     }
+    if (gaps.length === 0) continue;
 
-    if (block.contextType !== "location" && block.contextType !== "server") return;
-
-    const proxyPassDirs = getDirectives(block, "proxy_pass");
-    if (proxyPassDirs.length === 0) return;
-
-    const allHeaders = getAllDirectivesDeep(block, "proxy_set_header");
-    const headerNames = allHeaders.map((d) => d.rawValue.toLowerCase());
-
-    const required = [
-      { name: "Host", id: "rp-host", sev: "medium" as Severity, msg: "Backend receives proxy address as Host instead of original hostname — breaks virtual hosting and URL generation." },
-      { name: "X-Real-IP", id: "rp-x-real-ip", sev: "medium" as Severity, msg: "Backend cannot see original client IP for logging, rate limiting, or geo-targeting." },
-      { name: "X-Forwarded-For", id: "rp-xff", sev: "medium" as Severity, msg: "Backend sees 127.0.0.1 for all requests. IP-based security controls silently fail." },
-      { name: "X-Forwarded-Proto", id: "rp-xfp", sev: "low" as Severity, msg: "Backend cannot distinguish HTTP from HTTPS requests — breaks redirect logic and secure cookie handling." },
-    ];
-
-    for (const req of required) {
-      if (!headerNames.some((h) => h.startsWith(req.name.toLowerCase()))) {
-        findings.push(finding(
-          req.id, `Missing proxy_set_header ${req.name}`,
-          "Reverse Proxy", req.sev, "high", block,
-          `proxy_pass found at ${proxyPassDirs[0].file}:${proxyPassDirs[0].line} without proxy_set_header ${req.name}.`,
-          req.msg,
-          `Add: proxy_set_header ${req.name} ${"Host" === req.name ? "$host" : "X-Real-IP" === req.name ? "$remote_addr" : "X-Forwarded-For" === req.name ? "$proxy_add_x_forwarded_for" : "$scheme"};`,
-          `proxy_set_header Host              $host;\nproxy_set_header X-Real-IP         $remote_addr;\nproxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;\nproxy_set_header X-Forwarded-Proto $scheme;`,
-          "NGINX reverse proxy header forwarding"
-        ));
-      }
-    }
+    const missingLabels = [...new Set(gaps.flatMap((g) => g.missing.map((m) => m.label)))];
+    const severity: Severity = gaps.some((g) => g.missing.some((m) => m.sev === "medium")) ? "medium" : "low";
+    const shadowed = gaps.some((g) => getDirectives(g.block, "proxy_set_header").length > 0 &&
+      getEffectiveArrayDirectives(g.block.parent ?? g.block, "proxy_set_header").length > 0);
+    findings.push(finding(
+      "rp-forward-headers", `Proxied requests missing ${missingLabels.join(", ")}`,
+      "Reverse Proxy", severity, "high", gaps[0].block,
+      gaps.map((g) => `${g.block.contextLabel} (${g.block.file}:${g.block.line}): missing ${g.missing.map((m) => m.label).join(", ")}`).join("\n") +
+        (shadowed ? "\nNote: a location that sets any proxy_set_header no longer inherits the ones from server/http." : ""),
+      "Without Host the backend sees the upstream name instead of the requested hostname, which breaks virtual hosting and absolute URL generation. Without X-Forwarded-For/X-Real-IP it logs and rate-limits on the proxy address. Without X-Forwarded-Proto it cannot tell HTTPS from HTTP, which breaks redirects and Secure cookies.",
+      "Set the forwarding headers once at server level. Locations that declare their own proxy_set_header must repeat them.",
+      required.filter((r) => missingLabels.includes(r.label)).map((r) => `proxy_set_header ${r.label.padEnd(17)} ${r.value};`).join("\n"),
+      "NGINX ngx_http_proxy_module — proxy_set_header"
+    ));
   }
-  checkLocations(ast.root);
 };
 
 const ruleUpstreamKeepaliveConfig: RuleFn = (ast, findings) => {
@@ -375,7 +480,7 @@ const ruleUpstreamKeepalive: RuleFn = (ast, findings) => {
     if (!upstreamHasKeepalive(upstream)) {
       findings.push(finding(
         "perf-upstream-keepalive", "upstream block missing keepalive",
-        "Performance", "high", "high", upstream,
+        "Performance", "medium", "high", upstream,
         `upstream block '${upstream.contextLabel}' at ${upstream.file}:${upstream.line} has no keepalive directive.`,
         "Without upstream keepalive, NGINX opens a new TCP connection per request. Under load, ephemeral ports exhaust causing EADDRINUSE/ETIMEDOUT errors before the upstream is overloaded.",
         "Add keepalive to upstream block and configure proxy_http_version 1.1.",
@@ -393,13 +498,13 @@ const ruleWebSocketHeaders: RuleFn = (ast, findings) => {
     }
     if (block.contextType !== "location") return;
 
+    const headers = getEffectiveArrayDirectives(block, "proxy_set_header");
     const isWs =
       /\/ws\b|\/socket|websocket/i.test(block.contextLabel) ||
-      getAllDirectivesDeep(block, "proxy_set_header").some((d) => d.rawValue.toLowerCase().includes("upgrade"));
+      headers.some((d) => d.rawValue.toLowerCase().includes("upgrade"));
 
-    if (!isWs) return;
+    if (!isWs || getDirectives(block, "proxy_pass").length === 0) return;
 
-    const headers = getAllDirectivesDeep(block, "proxy_set_header");
     const hasUpgrade = headers.some((d) => d.rawValue.toLowerCase().startsWith("upgrade"));
     const hasConn    = headers.some((d) => d.rawValue.toLowerCase().startsWith("connection") && d.rawValue.toLowerCase().includes("upgrade"));
 
@@ -419,23 +524,134 @@ const ruleWebSocketHeaders: RuleFn = (ast, findings) => {
 };
 
 const ruleProxyPassVariable: RuleFn = (ast, findings) => {
-  const proxyPassDirs = getAllDirectivesDeep(ast.root, "proxy_pass");
-  for (const d of proxyPassDirs) {
-    if (d.rawValue.includes("$") && !d.rawValue.includes("$scheme") && !d.rawValue.includes("$host")) {
-      const parentBlock = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
-      const resolverDirs = getAllDirectivesDeep(parentBlock, "resolver");
-      if (resolverDirs.length === 0) {
-        findings.push(finding(
-          "rp-proxy-pass-variable", "proxy_pass uses variable without resolver directive",
-          "Reverse Proxy", "high", "medium", parentBlock,
-          `proxy_pass uses variable: ${d.rawValue} at ${d.file}:${d.line} but no resolver found.`,
-          "When proxy_pass contains variables, NGINX requires a resolver directive to perform DNS lookups at request time. Without it, NGINX cannot start.",
-          "Add a resolver directive in the http or server block.",
-          `resolver 8.8.8.8 8.8.4.4 valid=300s;\nresolver_timeout 5s;`,
-          "NGINX proxy_pass with variables documentation"
-        ));
-      }
+  for (const d of getAllDirectivesDeep(ast.root, "proxy_pass")) {
+    if (!d.rawValue.includes("$")) continue;
+    // With any variable in proxy_pass, NGINX resolves the host at request time
+    // unless it is an IP, a unix socket or the name of an upstream{} block.
+    const host = proxyPassHost(d);
+    const staticHost = !host.includes("$");
+    const hostName = host.replace(/:\d+$/, "");
+    if (staticHost && (/^unix:/.test(host) || /^[\d.]+$|^\[/.test(hostName) ||
+        getUpstreamBlocks(ast.root).some((u) => u.contextLabel.replace(/^upstream\s+/, "").trim() === hostName))) continue;
+    const parentBlock = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
+    if (findInheritedDirective(parentBlock, "resolver")) continue;
+    findings.push(finding(
+      "rp-proxy-pass-variable", "proxy_pass uses variable without resolver directive",
+      "Reverse Proxy", "high", staticHost ? "high" : "medium", parentBlock,
+      `proxy_pass ${d.rawValue} at ${d.file}:${d.line} contains a variable, so its host is resolved per request, but no resolver is in scope.`,
+      "When proxy_pass contains variables and the host is not an IP or an upstream{} name, NGINX resolves it at request time. Without a resolver every such request fails with 502 and 'no resolver defined to resolve' in error_log.",
+      "Add a resolver directive in the http or server block, or point proxy_pass at an upstream{} block.",
+      `resolver 127.0.0.53 valid=300s;  # or your VPC / cluster DNS\nresolver_timeout 5s;`,
+      "NGINX ngx_http_proxy_module — proxy_pass with variables"
+    ));
+  }
+};
+
+const ruleProxyPassSsrf: RuleFn = (ast, findings) => {
+  for (const d of getAllDirectivesDeep(ast.root, "proxy_pass")) {
+    const host = proxyPassHost(d);
+    const block = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
+    const requestControlled = host.match(/\$(arg_\w+|cookie_\w+|http_(?!host\b)\w+|request_body)\b/);
+    const hostHeader = host.match(/\$(host|http_host)\b/);
+    if (!requestControlled && !hostHeader) continue;
+    const variable = (requestControlled ?? hostHeader)![0];
+    findings.push(finding(
+      "sec-proxy-ssrf", requestControlled ? "proxy_pass target controlled by the client (SSRF / open proxy)" : "proxy_pass target taken from the Host header",
+      "Security", requestControlled ? "critical" : "high", requestControlled ? "high" : "medium", block,
+      `proxy_pass ${d.rawValue} at ${d.file}:${d.line} builds the upstream host from ${variable}.`,
+      requestControlled
+        ? "Any client can choose where NGINX connects, including internal services and cloud metadata endpoints (169.254.169.254). This is a server-side request forgery and open proxy."
+        : "If this server also answers unknown hostnames (default_server, server_name _ or a wildcard), a client can send any Host header and make NGINX connect to an arbitrary host.",
+      "Proxy to a fixed upstream, or map allowed values to targets with map{} and reject everything else.",
+      `map ${variable} $backend {\n    default        "";\n    app1           app1.internal:8080;\n    app2           app2.internal:8080;\n}\n\nlocation / {\n    if ($backend = "") { return 403; }\n    proxy_pass http://$backend;\n}`,
+      "OWASP SSRF Prevention Cheat Sheet"
+    ));
+  }
+};
+
+const ruleAliasTraversal: RuleFn = (ast, findings) => {
+  for (const loc of getBlocksOfType(ast.root, "location")) {
+    const { modifier, path } = locationMatch(loc);
+    if (modifier !== "" && modifier !== "^~") continue;
+    if (path.endsWith("/")) continue;
+    for (const a of getDirectives(loc, "alias")) {
+      const target = a.values[0]?.replace(/^["']|["']$/g, "") ?? "";
+      if (!target.endsWith("/")) continue;
+      findings.push(finding(
+        "sec-alias-traversal", "alias path traversal (location without trailing slash)",
+        "Security", "high", "high", loc,
+        `location ${path} has alias ${target} (${a.file}:${a.line}). A request for ${path}../ maps to ${target}../`,
+        `Because the location prefix has no trailing slash but the alias does, GET ${path}../secret resolves to the parent of the alias directory. Attackers use this to read files next to the static directory, such as app source or .env.`,
+        "Make both paths end with a slash (or neither).",
+        `location ${path}/ {\n    alias ${target};\n}`,
+        "NGINX alias off-by-slash (Orange Tsai, Black Hat 2018)"
+      ));
     }
+  }
+};
+
+const ruleCrlfInjection: RuleFn = (ast, findings) => {
+  const checks: { name: string; applies: (d: NginxDirective) => boolean }[] = [
+    { name: "return", applies: (d) => /^30[1278]$/.test(d.values[0] ?? "") || /^["']?https?:/.test(d.values[0] ?? "") },
+    { name: "rewrite", applies: () => true },
+    { name: "add_header", applies: () => true },
+    { name: "proxy_set_header", applies: () => true },
+  ];
+  for (const check of checks) {
+    for (const d of getAllDirectivesDeep(ast.root, check.name)) {
+      if (!/\$(uri|document_uri)\b/.test(d.rawValue) || !check.applies(d)) continue;
+      const block = findParentBlock(ast.root, d.file, d.line) ?? ast.root;
+      findings.push(finding(
+        "sec-crlf-uri", "Decoded $uri used in a header or redirect (CRLF injection)",
+        "Security", "medium", "high", block,
+        `${d.name} ${d.rawValue} at ${d.file}:${d.line}`,
+        "$uri and $document_uri are URL-decoded, so %0d%0a in the request becomes a real line break. Used in a redirect or header, it lets an attacker inject headers such as Set-Cookie (HTTP response splitting).",
+        "Use $request_uri (raw, still encoded) instead of $uri.",
+        `${d.name} ${d.rawValue.replace(/\$(uri|document_uri)\b/g, "$request_uri")};`,
+        "Detectify — Common NGINX misconfigurations (CRLF via $uri)"
+      ));
+    }
+  }
+};
+
+const ruleIfInLocation: RuleFn = (ast, findings) => {
+  for (const ifBlock of getBlocksOfType(ast.root, "if")) {
+    if (ifBlock.parent?.contextType !== "location") continue;
+    const unsafe = ifBlock.directives.filter((d) => {
+      const n = d.name.toLowerCase();
+      if (n === "return" || n === "set") return false;
+      if (n === "rewrite") return /\blast\b/.test(d.rawValue);
+      return true;
+    });
+    if (unsafe.length === 0) continue;
+    findings.push(finding(
+      "maint-if-in-location", "if inside location runs non-rewrite directives",
+      "Maintainability", "low", "medium", ifBlock,
+      `${ifBlock.contextLabel} at ${ifBlock.file}:${ifBlock.line} contains: ${unsafe.map((d) => d.name).join(", ")}`,
+      "if creates an implicit nested location. Only return and rewrite ... last are reliably safe inside it; other directives (proxy_pass, add_header, try_files) can be skipped or behave unexpectedly.",
+      "Move the condition into map{} and use the resulting variable, or keep only return / rewrite ... last inside if.",
+      `map $http_x_flag $target {\n    default backend_a;\n    "on"    backend_b;\n}\n\nlocation / {\n    proxy_pass http://$target;\n}`,
+      "NGINX wiki — If is Evil"
+    ));
+  }
+};
+
+const ruleSensitiveRateLimit: RuleFn = (ast, findings) => {
+  for (const server of contentServers(ast)) {
+    const sensitive = getBlocksOfType(server, "location").filter((loc) =>
+      /(login|signin|sign-in|auth|token|password|passwd|otp|wp-login|xmlrpc)/i.test(locationMatch(loc).path)
+    );
+    const unprotected = sensitive.filter((loc) => !findInheritedDirective(loc, "limit_req"));
+    if (unprotected.length === 0) continue;
+    findings.push(finding(
+      "sec-rate-limit", "No rate limiting on authentication endpoints",
+      "Security", "low", "medium", unprotected[0],
+      `Without limit_req: ${unprotected.map((l) => `${l.contextLabel} (${l.file}:${l.line})`).join(", ")}`,
+      "Login, token and password endpoints without a request limit allow credential stuffing and brute force at line rate.",
+      "Define a limit_req_zone in http{} and apply limit_req to these locations.",
+      `# http {}\nlimit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;\n\n${unprotected[0].contextLabel} {\n    limit_req zone=auth burst=5 nodelay;\n    limit_req_status 429;\n    # ...\n}`,
+      "NGINX ngx_http_limit_req_module"
+    ));
   }
 };
 
@@ -463,6 +679,7 @@ const ruleProxyBuffering: RuleFn = (ast, findings) => {
 // ─── PERFORMANCE RULES ───────────────────────────────────────────────────────
 
 const ruleWorkerProcesses: RuleFn = (ast, findings) => {
+  if (!isFullConfig(ast.root)) return;
   const dirs = getDirectives(ast.root, "worker_processes");
   if (dirs.length === 0) {
     findings.push(finding(
@@ -582,36 +799,45 @@ const ruleHttp2: RuleFn = (ast, findings) => {
   for (const server of getServerBlocks(ast.root)) {
     if (!isHttpsServer(server)) continue;
     const listenDirs = getDirectives(server, "listen");
-    const hasHttp2 =
-      listenDirs.some((d) => d.rawValue.toLowerCase().includes("http2")) ||
-      getDirectives(server, "http2").some((d) => d.rawValue.toLowerCase() === "on");
+    const legacyListen = listenDirs.filter((d) => d.values.some((v) => v.toLowerCase() === "http2"));
+    const hasHttp2 = legacyListen.length > 0 || directivesInScope(server, "http2").some((d) => d.rawValue.toLowerCase() === "on");
     if (!hasHttp2) {
       findings.push(finding(
         "perf-http2", "HTTP/2 not enabled on TLS listener",
-        "Performance", "medium", "high", server,
+        "Performance", "low", "high", server,
         `HTTPS server block at ${server.file}:${server.line} without HTTP/2.`,
-        "HTTP/2 provides multiplexing, header compression, and lower latency. Without it, each resource requires separate HTTP/1.1 negotiation.",
-        "Add http2 to the listen directive or use http2 directive (NGINX 1.25.1+).",
-        `# NGINX < 1.25.1:\nlisten 443 ssl http2;\n\n# NGINX >= 1.25.1:\nlisten 443 ssl;\nhttp2 on;`,
-        "NGINX HTTP/2 module documentation"
+        "HTTP/2 multiplexes requests over one connection and compresses headers, which lowers latency for pages with many assets.",
+        "Enable HTTP/2 with the http2 directive (NGINX 1.25.1+).",
+        `listen 443 ssl;\nhttp2 on;`,
+        "NGINX ngx_http_v2_module"
+      ));
+    }
+    for (const d of legacyListen) {
+      findings.push(finding(
+        "maint-listen-http2", "Deprecated 'listen ... http2' parameter",
+        "Maintainability", "low", "medium", server,
+        `listen ${d.rawValue} at ${d.file}:${d.line}`,
+        "Since NGINX 1.25.1 the http2 parameter of listen is deprecated and logs a warning on every reload. It will be removed in a future release.",
+        "On 1.25.1+ remove http2 from listen and add http2 on; to the server block. Keep the old form only if you run an older NGINX.",
+        `listen ${d.values.filter((v) => v.toLowerCase() !== "http2").join(" ")};\nhttp2 on;`,
+        "NGINX 1.25.1 changelog"
       ));
     }
   }
 };
 
 const ruleProxyTimeouts: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
+  for (const server of contentServers(ast)) {
     if (!hasProxyPass(server)) continue;
-    const proxyReadTimeout = getAllDirectivesDeep(server, "proxy_read_timeout");
-    if (proxyReadTimeout.length === 0) {
+    if (directivesInScope(server, "proxy_read_timeout").length === 0) {
       findings.push(finding(
-        "perf-proxy-read-timeout", "proxy_read_timeout not configured",
-        "Performance", "medium", "high", server,
+        "perf-proxy-read-timeout", "proxy_read_timeout left at default (60s)",
+        "Performance", "info", "high", server,
         `Server block at ${server.file}:${server.line} uses proxy_pass without proxy_read_timeout.`,
-        "Default is 60s. Long-running backend operations (exports, reports) 504 before completing even when the backend will eventually respond.",
-        "Set proxy timeouts based on backend p99 latency.",
-        `proxy_connect_timeout  10s;\nproxy_send_timeout     60s;\nproxy_read_timeout     60s;`,
-        "NGINX proxy timeout documentation"
+        "The 60s default suits most APIs. Endpoints that take longer (exports, reports, long polling) return 504 even though the backend would eventually answer.",
+        "Only change it if some endpoints legitimately run longer than 60s, and scope it to those locations.",
+        `location /reports/ {\n    proxy_read_timeout 300s;\n    proxy_pass http://backend;\n}`,
+        "NGINX proxy_read_timeout documentation"
       ));
     }
   }
@@ -620,13 +846,14 @@ const ruleProxyTimeouts: RuleFn = (ast, findings) => {
 // ─── RELIABILITY RULES ───────────────────────────────────────────────────────
 
 const ruleErrorLog: RuleFn = (ast, findings) => {
+  if (!isFullConfig(ast.root)) return;
   const dirs = getAllDirectivesDeep(ast.root, "error_log");
   if (dirs.length === 0) {
     findings.push(finding(
       "rel-error-log", "No error_log directive configured",
-      "Reliability", "medium", "medium", ast.root,
+      "Reliability", "low", "medium", ast.root,
       "No error_log directive found anywhere in config.",
-      "Without explicit error_log, NGINX writes errors to compiled-in default. In containers, this may be inaccessible.",
+      "Without explicit error_log, NGINX writes to the compiled-in path at level error. In containers that path may not be collected.",
       "Explicitly configure error_log.",
       `error_log /var/log/nginx/error.log warn;`,
       "NGINX error_log documentation"
@@ -635,14 +862,15 @@ const ruleErrorLog: RuleFn = (ast, findings) => {
 };
 
 const ruleAccessLog: RuleFn = (ast, findings) => {
+  if (!isFullConfig(ast.root)) return;
   const dirs = getAllDirectivesDeep(ast.root, "access_log");
   if (dirs.length === 0) {
     findings.push(finding(
-      "rel-access-log", "No access_log directive configured",
-      "Reliability", "low", "medium", ast.root,
-      "No access_log directive found.",
-      "Access logs are the primary source for debugging, traffic analysis, and incident investigation.",
-      "Configure access_log with a structured format including upstream timing.",
+      "rel-access-log", "access_log uses the default format",
+      "Reliability", "info", "medium", ast.root,
+      "No access_log directive found, so NGINX logs to logs/access.log in the combined format.",
+      "The combined format has no request or upstream timing, which is what you need when debugging 502/504 and slow responses.",
+      "Configure access_log with a format that includes upstream timing.",
       `log_format main '$remote_addr - [$time_local] "$request" $status rt=$request_time uct=$upstream_connect_time urt=$upstream_response_time';\naccess_log /var/log/nginx/access.log main;`,
       "NGINX access_log documentation"
     ));
@@ -652,17 +880,18 @@ const ruleAccessLog: RuleFn = (ast, findings) => {
 const ruleUpstreamHealth: RuleFn = (ast, findings) => {
   for (const upstream of getUpstreamBlocks(ast.root)) {
     const serverDirs = getDirectives(upstream, "server");
+    if (serverDirs.length < 2) continue; // failover settings only matter with more than one server
     for (const s of serverDirs) {
       const v = s.rawValue.toLowerCase();
       const hasMaxFails   = /max_fails\s*=/.test(v);
       const hasFailTimeout = /fail_timeout\s*=/.test(v);
       if (!hasMaxFails || !hasFailTimeout) {
         findings.push(finding(
-          "rel-upstream-health", "Upstream server missing max_fails/fail_timeout",
-          "Reliability", "medium", "high", upstream,
-          `upstream server '${s.rawValue}' at ${s.file}:${s.line} missing health check parameters.`,
-          "Without max_fails and fail_timeout, NGINX continues sending requests to a failed upstream server indefinitely.",
-          "Add max_fails and fail_timeout to upstream server definitions.",
+          "rel-upstream-health", "Upstream servers use default max_fails/fail_timeout",
+          "Reliability", "info", "high", upstream,
+          `upstream server '${s.rawValue}' at ${s.file}:${s.line} relies on max_fails=1 fail_timeout=10s.`,
+          "With the defaults, one failed attempt takes a server out for 10s. That is often too eager on a flaky network and too short for a backend that is restarting.",
+          "Set max_fails and fail_timeout explicitly to match how your backends fail and recover.",
           `upstream backend {\n    server 10.0.0.1:3000 max_fails=3 fail_timeout=30s;\n    server 10.0.0.2:3000 max_fails=3 fail_timeout=30s;\n    keepalive 32;\n}`,
           "NGINX upstream server parameters"
         ));
@@ -673,20 +902,21 @@ const ruleUpstreamHealth: RuleFn = (ast, findings) => {
 };
 
 const ruleProxyNextUpstream: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
-    if (!hasProxyPass(server)) continue;
-    const dirs = getAllDirectivesDeep(server, "proxy_next_upstream");
-    if (dirs.length === 0) {
-      findings.push(finding(
-        "rel-proxy-next-upstream", "proxy_next_upstream not configured",
-        "Reliability", "low", "medium", server,
-        `Proxy server at ${server.file}:${server.line} without proxy_next_upstream.`,
-        "Without proxy_next_upstream, a failing backend sends the error directly to the client with no automatic retry.",
-        "Configure proxy_next_upstream for automatic failover.",
-        `proxy_next_upstream error timeout http_502 http_503 http_504;`,
-        "NGINX proxy_next_upstream documentation"
-      ));
-    }
+  for (const server of contentServers(ast)) {
+    const pools = getAllDirectivesDeep(server, "proxy_pass")
+      .map((d) => findUsedUpstream(ast.root, d.rawValue))
+      .filter((u): u is NginxBlock => !!u && getDirectives(u, "server").length > 1);
+    if (pools.length === 0) continue;
+    if (directivesInScope(server, "proxy_next_upstream").length > 0) continue;
+    findings.push(finding(
+      "rel-proxy-next-upstream", "proxy_next_upstream left at default",
+      "Reliability", "info", "medium", server,
+      `Server at ${server.file}:${server.line} load-balances across ${pools[0].contextLabel} without proxy_next_upstream.`,
+      "The default (error timeout) retries the next server only on connection errors and timeouts. A backend that answers 502/503/504 during a deploy is not retried.",
+      "Add the gateway error codes. Non-idempotent requests (POST) are not retried unless you add non_idempotent.",
+      `proxy_next_upstream error timeout http_502 http_503 http_504;\nproxy_next_upstream_tries 2;`,
+      "NGINX proxy_next_upstream documentation"
+    ));
   }
 };
 
@@ -710,9 +940,9 @@ const ruleDefaultServer: RuleFn = (ast, findings) => {
 };
 
 const ruleErrorPage: RuleFn = (ast, findings) => {
-  for (const server of getServerBlocks(ast.root)) {
+  for (const server of contentServers(ast)) {
     if (!hasProxyPass(server)) continue;
-    const errorPages = getAllDirectivesDeep(server, "error_page");
+    const errorPages = directivesInScope(server, "error_page");
     const hasFallback = errorPages.some((d) => /502|503|504/.test(d.rawValue));
     if (!hasFallback) {
       findings.push(finding(
@@ -787,7 +1017,7 @@ const ruleUnusedUpstream: RuleFn = (ast, findings) => {
 
 const ruleIncludeWarning: RuleFn = (ast, findings) => {
   for (const err of ast.errors) {
-    if (err.message.includes("not provided")) {
+    if (err.kind === "include") {
       findings.push({
         id: `inc-missing-${Math.random()}`,
         title: `include target not provided: ${err.message.split("'")[1] ?? "unknown"}`,
@@ -807,6 +1037,19 @@ const ruleIncludeWarning: RuleFn = (ast, findings) => {
   }
 };
 
+const ruleSnippetMode: RuleFn = (ast, findings) => {
+  if (isFullConfig(ast.root) || getServerBlocks(ast.root).length === 0) return;
+  findings.push(finding(
+    "maint-snippet-mode", "Partial config: analyzing server blocks only",
+    "Maintainability", "info", "high", ast.root,
+    "No http{} or events{} block found, so this looks like a conf.d/sites-enabled file. Main and http level checks (worker_processes, logging, gzip, server_tokens) were skipped.",
+    "Headers, TLS settings and proxy headers set in nginx.conf's http{} block are inherited by these servers but are not visible here, so some findings may already be covered.",
+    "Paste the output of nginx -T for a complete analysis.",
+    `nginx -T > /tmp/nginx-full.conf`,
+    "NGINX -T (dump configuration)"
+  ));
+};
+
 // ─── RULE REGISTRY ────────────────────────────────────────────────────────────
 
 export const ALL_RULES: RuleFn[] = [
@@ -815,6 +1058,8 @@ export const ALL_RULES: RuleFn[] = [
   ruleXFrameOptions,
   ruleXContentTypeOptions,
   ruleCsp,
+  ruleHeaderInheritance,
+  ruleHeadersWithoutAlways,
   ruleServerTokens,
   ruleLegacyTls,
   ruleSslProtocolsMissing,
@@ -823,6 +1068,10 @@ export const ALL_RULES: RuleFn[] = [
   ruleAutoindex,
   ruleDotfileExposure,
   ruleHttpToHttpsRedirect,
+  ruleProxyPassSsrf,
+  ruleAliasTraversal,
+  ruleCrlfInjection,
+  ruleSensitiveRateLimit,
   // Reverse Proxy
   ruleProxyHeaders,
   ruleUpstreamKeepaliveConfig,
@@ -849,7 +1098,9 @@ export const ALL_RULES: RuleFn[] = [
   ruleLargeConfig,
   ruleManyRegexLocations,
   ruleUnusedUpstream,
+  ruleIfInLocation,
   ruleIncludeWarning,
+  ruleSnippetMode,
 ];
 
 // ─── HELPER: find parent block by file+line ───────────────────────────────────

@@ -1,5 +1,5 @@
 // samples.ts — sample configs for the analyzer
-import type { ConfigFile } from "./types";
+import type { ConfigFile } from "./types.ts";
 
 export const SAMPLE_CONFIGS: Record<string, { label: string; files: ConfigFile[] }> = {
   "basic-reverse-proxy": {
@@ -264,7 +264,7 @@ server {
 
 // ─── EXPORT HELPERS ───────────────────────────────────────────────────────────
 
-import type { AnalysisResult } from "./types";
+import type { AnalysisResult } from "./types.ts";
 
 const CAT_ICONS: Record<string, string> = {
   Security: "🛡", Performance: "⚡", "Reverse Proxy": "🔀", Reliability: "📡", Maintainability: "🔧",

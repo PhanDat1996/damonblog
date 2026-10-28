@@ -42,6 +42,7 @@ export interface ParseResult {
 }
 
 export interface ParseError {
+  kind?: "syntax" | "include";
   message: string;
   line: number;
   file: string;
