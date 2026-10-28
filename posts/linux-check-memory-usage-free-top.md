@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "free -h shows 200MB free, yet the server is fine? Learn to read available vs free and buff/cache, check swap, and find which process uses the most RAM."
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Copy a directory recursively in Linux with cp -a or rsync, keep owners and timestamps, avoid the nested-folder surprise, and dry-run before --delete."
 tags: ["linux", "infrastructure", "troubleshooting", "debugging"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Get a Docker container's IP with docker inspect, including Compose and user-defined networks where the common one-liner returns empty or glued output."
 tags: ["docker", "networking", "infrastructure", "troubleshooting"]
 featured: false
+noindex: true
 category: "devops"
 ---
 

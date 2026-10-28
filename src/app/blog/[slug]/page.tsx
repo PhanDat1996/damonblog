@@ -31,6 +31,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     keywords: post.tags,
     authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],
     alternates: { canonical: url, types: { 'application/rss+xml': '/feed.xml' } },
+    ...(post.noindex && {
+      robots: { index: false, follow: true, googleBot: { index: false, follow: true } },
+    }),
     openGraph: {
       title: post.title,
       description: post.excerpt,

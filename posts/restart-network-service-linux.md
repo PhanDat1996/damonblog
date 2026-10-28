@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Changed an IP or DNS setting and it didn't apply? Find which network manager your Linux uses, apply the change safely, and avoid locking yourself out."
 tags: ["linux", "networking", "infrastructure", "troubleshooting"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

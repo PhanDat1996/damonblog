@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Find which firewall is active on a Linux server, read its real rules, and prove whether it is the thing blocking your port before you change anything."
 tags: ["linux", "security", "networking", "troubleshooting", "infrastructure"]
 featured: false
+noindex: true
 category: "security"
 ---
 

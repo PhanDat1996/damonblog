@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Pull journal logs for an exact window: --since/--until formats that parse, -b for boots, -p levels, output modes, and why older logs may be missing."
 tags: ["linux", "logs", "troubleshooting", "debugging"]
 featured: false
+noindex: true
 category: "devops"
 ---
 

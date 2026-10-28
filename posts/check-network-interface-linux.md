@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Check interface state, IP addresses, link speed and error counters on Linux with ip and ethtool, and learn what UP, LOWER_UP and NO-CARRIER mean."
 tags: ["linux", "networking", "troubleshooting", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 

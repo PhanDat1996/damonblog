@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "High load but idle CPU? Use iostat -x to check disk I/O latency and saturation, read r_await, aqu-sz and %util right, then find the process with pidstat."
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
+noindex: true
 category: "linux"
 ---
 
