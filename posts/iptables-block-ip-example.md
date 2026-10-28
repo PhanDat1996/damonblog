@@ -1,287 +1,274 @@
 ---
-title: "iptables Block IP: Practical Examples for Linux"
+title: "iptables Block IP: Single IPs, Ranges, Ports and ipset"
 date: "2026-04-22"
-excerpt: "Block IPs with iptables — block single IP, IP range, port-specific rules, make rules persistent, and use ipset for large block lists. Real production examples."
+updated: "2026-10-28"
+excerpt: "Block an IP, a subnet or a whole list with iptables and ipset, make it survive a reboot, and avoid the rule ordering and firewalld mistakes that bite."
 tags: ["linux", "security", "networking", "infrastructure"]
 featured: false
-slug: "iptables-block-ip-example"
 category: "security"
 ---
 
-Blocking a specific IP or range is one of the most common iptables tasks — stopping a brute-force attack, blocking a scanner, or restricting access to a service. Here's exactly how to do it.
+An address is hammering your SSH port, or a scanner is crawling your web server, and you want it gone now. The command is one line. The parts that go wrong are where the rule lands in the chain, whether it survives a reboot, and whether `iptables` is even the right tool on this machine.
 
 ---
 
 ## TL;DR
 
 ```bash
-# Block a single IP
-iptables -I INPUT -s 1.2.3.4 -j DROP
+iptables -I INPUT -s 203.0.113.45 -j DROP                       # block one IP
+iptables -I INPUT -s 203.0.113.0/24 -j DROP                     # block a subnet
+iptables -I INPUT -s 203.0.113.45 -p tcp --dport 22 -j DROP     # block one port only
+iptables -L INPUT -n -v --line-numbers                          # verify, with hit counters
 
-# Block an IP range
-iptables -I INPUT -s 1.2.3.0/24 -j DROP
+iptables-save > /etc/iptables/rules.v4                          # persist (Debian/Ubuntu)
+```
 
-# Block IP on specific port only
-iptables -I INPUT -s 1.2.3.4 -p tcp --dport 22 -j DROP
+On RHEL/Rocky/Alma with firewalld running, or Ubuntu with ufw active, use that tool instead (see below). Mixing raw `iptables` rules with a firewall manager leads to rules that vanish or never match.
 
-# Make rules persistent
-iptables-save > /etc/iptables/rules.v4
+> **Before you add any DROP rule on a remote server:** make sure the address isn't yours, your VPN egress, or your bastion, and know how you'd get to a console if it is.
+
+---
+
+## Check which firewall you're actually using
+
+```bash
+systemctl is-active firewalld ufw 2>/dev/null
+iptables -V
+# iptables v1.8.7 (nf_tables)
+```
+
+- firewalld active → use `firewall-cmd` (below).
+- ufw active → use `ufw` (below).
+- Neither → plain `iptables` is fine. `(nf_tables)` just means the rules are stored in nftables behind the scenes. The commands work the same.
+
+More detail in [how to check firewall status on Linux](/blog/check-firewall-status-linux).
+
+---
+
+## Block a single IP or a subnet
+
+```bash
+iptables -I INPUT -s 203.0.113.45 -j DROP
+iptables -I INPUT -s 198.51.100.0/24 -j DROP
+```
+
+`-I INPUT` inserts at position 1. Order matters because iptables stops at the first matching rule with a final target like ACCEPT or DROP. Use `-A` (append) and your DROP lands after an existing `ACCEPT tcp dpt:22` and never matches for SSH.
+
+Verify, and check it's actually catching traffic:
+
+```bash
+iptables -L INPUT -n -v --line-numbers
+```
+
+```
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target  prot opt in  out  source            destination
+1       38  2280 DROP    all  --  *   *    198.51.100.0/24   0.0.0.0/0
+2      214 12840 DROP    all  --  *   *    203.0.113.45      0.0.0.0/0
+3     9921  873K ACCEPT  tcp  --  *   *    0.0.0.0/0         0.0.0.0/0     tcp dpt:22
+```
+
+A rising `pkts` counter on your DROP rule confirms it works.
+
+### DROP or REJECT?
+
+| Target | What the sender sees | Use when |
+|---|---|---|
+| `DROP` | Nothing. The connection hangs until it times out | Blocking hostile scanners and brute-force sources |
+| `REJECT` | An immediate error (ICMP port unreachable by default, or `--reject-with tcp-reset`) | Blocking internal clients, so they fail fast instead of hanging |
+
+DROP doesn't make you invisible. A scanner can still tell something is filtering. It just costs them time.
+
+---
+
+## Block one IP from one port
+
+```bash
+# SSH only
+iptables -I INPUT -s 203.0.113.45 -p tcp --dport 22 -j DROP
+
+# Web ports only
+iptables -I INPUT -s 203.0.113.45 -p tcp -m multiport --dports 80,443 -j DROP
 ```
 
 ---
 
-## Block a Single IP
+## Block outbound traffic to an IP
 
 ```bash
-# Drop all traffic from IP
-iptables -I INPUT -s 1.2.3.4 -j DROP
-
-# Verify
-iptables -L INPUT -n | grep 1.2.3.4
-# DROP  all  --  1.2.3.4  0.0.0.0/0
+iptables -I OUTPUT -d 192.0.2.66 -j DROP
 ```
 
-`-I INPUT` inserts at the top of the INPUT chain (position 1), before any other rules. This matters — rules are evaluated in order.
-
-**DROP vs REJECT:**
-
-```bash
-# DROP: silently discard — attacker gets no response (better)
-iptables -I INPUT -s 1.2.3.4 -j DROP
-
-# REJECT: send "connection refused" back — faster failure for legitimate mistakes
-iptables -I INPUT -s 1.2.3.4 -j REJECT
-```
-
-For blocking attackers: use DROP. They get no feedback.
+You can pass a hostname (`-d bad.example.com`), but iptables resolves it **once**, when the rule is added, and stores the IPs. If the host changes IPs, the rule doesn't follow. For domains, block at DNS or in a proxy instead.
 
 ---
 
-## Block an IP Range (CIDR)
+## Remove a block
 
 ```bash
-# Block /24 subnet (256 IPs)
-iptables -I INPUT -s 1.2.3.0/24 -j DROP
+iptables -L INPUT -n --line-numbers     # find the number
+iptables -D INPUT 2                     # delete rule 2
 
-# Block /16 subnet (65536 IPs)
-iptables -I INPUT -s 1.2.0.0/16 -j DROP
-
-# Block specific range (not aligned to CIDR — use ipset for this)
+# or delete by repeating the exact rule spec
+iptables -D INPUT -s 203.0.113.45 -j DROP
 ```
+
+> **Warning:** `iptables -F INPUT` flushes every rule in the chain. If the chain policy is `DROP`, flushing removes your SSH ACCEPT rule too and cuts you off immediately. Delete individual rules instead, or set `iptables -P INPUT ACCEPT` before any flush.
 
 ---
 
-## Block by Port
+## Make the rules survive a reboot
 
-```bash
-# Block IP from accessing SSH only
-iptables -I INPUT -s 1.2.3.4 -p tcp --dport 22 -j DROP
+Rules added with `iptables` live in the kernel only. A reboot clears them.
 
-# Block IP from accessing web ports
-iptables -I INPUT -s 1.2.3.4 -p tcp -m multiport --dports 80,443 -j DROP
-
-# Block all traffic FROM this server TO an IP (outbound)
-iptables -I OUTPUT -d 1.2.3.4 -j DROP
-```
-
----
-
-## Block Outbound to an IP
-
-```bash
-# Prevent this server from connecting out to a malicious host
-iptables -I OUTPUT -d 1.2.3.4 -j DROP
-iptables -I OUTPUT -d malicious-domain.com -j DROP
-```
-
----
-
-## View and Manage Rules
-
-```bash
-# List with line numbers
-iptables -L INPUT -n --line-numbers
-
-# Output:
-# Chain INPUT (policy ACCEPT)
-# num  target  prot  opt  source          destination
-# 1    DROP    all   --   1.2.3.4         0.0.0.0/0
-# 2    DROP    all   --   1.2.3.0/24      0.0.0.0/0
-# 3    ACCEPT  tcp   --   0.0.0.0/0       0.0.0.0/0   dpt:22
-
-# Delete by line number
-iptables -D INPUT 1
-
-# Delete by matching the rule
-iptables -D INPUT -s 1.2.3.4 -j DROP
-
-# Flush all INPUT rules (careful!)
-iptables -F INPUT
-```
-
----
-
-## Make Rules Persistent
-
-iptables rules are lost on reboot by default:
-
-### Ubuntu/Debian
+**Debian / Ubuntu (no ufw):**
 
 ```bash
 apt install iptables-persistent
-
-# Save current rules
-iptables-save > /etc/iptables/rules.v4
+iptables-save  > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
-
-# Rules are automatically loaded on boot
 ```
 
-### RHEL/CentOS
+`netfilter-persistent` loads these files at boot. Run `netfilter-persistent save` after future changes.
 
-```bash
-# Save
-service iptables save
-# or
-iptables-save > /etc/sysconfig/iptables
-```
-
-### Manual restore on boot (any system)
-
-```bash
-# Add to /etc/rc.local or a systemd service
-iptables-restore < /etc/iptables/rules.v4
-```
+**RHEL family without firewalld:** install `iptables-services`, then `service iptables save` writes `/etc/sysconfig/iptables`. Only do this if you have deliberately disabled firewalld. Running both gives you two rule managers fighting over the same packets.
 
 ---
 
-## ipset: Block Large Lists Efficiently
+## If firewalld or ufw is running
 
-Blocking thousands of IPs with individual iptables rules is slow — every packet checks every rule. `ipset` creates a hash table the kernel can search in O(1):
+**firewalld:**
 
 ```bash
-# Install
-apt install ipset
+# Drop all traffic from an address (permanent + live)
+firewall-cmd --permanent --zone=drop --add-source=203.0.113.45
+firewall-cmd --reload
 
-# Create an IP set
-ipset create blocklist hash:ip
+# Or a rich rule in the zone your interface uses
+firewall-cmd --permanent --zone=public \
+  --add-rich-rule='rule family="ipv4" source address="203.0.113.45" drop'
+firewall-cmd --reload
+```
 
-# Add IPs to the set
-ipset add blocklist 1.2.3.4
-ipset add blocklist 5.6.7.8
-ipset add blocklist 9.10.11.12
+Adding a source to the `drop` zone sends every packet from that source through the drop zone, regardless of interface.
 
-# Add a network range
-ipset add blocklist 1.2.3.0/24
+**ufw:**
 
-# One iptables rule matches all IPs in the set
+```bash
+ufw insert 1 deny from 203.0.113.45
+ufw status numbered
+```
+
+`insert 1` matters for the same reason `-I` does: ufw evaluates rules in order, and a plain `ufw deny` is appended after your existing `allow` rules.
+
+---
+
+## ipset: block thousands of addresses with one rule
+
+Every iptables rule is checked in sequence. Ten thousand individual DROP rules means up to ten thousand comparisons per packet, and slow rule reloads. `ipset` stores the addresses in a hash that the kernel looks up in one step, and iptables references the whole set with a single rule.
+
+```bash
+apt install ipset          # or: dnf install ipset
+
+ipset create blocklist hash:net
+ipset add blocklist 203.0.113.45
+ipset add blocklist 198.51.100.0/24
+
 iptables -I INPUT -m set --match-set blocklist src -j DROP
 
-# List set contents
-ipset list blocklist
-
-# Save and restore
-ipset save > /etc/ipset.conf
-ipset restore < /etc/ipset.conf
+ipset list blocklist | head
+ipset test blocklist 203.0.113.45
 ```
+
+`hash:net` accepts both single IPs and CIDR ranges. `hash:ip` is for single addresses only.
+
+Adding or removing addresses later doesn't touch iptables at all:
+
+```bash
+ipset add blocklist 192.0.2.10
+ipset del blocklist 192.0.2.10
+```
+
+**Loading a large list.** Calling `ipset add` in a loop for thousands of lines is slow. Build a restore file and load it in one go:
+
+```bash
+ipset create blocklist-new hash:net -exist
+sed 's/^/add blocklist-new /' blocklist.txt | ipset restore -exist
+ipset swap blocklist-new blocklist       # atomic replace
+ipset destroy blocklist-new
+```
+
+`swap` replaces the live set atomically, so there is no gap where nothing is blocked.
+
+**Persistence:** the set must exist **before** the iptables rule that references it is restored, or the restore fails. On Debian/Ubuntu install `ipset-persistent`, which hooks into `netfilter-persistent` in the right order. Elsewhere, restore with `ipset restore < /etc/ipset.conf` in a unit that runs before your iptables restore.
 
 ---
 
-## Real Examples
+## Examples
 
-### Block a brute-force attacker immediately
+### Block the top SSH brute-force sources
 
 ```bash
-# See who's hammering SSH
-sudo lastb -i | awk '{print $3}' | sort | uniq -c | sort -rn | head
-
-# Block the top offender
-iptables -I INPUT -s 185.224.12.34 -j DROP
-iptables-save > /etc/iptables/rules.v4
+# Ubuntu/Debian: the unit is "ssh"; on RHEL it's "sshd"
+journalctl -u ssh --since "1 hour ago" \
+  | grep -oP 'Failed password for .* from \K[0-9.]+' \
+  | sort | uniq -c | sort -rn | head
+#    842 203.0.113.45
+#    311 198.51.100.23
 ```
 
-### Rate-limit SSH instead of blocking entirely
+Block the worst offenders. For this job long-term, a tool like fail2ban that adds and expires bans automatically beats manual rules.
 
-Better than blocking: allow SSH but limit connection rate:
+### Rate-limit new SSH connections instead of blocking
 
 ```bash
-# Allow 3 new SSH connections per minute per IP
-iptables -I INPUT -p tcp --dport 22 -m state --state NEW \
+iptables -I INPUT 1 -p tcp --dport 22 -m conntrack --ctstate NEW \
   -m recent --set --name SSH
-
-iptables -I INPUT -p tcp --dport 22 -m state --state NEW \
-  -m recent --update --seconds 60 --hitcount 4 --name SSH \
-  -j DROP
+iptables -I INPUT 2 -p tcp --dport 22 -m conntrack --ctstate NEW \
+  -m recent --update --seconds 60 --hitcount 4 --name SSH -j DROP
 ```
 
-### Block a country (with ipset + IP list)
+The first rule records each new connection's source. The second drops the source once it has opened four or more new connections within 60 seconds. The explicit positions `1` and `2` keep them in the right order. Two plain `-I` calls would put the second rule above the first.
+
+> Test this from a second session. Automation that opens many short SSH connections (Ansible, rsync loops) can trip the limit.
+
+### Block IPv6 too
 
 ```bash
-# Download country IP list (example: CN block list)
-wget -q https://www.ipdeny.com/ipblocks/data/countries/cn.zone
-
-# Create ipset for country
-ipset create cn_block hash:net
-
-# Add all ranges from the list
-while read ip; do
-  ipset add cn_block "$ip" 2>/dev/null
-done < cn.zone
-
-# One iptables rule blocks the whole country
-iptables -I INPUT -m set --match-set cn_block src -j DROP
+ip6tables -I INPUT -s 2001:db8:1234::/48 -j DROP
+ip6tables-save > /etc/iptables/rules.v6
 ```
+
+If the server has a public IPv6 address and you only block IPv4, an attacker with IPv6 is unaffected.
 
 ---
 
-## Common Mistakes
+## Common mistakes
 
-**Mistake 1: Not testing before making rules permanent**
-Wrong rules can lock you out. Test first, then save.
+**`-A` instead of `-I`.** The rule ends up after an ACCEPT and never matches. Check the counters.
 
-**Mistake 2: Using `-A` instead of `-I` for block rules**
-`-A` appends to the end. If there's an ACCEPT rule above it, the DROP is never reached. Use `-I` to insert at the top.
+**Forgetting to save.** Everything is gone after a reboot. Save right after you've confirmed the rule works.
 
-**Mistake 3: Not blocking IPv6**
-If you block an IP in iptables but not ip6tables, the attacker can use IPv6:
+**Raw iptables on a firewalld host.** The rules work until something reloads firewalld or the host reboots, and they're invisible to anyone checking with `firewall-cmd`.
+
+**Blocking yourself.** Check `who` / `echo $SSH_CLIENT` for your own source IP before adding broad subnet blocks.
+
+**Huge rule lists.** Use ipset once you're past a few dozen addresses.
+
+---
+
+## Quick reference
 
 ```bash
-ip6tables -I INPUT -s 2001:db8::1/48 -j DROP
-```
-
-**Mistake 4: Blocking your own IP**
-Always have an out-of-band access path (console, cloud control panel) before adding DROP rules.
-
----
-
-## Quick Reference
-
-```bash
-# Block single IP
-iptables -I INPUT -s 1.2.3.4 -j DROP
-
-# Block range
-iptables -I INPUT -s 1.2.3.0/24 -j DROP
-
-# Block on specific port
-iptables -I INPUT -s 1.2.3.4 -p tcp --dport 22 -j DROP
-
-# List rules with numbers
-iptables -L INPUT -n --line-numbers
-
-# Delete by number
-iptables -D INPUT 1
-
-# Save
-iptables-save > /etc/iptables/rules.v4
+iptables -I INPUT -s IP -j DROP                         # block IP
+iptables -I INPUT -s NET/24 -j DROP                     # block subnet
+iptables -I INPUT -s IP -p tcp --dport 22 -j DROP       # block IP on one port
+iptables -L INPUT -n -v --line-numbers                  # list with counters
+iptables -D INPUT N                                     # delete rule N
+iptables-save > /etc/iptables/rules.v4                  # persist (Debian/Ubuntu)
+ipset add blocklist IP                                  # add to an ipset blocklist
 ```
 
 ---
 
-## Conclusion
-
-`iptables -I INPUT -s <ip> -j DROP` blocks a single IP. Use `-I` (insert) not `-A` (append) so the rule appears before any ACCEPT rules. Save with `iptables-save` immediately after testing. For blocking hundreds of IPs, use `ipset` — one iptables rule + a hash set is orders of magnitude faster than hundreds of individual rules.
-
----
-
-*Related: [How to Check Firewall Status Linux](/blog/check-firewall-status-linux-guide) — verify rules are applied correctly. [SSH Connection Refused Linux Fix](/blog/ssh-connection-refused-linux-fix) — if you accidentally block yourself.*
+*Related: [nftables migration guide](/blog/nftables-migration-guide) if you're moving off iptables syntax entirely. [SSH connection refused fix](/blog/ssh-connection-refused-linux-fix) if a rule went wrong and SSH stopped answering. For web-layer blocking and throttling, see [NGINX rate limiting](/blog/nginx-rate-limiting-config).*

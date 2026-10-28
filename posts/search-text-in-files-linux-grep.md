@@ -1,237 +1,190 @@
 ---
-title: "How to Search Text in Files Linux: grep Examples"
+title: "Search Text in Files on Linux: grep Recursive, Regex, Logs"
 date: "2026-04-22"
-excerpt: "Search text in files in Linux with grep — recursive search, regex patterns, context lines, count matches, and real-world log investigation examples."
+updated: "2026-10-28"
+excerpt: "Find a string in a file, a directory tree or compressed logs with grep: recursive search, regex that works, context lines, and the flags people get wrong."
 tags: ["linux", "troubleshooting", "debugging", "logs", "infrastructure"]
 featured: false
-slug: "search-text-in-files-linux-grep-examples"
 category: "linux"
 ---
 
-`grep` is the tool you use more than almost anything else on Linux. Search a file, search a directory, match patterns, count occurrences, extract specific fields.
+You need to know which config file sets `worker_processes`, which log has the `OutOfMemoryError`, or every place a hostname is hard-coded before you migrate a server. That's `grep`. The basic form takes seconds to learn. The flags that make it reliable (recursion, fixed strings, compressed files, binary files) are where people lose time.
 
 ---
 
-## TL;DR
+## The answer
 
 ```bash
-grep "error" /var/log/app.log              # basic search
-grep -r "error" /var/log/                 # recursive search
-grep -i "error" /var/log/app.log          # case-insensitive
-grep -n "error" /var/log/app.log          # show line numbers
-grep -c "error" /var/log/app.log          # count matches
-grep -v "debug" /var/log/app.log          # exclude matches
-```
-
----
-
-## Basic grep
-
-```bash
-# Search in a file
-grep "connection refused" /var/log/nginx/error.log
-
-# Case-insensitive
-grep -i "error" /var/log/app.log
-
-# Show line numbers
-grep -n "FATAL" /var/log/app.log
-
-# Count matching lines
-grep -c "ERROR" /var/log/app.log
-
-# Invert (show lines NOT matching)
-grep -v "DEBUG" /var/log/app.log | head -20
+grep -rn "worker_processes" /etc/nginx/          # recursive, with line numbers
+grep -rl "db01.internal" /etc /opt/app           # just the file names
+grep -i "error" /var/log/myapp/app.log           # case-insensitive
+grep -rnw "TODO" --include="*.py" src/           # whole word, only .py files
+zgrep -h "OutOfMemory" /var/log/myapp/app.log*   # current + rotated .gz logs
 ```
 
 ---
 
-## Recursive Search
+## The flags you'll actually use
+
+| Flag | Does | Note |
+|---|---|---|
+| `-r` | Search a directory recursively | `-R` also follows symlinks |
+| `-n` | Show line numbers | |
+| `-i` | Case-insensitive | |
+| `-l` / `-L` | Print only names of files that match / don't match | |
+| `-c` | Count **matching lines** per file | Not the number of matches |
+| `-v` | Invert: lines that **don't** match | |
+| `-w` | Whole word: `-w port` won't match `transport` | |
+| `-x` | Whole line must match | |
+| `-F` | Fixed string, no regex | Use for IPs, paths, anything with `.` `*` `[` |
+| `-E` | Extended regex (`|`, `+`, `?`, `{n}` without backslashes) | |
+| `-o` | Print only the matched part | Great for extracting IPs, IDs |
+| `-A n` / `-B n` / `-C n` | n lines after / before / around each match | |
+| `-m n` | Stop after n matching lines | |
+| `-h` / `-H` | Hide / force the filename prefix | |
+| `-I` | Skip binary files | |
+| `-q` | No output, only the exit code | For scripts |
+
+---
+
+## Search a directory tree
 
 ```bash
-# Search all files in a directory
-grep -r "password" /etc/
+grep -rn "listen 443" /etc/nginx/
+# /etc/nginx/sites-enabled/api.conf:4:    listen 443 ssl;
+# /etc/nginx/sites-enabled/www.conf:3:    listen 443 ssl http2;
 
-# With filename shown (default for -r)
-grep -r "api_key" /opt/app/
+grep -rl "DatabaseError" /opt/app/                    # which files
+grep -rn --include="*.yml" --include="*.yaml" "password:" /opt/app/
+grep -rn --exclude-dir=".git" --exclude-dir="node_modules" "api_key" .
+grep -rnI "10.0.2.15" /etc                            # -I: skip binary files
+```
 
-# Only show filenames that contain the match
-grep -rl "DatabaseError" /opt/app/
+Scope it. `grep -r pattern /` reads every file on the system, including `/proc` and `/sys`, and can take a very long time or hang on special files. Start from the narrowest directory that could contain the answer.
 
-# Exclude certain file types
-grep -r --include="*.py" "import requests" /opt/app/
-grep -r --exclude="*.log" "error" /var/
-grep -r --exclude-dir=".git" "TODO" /opt/app/
+If you're looking for files by **name** rather than content, that's `find`, not grep. See [find files by name and size](/blog/linux-find-file-by-name-and-size).
+
+---
+
+## Regex that does what you expect
+
+grep's default is **basic** regex (BRE), where `|`, `+`, `?`, `{` and `(` are literal characters unless backslashed. That's why this finds nothing:
+
+```bash
+grep "error|fatal" app.log        # looks for the literal text "error|fatal"
+grep -E "error|fatal" app.log     # either word
+```
+
+Common patterns:
+
+```bash
+grep -E "^2026-10-28 14:2[0-9]" app.log             # lines starting in a time window
+grep -E '" 5[0-9]{2} ' /var/log/nginx/access.log     # HTTP 5xx in combined log format
+grep -oE "([0-9]{1,3}\.){3}[0-9]{1,3}" access.log    # extract IPv4-looking strings
+grep -P "user_id=\d+" app.log                        # Perl regex (GNU grep only)
+```
+
+The IPv4 regex also matches `999.1.1.1`. That's fine for extracting addresses from logs, not for validating input.
+
+### Searching for something that contains regex characters
+
+A dot in a regex means "any character", so `grep "10.0.0.1"` also matches `10.0.0.12` and `10a0b0c1`. Use `-F` for literal strings, and `-w` to stop at word boundaries:
+
+```bash
+grep -Fw "10.0.0.1" /var/log/nginx/access.log
+grep -F "[error]" /var/log/nginx/error.log        # brackets are literal with -F
+```
+
+Pattern starts with a dash? Mark the end of options with `--` or use `-e`:
+
+```bash
+grep -- "-Xmx" /etc/default/myapp
+grep -e "--max-connections" config.txt
 ```
 
 ---
 
-## Context Lines
+## Context: what happened around the match
 
 ```bash
-# 3 lines before and after each match
-grep -B3 -A3 "FATAL" /var/log/app.log
-
-# 5 lines after (useful for stack traces)
-grep -A5 "Exception" /var/log/app.log
-
-# 2 lines before (useful for request context before error)
-grep -B2 "500 Internal Server Error" /var/log/nginx/access.log
+grep -n -B 3 -A 20 "OutOfMemoryError" app.log     # stack trace after, cause before
+grep -m1 -A 30 "Traceback" app.log                # just the first Python traceback
+grep -C 2 "connection refused" /var/log/nginx/error.log
 ```
+
+Groups of context lines are separated by `--`. If a match falls within the context of the previous one, they're merged.
 
 ---
 
-## Multiple Patterns
+## Logs: rotated, compressed, counted
+
+Rotated logs end in `.1`, `.2.gz` and so on. Plain `grep` on a `.gz` file prints `Binary file ... matches` (or nothing useful). `zgrep` decompresses on the fly and also reads uncompressed files, so one command covers all of them:
 
 ```bash
-# Match either pattern (OR)
-grep -E "ERROR|FATAL|CRITICAL" /var/log/app.log
-
-# Match both patterns (AND) — pipe two greps
-grep "ERROR" /var/log/app.log | grep "database"
-
-# Multiple patterns from file
-grep -f /tmp/patterns.txt /var/log/app.log
+zgrep -h "Failed password" /var/log/auth.log*                 # -h: no filename prefix
+zgrep -c "ERROR" /var/log/myapp/app.log*                      # count per file = per day
 ```
+
+Counting and ranking:
+
+```bash
+grep -c "ERROR" app.log                                # lines containing ERROR
+grep -o "ERROR" app.log | wc -l                        # occurrences (a line can have several)
+
+# Top source IPs of failed SSH logins
+grep "Failed password" /var/log/auth.log | grep -oE "from [0-9.]+" | sort | uniq -c | sort -rn | head
+```
+
+```
+    412 from 203.0.113.45
+     87 from 198.51.100.23
+      9 from 192.0.2.10
+```
+
+`sort | uniq -c | sort -rn` is the pattern for "group and rank". The [sort command guide](/blog/linux-sort-command-examples) covers its options. On RHEL the auth log is `/var/log/secure`; on systems without rsyslog, use `journalctl -u ssh` (Debian/Ubuntu) or `-u sshd` (RHEL) with `--grep`.
+
+For deeper log work (normalizing messages, building a timeline), see the [Linux log analysis guide](/blog/linux-log-analysis-guide).
 
 ---
 
-## Extended Regex (-E)
+## grep in scripts
+
+grep's exit code is the useful output:
+
+| Exit code | Meaning |
+|---|---|
+| `0` | At least one match |
+| `1` | No match |
+| `2` | Error (file not found, permission denied) |
 
 ```bash
-# Match ERROR or WARN
-grep -E "ERROR|WARN" /var/log/app.log
-
-# Match lines starting with a timestamp
-grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}" /var/log/app.log
-
-# Match IP addresses
-grep -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" /var/log/nginx/access.log
-
-# Match HTTP 5xx errors in nginx access log
-grep -E '" [5][0-9]{2} ' /var/log/nginx/access.log
+if grep -q "^PermitRootLogin no" /etc/ssh/sshd_config; then
+  echo "root login disabled"
+fi
 ```
+
+With `set -e`, a grep that finds nothing (exit 1) stops your script. Use `grep ... || true` where "no match" is a normal outcome.
 
 ---
 
-## Real Examples
+## Speed on big files
 
-### Find all errors in log files from today
-
-```bash
-# Assuming log format starts with date
-grep "$(date +%Y-%m-%d)" /var/log/app.log | grep -i "error\|fatal"
-```
-
-### Find failed SSH logins
-
-```bash
-grep "Failed password" /var/log/auth.log
-
-# With count per IP
-grep "Failed password" /var/log/auth.log \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' \
-  | sort | uniq -c | sort -rn | head -10
-```
-
-### Search nginx access log for slow responses
-
-```bash
-# Last field is response time if configured
-grep " 200 " /var/log/nginx/access.log | awk '$NF > 2.0' | wc -l
-# Count responses over 2 seconds
-```
-
-### Find which config file has a specific setting
-
-```bash
-grep -r "worker_processes" /etc/nginx/
-# /etc/nginx/nginx.conf:worker_processes auto;
-```
-
-### Search compressed log files
-
-```bash
-# zgrep works on .gz files without decompressing
-zgrep "ERROR" /var/log/app/app.log.gz
-
-# Search current + all rotated logs
-grep "ERROR" /var/log/app.log*
-zgrep "ERROR" /var/log/app.log.*.gz
-```
+- `LC_ALL=C grep ...` skips multibyte locale handling and is often much faster on large ASCII logs.
+- `-F` is faster than a regex when you don't need one.
+- `-m` stops early once you've seen enough.
+- For huge source trees, `ripgrep` (`rg`) is faster and skips `.gitignore`d files by default. That default is also a trap when you're searching for something in an ignored file.
 
 ---
 
-## Output Formatting
+## Common mistakes
 
-```bash
-# Only show matching part (not whole line)
-grep -o "ERROR.*" /var/log/app.log | head -10
-
-# Highlight matches (color)
-grep --color=always "ERROR" /var/log/app.log | less -R
-
-# With filename prefix (default for multi-file search)
-grep "error" /var/log/*.log
-
-# Without filename prefix (for single file piped output)
-grep -h "error" /var/log/app.log
-
-# Show only filename
-grep -l "critical" /var/log/*.log
-```
+- **Unquoted patterns.** `grep connection refused app.log` searches for `connection` in two files: `refused` and `app.log`. Quote anything with spaces or shell characters.
+- **Expecting `|` to work without `-E`.**
+- **Unescaped dots in IPs and hostnames.** Use `-F` (and `-w`).
+- **`grep` on `.gz` logs.** Use `zgrep`.
+- **`grep -c` for occurrences.** It counts lines. Use `grep -o ... | wc -l`.
+- **`grep -r` from `/`.** Narrow the starting directory.
 
 ---
 
-## Common Mistakes
-
-**Mistake 1: Not quoting patterns with spaces or special chars**
-```bash
-grep "connection refused" file.log    # CORRECT — quoted
-grep connection refused file.log       # WRONG — "refused" is treated as filename
-```
-
-**Mistake 2: Slow recursive search on /var/log**
-`grep -r "pattern" /` reads every file. Limit the scope:
-```bash
-grep -r "error" /var/log/app/    # specific directory
-grep -r --include="*.log" "error" /var/log/    # specific extension
-```
-
-**Mistake 3: Using grep to count unique values**
-```bash
-grep -c "error" file    # counts LINES with "error", not unique errors
-grep "error" file | sort | uniq -c    # count per unique error message
-```
-
-**Mistake 4: Forgetting `-E` for extended regex**
-`grep "error|fatal"` looks for literal "error|fatal". Use `grep -E "error|fatal"` for OR.
-
----
-
-## Quick Reference
-
-```bash
-grep "pattern" file              # basic search
-grep -i "pattern" file           # case-insensitive
-grep -r "pattern" dir/           # recursive
-grep -n "pattern" file           # line numbers
-grep -c "pattern" file           # count
-grep -v "pattern" file           # invert (exclude)
-grep -l "pattern" files          # only filenames
-grep -A3 "pattern" file          # 3 lines after
-grep -B3 "pattern" file          # 3 lines before
-grep -E "pat1|pat2" file         # OR pattern
-grep -rn --include="*.py" "func" # recursive, specific extension
-zgrep "pattern" file.gz          # search compressed file
-```
-
----
-
-## Conclusion
-
-`grep` with `-r` for directories, `-i` for case-insensitive, `-n` for line numbers, `-E` for regex with `|`. Combine with `sort | uniq -c | sort -rn` to count and rank unique patterns. For log analysis specifically, pipe chains like `grep "ERROR" | grep "database" | wc -l` answer specific questions quickly.
-
----
-
-*Related: [Linux Log Analysis: Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — grep in the context of full log investigation. [How to Monitor Real-Time Logs Linux](/blog/monitor-real-time-logs-linux-guide) — combining grep with tail -f.*
+*Related: [security log analysis](/blog/log-analysis-security-windows-webserver) for grep patterns that catch attacks in access logs, and [monitor real-time logs](/blog/monitor-real-time-logs-linux) for using grep on a live stream (where `--line-buffered` matters).*

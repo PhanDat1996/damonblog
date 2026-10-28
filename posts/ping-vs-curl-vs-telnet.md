@@ -1,247 +1,166 @@
 ---
-title: "ping vs curl vs telnet: Which to Use for Network Testing"
+title: "ping vs curl vs telnet: Which Test Answers Your Question"
 date: "2026-04-22"
-excerpt: "Know when to use ping, curl, and telnet for network testing — what each tool tests, what its limitations are, and which to reach for first when debugging connectivity issues."
+updated: "2026-10-28"
+excerpt: "ping proves ICMP works, telnet or nc proves a TCP port opens, curl proves the app answers. Which to run first, and the false results each one gives."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
-slug: "ping-vs-curl-vs-telnet-difference"
 category: "linux"
 ---
 
-Each tool tests a different layer of the network stack. Using the wrong one gives you a false positive or misses the real problem. Here's exactly what each one tests and when to use it.
+Someone in the incident channel writes "I can ping it, so the network's fine." Five minutes later someone else writes "ping fails, the server must be down." Both conclusions can be wrong, because ping, telnet and curl test different things.
+
+## Verdict
+
+- **Is the web/API service working?** Use `curl`. It's the only one of the three that tests the application.
+- **Is a non-HTTP port reachable** (database, Redis, SMTP)? Use `nc -zv` (or `telnet` if that's what's installed).
+- **Is the host reachable at all, and how is the latency/packet loss?** Use `ping`, but treat a failure as "inconclusive", not "down".
+
+| | ping | telnet / nc | curl |
+|---|---|---|---|
+| Protocol | ICMP echo | TCP connect | TCP + TLS + HTTP (and others) |
+| Tests a specific port | No | Yes | Yes |
+| Tests the application | No | No (only that something accepted the connection) | Yes: status code, headers, body |
+| Tests TLS / certificate | No | No | Yes |
+| Measures latency | Yes, per packet | No (wrap in `time`) | Yes, per phase |
+| Commonly blocked | Often (ICMP filtered by firewalls, cloud defaults) | Only if the port is | Only if the port is |
+| Installed by default | Almost always | telnet rarely; nc often | Almost always |
 
 ---
 
-## TL;DR
+## ping: is the IP reachable?
 
-| Tool | Tests | Use when |
-|---|---|---|
-| `ping` | ICMP reachability, basic latency | Is the host alive at all? |
-| `telnet` | TCP port connectivity | Is the port open? |
-| `nc` | TCP/UDP port, also sends data | Better than telnet for scripting |
-| `curl` | Full HTTP/HTTPS request | Is the web service responding correctly? |
+```bash
+ping -c 4 -W 2 10.0.1.20
+```
+
+```
+PING 10.0.1.20 (10.0.1.20) 56(84) bytes of data.
+64 bytes from 10.0.1.20: icmp_seq=1 ttl=64 time=0.412 ms
+64 bytes from 10.0.1.20: icmp_seq=2 ttl=64 time=0.388 ms
+64 bytes from 10.0.1.20: icmp_seq=3 ttl=64 time=0.401 ms
+64 bytes from 10.0.1.20: icmp_seq=4 ttl=64 time=0.395 ms
+
+--- 10.0.1.20 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3062ms
+rtt min/avg/max/mdev = 0.388/0.399/0.412/0.009 ms
+```
+
+`-c` sets the count (Linux ping runs forever without it), `-W` the per-reply timeout in seconds.
+
+What ping tells you:
+
+- Routing works in both directions for ICMP.
+- Latency and jitter (`mdev`), and **packet loss** over a longer run: `ping -c 100 -i 0.2 host`.
+
+What it doesn't:
+
+- Whether any port is open or any service is running.
+- Whether a firewall allows your TCP traffic. ICMP and TCP are filtered separately.
+
+A failed ping means one of: host down, routing broken, or **ICMP filtered**. Many cloud security groups and Windows hosts drop ICMP by default. Don't call a host down on ping alone.
 
 ---
 
-## ping: Network Layer Only
+## telnet (or nc): does the TCP port open?
 
 ```bash
-ping -c 3 google.com
-ping -c 3 192.168.1.100
+telnet 10.0.1.20 5432
 ```
 
-**What it tests:** ICMP echo request/reply. Confirms the host is reachable at the IP level.
-
-**What it does NOT test:**
-- Whether any specific port is open
-- Whether any service is running
-- Whether a firewall is blocking TCP
-
 ```
-PING google.com (142.250.80.46): 56 data bytes
-64 bytes from 142.250.80.46: icmp_seq=0 ttl=116 time=12.3 ms
-64 bytes from 142.250.80.46: icmp_seq=1 ttl=116 time=11.9 ms
-
---- google.com ping statistics ---
-3 packets transmitted, 3 received, 0% packet loss, time 2003ms
-rtt min/avg/max/mdev = 11.9/12.1/12.3/0.2 ms
+Trying 10.0.1.20...
+Connected to 10.0.1.20.
+Escape character is '^]'.
 ```
 
-**Limitations:** Many servers block ICMP. `ping` failing doesn't mean the server is down — it might just block pings. A service can be unreachable on TCP while still responding to ping.
+`Connected` means the three-way handshake completed: something is listening and the path allows TCP to that port. It doesn't mean the service is healthy. A hung application whose kernel still accepts connections into the backlog will look fine here.
+
+`nc` does the same with a timeout and a clean exit, which makes it better for scripts:
 
 ```bash
-# Ping with interval and count
-ping -c 5 -i 0.5 host    # 5 pings, 0.5s interval
-
-# Ping with timeout
-ping -W 3 host            # 3 second wait per reply
-
-# Ping to check packet loss over time
-ping -c 100 host | tail -2
+nc -zv -w 3 10.0.1.20 5432
 ```
+
+Where telnet still earns its place: talking a text protocol by hand. Connect to port 25 and type `EHLO test`, or to Redis on 6379 and type `PING`. You see the server's real reply.
+
+How to read `refused` vs `timed out` vs `no route to host` is covered in [test a TCP connection](/blog/test-tcp-connection-linux).
 
 ---
 
-## telnet: TCP Port Test
+## curl: does the application answer?
 
 ```bash
-telnet host 80
-telnet 192.168.1.100 8080
+curl -sS -o /dev/null -w '%{http_code}\n' --connect-timeout 3 --max-time 10 https://api.example.com/health
 ```
 
-**What it tests:** Whether a TCP connection can be established to a specific port.
+A `200` here means DNS, routing, the TCP port, TLS (certificate valid for that name, trusted chain) and the application all worked. That's why curl is the first test for anything HTTP.
 
-**What it does NOT test:**
-- Whether the service is responding correctly
-- HTTP response codes
-- TLS certificates
+When it fails, curl's error says which layer broke:
 
-If you see `Connected to host.` — the port is open. If you see `Connection refused` or it hangs — the port is closed or firewalled.
+| curl error | Layer |
+|---|---|
+| `(6) Could not resolve host` | DNS |
+| `(7) Failed to connect ... Connection refused` | TCP: nothing listening |
+| `(28) Connection timed out` | TCP: filtered or unreachable |
+| `(60) SSL certificate problem` | TLS: expired, self-signed, wrong chain |
+| `(35)` / handshake errors | TLS: protocol or cipher mismatch |
+| HTTP `502`/`503`/`504` | Reached a proxy; the app behind it failed |
 
-**Problem:** Not installed by default on many systems. Use `nc` instead:
+Find the slow phase:
 
 ```bash
-nc -zv host 8080        # cleaner, shows clear success/failure
-nc -zv -w 3 host 8080   # with timeout
+curl -o /dev/null -sS -w 'dns:     %{time_namelookup}\nconnect: %{time_connect}\ntls:     %{time_appconnect}\nttfb:    %{time_starttransfer}\ntotal:   %{time_total}\n' https://api.example.com/
 ```
+
+The values are cumulative from the start of the request, so subtract consecutive lines: `ttfb - tls` is time spent waiting for the server to start responding.
+
+Testing one backend behind a load balancer, or a vhost before DNS points to it:
+
+```bash
+curl -sv --resolve api.example.com:443:10.0.1.31 https://api.example.com/health
+```
+
+`--resolve` is better than an IP plus a `Host:` header for HTTPS, because it also sends the right SNI and validates the certificate against the real name.
+
+Watch for redirects: an `http://` URL often returns `301` to HTTPS. Add `-L` to follow it, or test the `https://` URL directly.
 
 ---
 
-## curl: Application Layer Test
+## The order to run them in
 
-```bash
-curl -sv http://host:8080/health
-curl -o /dev/null -s -w "%{http_code}" http://host/
+```
+curl the service ──► works? done.
+      │ fails
+      ▼
+read curl's error ──► DNS (6)?  ──► fix DNS
+      │                TLS (60)? ──► fix cert
+      ▼
+nc -zv host port ──► refused?  ──► service down / wrong bind address
+      │               timed out? ──► firewall / route
+      ▼
+ping host        ──► loss/latency on the path? ──► traceroute / mtr
 ```
 
-**What it tests:** Full HTTP/HTTPS request and response — DNS resolution, TCP connection, TLS handshake, HTTP status code, response body.
+Start at the top for HTTP services: one curl often tells you everything. Start at `nc` for databases and other TCP services. Use ping last, for path quality, not as a reachability verdict.
 
-**This is the most complete test.** If curl succeeds, everything from DNS to the application layer is working.
+### Two classic misreads
 
-```bash
-# Quick status check
-curl -o /dev/null -s -w "HTTP %{http_code}  Connect: %{time_connect}s  Total: %{time_total}s\n" http://host/
+**Ping works, service doesn't.** The host is up, but the database isn't listening, or listens on `127.0.0.1` only, or the firewall allows ICMP and blocks 5432. `nc` and `ss` on the server settle it.
 
-# Verbose — see every step
-curl -sv https://host/api/health 2>&1 | head -40
+**Ping fails, service works.** ICMP is filtered somewhere on the path. `curl` or `nc` succeeds and the service is fine. Nothing to fix.
 
-# Test with specific Host header (virtual host)
-curl -H "Host: mysite.com" http://server-ip/
-
-# Test with timeout
-curl --connect-timeout 5 --max-time 10 http://host/
-
-# Follow redirects
-curl -L http://host/
-
-# Test TLS certificate
-curl -sv https://host/ 2>&1 | grep -E "SSL|TLS|Certificate|Verify"
-```
+When nothing works and you need a systematic pass, follow [cannot connect to server](/blog/cannot-connect-to-server-linux-troubleshooting). When ping shows loss and you want to know where, use [traceroute and mtr](/blog/traceroute-linux-examples).
 
 ---
 
-## The Testing Ladder
+## FAQ
 
-Use tools in order from broad to specific:
+**Can ping test a specific port?**
+No. ICMP has no ports. Use `nc -zv host port`, or `curl` for HTTP.
 
-```
-1. ping host              → Is the host alive at the IP level?
-   ↓ if works
-2. nc -zv host 8080       → Is the TCP port reachable?
-   ↓ if works
-3. curl http://host:8080/ → Is the HTTP service responding?
-   ↓ if works
-4. curl -sv https://host/ → Is TLS working correctly?
-```
+**Why does telnet hang instead of failing?**
+The SYN is being dropped silently (a firewall DROP rule or security group), so the client keeps retrying until the kernel gives up, about two minutes by default. `nc -w 3` returns in three seconds instead.
 
-Each step narrows the problem. If step 1 fails but step 2 works (ping blocked by firewall but TCP port is open), you know it's ICMP filtering, not a connectivity problem.
-
----
-
-## Real Examples
-
-### Classic false positive: ping works, service doesn't
-
-```bash
-ping -c 3 db01
-# 0% packet loss — host is reachable
-
-telnet db01 5432
-# Connection refused
-
-# Conclusion: host is up, database is not running
-systemctl status postgresql  # on db01
-```
-
-### Classic false negative: ping fails, service works
-
-```bash
-ping -c 3 cloudflare.com
-# 100% packet loss — Cloudflare blocks ICMP
-
-curl https://cloudflare.com
-# HTTP 200 — site works fine
-```
-
-Never conclude a server is down based on ping alone if you know the destination blocks ICMP.
-
-### Debug why curl fails but nc succeeds
-
-```bash
-nc -zv api.example.com 443
-# Connection succeeded
-
-curl https://api.example.com/health
-# curl: (60) SSL certificate problem: certificate has expired
-
-# TCP is fine. TLS certificate is the problem.
-openssl s_client -connect api.example.com:443 | grep "Verify"
-```
-
-### Measure what's slow
-
-```bash
-curl -o /dev/null -s -w "
-DNS:     %{time_namelookup}s
-Connect: %{time_connect}s
-TLS:     %{time_appconnect}s
-TTFB:    %{time_starttransfer}s
-Total:   %{time_total}s
-" https://host/api/endpoint
-```
-
-Breaks down where time is spent — slow DNS, slow TLS, slow app response.
-
----
-
-## Common Mistakes
-
-**Mistake 1: Concluding a server is down because ping fails**
-Many cloud hosts block ICMP by default. Test the actual port instead.
-
-**Mistake 2: Using telnet when curl is available for HTTP testing**
-`telnet host 80` tells you the port is open. `curl http://host/` tells you the service is actually responding with valid HTTP.
-
-**Mistake 3: Not testing from the right source**
-A service might be accessible from the server itself but not from external clients. Always test from the location of the actual client (or as close as possible).
-
-**Mistake 4: Forgetting `-L` with curl for redirects**
-HTTP → HTTPS redirects make curl appear to fail:
-
-```bash
-curl http://host/         # might get 301, looks like failure
-curl -L http://host/      # follows redirect to HTTPS, shows actual result
-```
-
----
-
-## Quick Reference
-
-```bash
-# Ping — network layer
-ping -c 3 host
-ping -c 3 -W 2 host    # 2s timeout per packet
-
-# TCP port test — transport layer
-nc -zv host 8080
-nc -zv -w 3 host 8080   # 3s timeout
-
-# HTTP test — application layer
-curl -sv http://host/
-curl -o /dev/null -s -w "%{http_code}" http://host/
-curl --connect-timeout 5 http://host/
-
-# Measure all layers
-curl -w "DNS:%{time_namelookup} TCP:%{time_connect} Total:%{time_total}" \
-  -o /dev/null -s https://host/
-```
-
----
-
-## Conclusion
-
-Ping tests IP reachability, nc tests TCP ports, curl tests the full application stack. Use them in that order to narrow down where connectivity breaks. A ping failure doesn't mean the server is down. A curl failure doesn't mean the port is closed. Each tool is a lens on a different layer — use the right one for the question you're asking.
-
----
-
-*Related: [How to Test TCP Connection Linux](/blog/how-to-test-tcp-connection-linux) — nc and /dev/tcp for port testing. [Cannot Connect to Server Linux](/blog/cannot-connect-to-server-linux-troubleshooting) — full diagnostic workflow.*
+**Is telnet still safe to use for testing?**
+The telnet *client* is fine for connection tests. The risk is the telnet *server* (port 23), which sends everything in clear text and shouldn't be running.

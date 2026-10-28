@@ -1,494 +1,296 @@
 ---
-title: "CIS Windows Server Level 1 Hardening: What Actually Matters in Production"
+title: "CIS Windows Server Level 1 Hardening Without Outages"
 date: "2026-04-20"
-excerpt: "CIS Windows Server Level 1 hardening in production — what breaks, what to apply first, and how to avoid NTLM lockouts, audit log disk exhaustion, and service account outages."
+updated: "2026-10-28"
+excerpt: "Roll out CIS Level 1 on Windows Server via GPO without breaking NTLM apps, locking service accounts, or losing remote access. What each risky control does."
 tags: ["security", "infrastructure", "security-ops", "windows"]
 featured: false
-slug: "cis-windows-server-level1-hardening-production-guide"
 category: "security"
 ---
 
-## The Windows Server That Was Hardened Into the Ground
+The CIS GPO goes live on the server OU on a Friday. On Monday, a line-of-business app can't reach its file share, a service account keeps locking every fifteen minutes, and the backup server can't talk to its agents. Nothing in the GPO was wrong in isolation. It just hadn't been checked against the environment.
 
-A team applied **CIS Windows Server Level 1** via GPO on a Friday afternoon. By Monday morning: three legacy applications had stopped authenticating, the domain controller's system disk was full from audit logs, and helpdesk was flooded with account lockout tickets.
+This guide covers how to deliver CIS Level 1 on Windows Server, the handful of controls that cause most of the breakage, and what to measure before you enforce each one.
 
-Every control they applied was technically correct. None of it was tested. That is the gap this article fills.
-
-**CIS Windows Server Level 1** is the right baseline for production Windows infrastructure. But it is not plug-and-play. This guide covers what actually matters, what silently breaks production, and how to deploy the CIS benchmark for Windows safely.
-
-> **Production reality:** The CIS Windows Server benchmark is not optional. If you are running Windows Server in a SOC 2, PCI-DSS, or HIPAA environment and you do not have a documented hardening baseline, you are already out of compliance — whether or not you have been audited yet.
+> **Benchmark versions matter.** CIS publishes a benchmark per Windows Server release (2016, 2019, 2022, 2025) and revises each one. Values and Level assignments change between versions, so this guide describes settings by name and gives values as found in recent versions. Check them against the exact benchmark your auditor uses.
 
 ---
 
-## Quick Summary: What Is CIS Windows Server Level 1?
+## TL;DR
 
-**CIS Windows Server Level 1** is the baseline security profile from the Center for Internet Security Windows Server benchmark. It covers account policies, audit policy, user rights assignments, security options, and Windows Firewall — the controls that address the most commonly exploited Windows Server misconfigurations.
-
-Level 1 controls are designed to have minimal impact on server functionality. In practice, several of them break legacy applications, authentication flows, and storage capacity if applied without environment-specific review.
-
-- A default Windows Server install fails **40–60%** of Level 1 checks
-- Applying the benchmark correctly takes an afternoon of testing per server role
-- Applying it blindly takes a weekend of recovery
+- Each benchmark has separate profiles for **Domain Controllers** and **Member Servers**. Use the right one per OU.
+- Deliver through **Group Policy** (domain) or **LGPO.exe** (standalone). Scan before and after.
+- High-risk controls: **NTLM restrictions**, **account lockout**, **user rights that deny local accounts network/RDP access**, **SMB signing**, and **firewall policy that ignores local rules**.
+- Account policies in a GPO linked to a server OU **don't change domain account policy**. That only comes from a GPO at the domain root or from fine-grained password policies.
 
 ---
 
-## Top 5 Quick Wins: Apply in 30 Minutes
+## How the benchmark is organized
 
-Before working through the full benchmark, these five controls are high-impact, low-risk, and take minutes to apply. Start here.
+Each recommendation is tagged with profiles such as:
 
-**1. Disable LLMNR and NetBIOS over TCP/IP**
-Both are used in LLMNR/NBT-NS poisoning attacks — one of the most common internal network attacks. Neither is needed in a properly configured DNS environment.
-
-```powershell
-# Disable LLMNR via Registry
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" `
-  -Name "EnableMulticast" -Value 0 -Type DWord
-
-# Disable NetBIOS over TCP/IP on all adapters
-$adapters = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "TcpipNetbiosOptions is not null"
-$adapters | ForEach-Object { $_.SetTcpipNetbios(2) }
-```
-
-**2. Rename the built-in Administrator account**
-Attackers target the `Administrator` account by name. Renaming it adds friction at near-zero cost.
-
-```cmd
-wmic useraccount where name='Administrator' rename 'svc_localadm'
-```
-
-**3. Enable Windows Firewall logging on all profiles**
-You need baseline visibility before you block anything. Start logging before enforcing.
-
-```powershell
-Set-NetFirewallProfile -Profile Domain,Public,Private `
-  -LogAllowed True -LogBlocked True `
-  -LogFileName "%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log" `
-  -LogMaxSizeKilobytes 32768
-```
-
-**4. Set Security event log to 1GB minimum**
-The default 512MB fills in hours on a busy server. Do this before enabling verbose audit policy.
-
-```cmd
-wevtutil sl Security /ms:1073741824
-```
-
-**5. Disable anonymous SAM enumeration**
-This prevents unauthenticated attackers from listing user accounts and shares.
-
-```
-Computer Configuration > Windows Settings > Security Settings > Local Policies > Security Options
-→ Network access: Do not allow anonymous enumeration of SAM accounts = Enabled
-→ Network access: Do not allow anonymous enumeration of SAM accounts and shares = Enabled
-```
-
----
-
-## Why Default Windows Server Is a Security Problem
-
-Microsoft ships Windows Server with defaults tuned for compatibility, not security. Out of the box:
-
-| Default Setting | Security Risk |
+| Profile | Applies to |
 |---|---|
-| NTLM v1 allowed | Enables pass-the-hash and NTLM relay attacks |
-| No account lockout policy | Unlimited password brute-force attempts |
-| Minimal audit logging | Zero forensic visibility after compromise |
-| RDP enabled with weak ciphers | Exploitable by MITM and known cipher attacks |
-| Anonymous enumeration allowed | Attacker can list users, shares, and groups |
-| Admin shares (`C$`, `ADMIN$`) accessible | Lateral movement made trivial |
-| Windows Firewall allows all outbound | No egress filtering |
+| Level 1 – Domain Controller | DCs |
+| Level 1 – Member Server | Domain-joined and standalone servers |
+| Level 2 – DC / MS | Stricter additions on top of Level 1 |
+| Next Generation Windows Security, BitLocker | Optional add-on profiles in recent versions |
 
-None of this is accidental. It is compatibility-first design. **CIS Windows Server hardening** explicitly reverses these defaults — which is why applying it carefully matters.
-
-> **Windows Server hardening is not a one-time project.** It is a baseline you establish, enforce via GPO, and re-audit monthly. Settings drift. Updates change configurations. Service installs add firewall exceptions. Without automated scanning, you will not know until an auditor tells you.
-
-[See also: CIS Level 1 Ubuntu Hardening Guide](/blog/cis-level1-ubuntu-hardening) — the same hardening discipline applied to Linux infrastructure.
+Most settings live in **Security Settings** (account policies, local policies, advanced audit policy) and **Administrative Templates**. That's why GPO is the natural delivery mechanism.
 
 ---
 
-## CIS Windows Server Level 1 vs Level 2
+## Audit before you enforce
 
-| Criteria | Level 1 | Level 2 |
-|---|---|---|
-| Target | General production servers | High-security / regulated |
-| Legacy app compatibility | Usually fine with exceptions | Often broken |
-| Operational impact | Low to moderate | High |
-| Compliance coverage | SOC 2, PCI-DSS, HIPAA | NIST 800-53 High, FedRAMP |
-| Domain controller safe? | Mostly, with review | Significant testing required |
-| Right for most environments? | ✅ Yes | Only if mandated |
+Options for measuring where you stand:
 
-Start with Level 1. Get it stable. Then selectively layer Level 2 controls where your risk profile requires it.
+- **CIS-CAT** (Lite is free with a limited benchmark set; Pro is part of CIS SecureSuite membership) produces a scored report per recommendation.
+- **Microsoft Security Compliance Toolkit**: free. It includes Microsoft's own security baselines, **Policy Analyzer** to compare GPOs and local policy against a baseline, and **LGPO.exe**. Microsoft's baseline overlaps heavily with CIS Level 1 but isn't identical.
+- **Resultant policy:** `gpresult /h C:\Temp\gp.html` shows which GPO set what, which matters when CIS settings collide with existing GPOs.
+
+Record a baseline per **server role** (DC, file server, SQL, RDS, web), not just one server. The breakage is role-specific.
 
 ---
 
-## Key Areas of CIS Windows Server Level 1 Hardening
+## Delivery: GPO and LGPO
 
-### Account Policies
+**Domain-joined servers:** build the CIS settings into GPOs (CIS SecureSuite members get ready-made "Build Kit" GPO backups), link them to a **test OU** with representative servers, then expand. Splitting by area (account/audit, security options, user rights, firewall) makes rolling back one area easy.
 
-This is where most outages happen.
-
-**Password policy:**
-
-```
-Minimum password length:         14 characters
-Password complexity:             Enabled
-Maximum password age:            60 days
-Minimum password age:            1 day
-Password history:                24 passwords remembered
-Reversible encryption:           Disabled
-```
-
-**Account lockout policy:**
-
-```
-Account lockout threshold:       5 invalid attempts
-Account lockout duration:        15 minutes
-Reset account lockout counter:   15 minutes
-```
-
-> **⚠️ Warning — Account lockout causes service outages**
->
-> **What breaks:** Any service account with a hardcoded password. When that password expires or is changed, the service keeps retrying the old credential, hits the 5-attempt threshold in under 3 minutes, and locks the account — taking down the service.
->
-> **Why it breaks:** Service accounts are historically set to never expire. When you enforce rotation, they fail silently against the lockout policy. No error. No alert. The service just stops.
->
-> **Fix:** Before enabling lockout policy, audit every service account in AD. Convert them to Group Managed Service Accounts (gMSA) — they handle rotation automatically and never trigger lockouts.
-
----
-
-### Audit Policy
-
-CIS Level 1 requires detailed logging across all security-relevant events. The ones that matter most:
-
-```
-Account Logon:       Success, Failure
-Account Management:  Success, Failure
-Logon/Logoff:        Success, Failure
-Object Access:       Failure
-Policy Change:       Success
-Privilege Use:       Failure
-System:              Success, Failure
-Process Creation:    Success (not default in CIS — add it anyway, critical for detection)
-```
-
-Configure via `auditpol.exe` for precision:
+**Standalone servers:**
 
 ```cmd
-auditpol /set /subcategory:"Logon" /success:enable /failure:enable
-auditpol /set /subcategory:"Account Lockout" /success:enable /failure:enable
-auditpol /set /subcategory:"Special Logon" /success:enable /failure:enable
-auditpol /set /subcategory:"Audit Policy Change" /success:enable /failure:enable
-auditpol /set /subcategory:"User Account Management" /success:enable /failure:enable
-auditpol /set /subcategory:"Security Group Management" /success:enable /failure:enable
-auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable
+:: Back up current local policy first
+LGPO.exe /b C:\Backup\pre-cis
 
-:: Verify
+:: Import a GPO backup into local policy
+LGPO.exe /g C:\CIS\GPO-Backup-Folder
+```
+
+`secedit` can apply and compare security templates (`.inf`) for the Security Settings portion only:
+
+```cmd
+secedit /analyze /db C:\Temp\cis.sdb /cfg C:\CIS\cis-l1.inf /log C:\Temp\analyze.log
+```
+
+---
+
+## Account policies
+
+Values in recent Member Server Level 1 recommendations:
+
+```
+Enforce password history:                 24
+Maximum password age:                     365 days or fewer, not 0
+Minimum password age:                     1 day or more
+Minimum password length:                  14
+Password must meet complexity:            Enabled
+Relax minimum password length limits:     Enabled
+Store passwords using reversible enc.:    Disabled
+
+Account lockout threshold:                5 or fewer, not 0
+Account lockout duration:                 15 minutes or more
+Reset account lockout counter after:      15 minutes or more
+Allow Administrator account lockout:      Enabled
+```
+
+### The GPO scope trap
+
+Password and lockout policy for **domain accounts** comes only from a GPO linked at the **domain root** (normally the Default Domain Policy) or from **fine-grained password policies**. A CIS GPO linked to a server OU sets these values for the **local** accounts on those servers and nothing else. Scanners check the local policy, so the scan passes while domain users are unaffected. If you mean to change domain policy, change it at the domain level, deliberately.
+
+### Lockout and service accounts
+
+> **What breaks:** a service, scheduled task or mapped drive still using an old password retries in the background, hits the threshold within minutes, and locks the account. It unlocks after the duration and locks again, in a loop.
+
+Before tightening lockout:
+
+- Move service accounts to **group Managed Service Accounts (gMSA)** where the application supports them. Windows rotates their passwords automatically.
+- Find the source of lockouts: **Event ID 4740** on DCs (the PDC emulator sees them all) names the locked account and the caller computer. **4625** (failed logon) and **4771** (Kerberos pre-auth failed) on the source side show the process or service.
+- Alert on 4740 for service accounts. A lockout loop is easy to fix once someone notices it.
+
+---
+
+## Audit policy and event logs
+
+CIS uses **Advanced Audit Policy** subcategories and enables **"Audit: Force audit policy subcategory settings to override audit policy category settings"** so legacy category settings don't silently override them.
+
+A sample of Member Server Level 1 subcategories:
+
+| Subcategory | Recommended |
+|---|---|
+| Credential Validation | Success and Failure |
+| Security Group Management | include Success |
+| User Account Management | Success and Failure |
+| Process Creation | include Success |
+| Account Lockout | include Failure |
+| Logon | Success and Failure |
+| Special Logon | include Success |
+| Audit Policy Change | include Success |
+| Sensitive Privilege Use | Success and Failure |
+| System Integrity | Success and Failure |
+
+The benchmark also enables **"Include command line in process creation events"**, which makes Event 4688 useful for investigations.
+
+To set or check locally:
+
+```cmd
+auditpol /set /subcategory:"Credential Validation" /success:enable /failure:enable
+auditpol /set /subcategory:"Process Creation" /success:enable
 auditpol /get /category:*
 ```
 
-> **⚠️ Warning — Audit logs fill system disk and halt servers**
->
-> **What breaks:** On a busy domain controller or RDS server, security event logs fill gigabytes per day. When the disk fills, behavior depends on `CrashOnAuditFail`. If set to `1` (required by some CIS controls), **the server halts** when it cannot write audit events.
->
-> **Why it breaks:** The 512MB default Security log size was set in an era of minimal logging. CIS Level 1 generates 10–50x more events. No one changes the log size. Then `CrashOnAuditFail = 1` becomes a tripwire.
->
-> **Fix:** Set Security log to 2GB minimum. Configure Windows Event Forwarding to a dedicated collector *before* enabling verbose auditing. Never rely on local disk only.
+Subcategory names are localized on non-English systems. GPO is easier than scripting `auditpol` across a fleet.
 
-```powershell
-# Set Security log size to 2GB
-wevtutil sl Security /ms:2147483648
+### Log size: the real risk is losing evidence
 
-# Configure WinRM for log forwarding
-winrm quickconfig
-# Then configure Windows Event Forwarding subscription on the collector
+The default maximum size of the Security log is **20 MB** (20,480 KB). Recent benchmarks require at least **196,608 KB** (192 MB) for Security and 32,768 KB for Application, System and Setup. With Process Creation and Logon auditing enabled, a busy server rolls a 20 MB log over in hours, so by the time you investigate, the events are gone.
+
+```cmd
+:: 1 GB Security log (value in bytes). A GPO setting overrides this.
+wevtutil sl Security /ms:1073741824
+wevtutil gl Security
 ```
+
+About halting: the setting **"Audit: Shut down system immediately if unable to log security audits"** (`CrashOnAuditFail`) is recommended to be **Disabled** in CIS Level 1. With the default retention (overwrite as needed), a full Security log doesn't stop the server. Local logs are also the first thing an intruder clears. Forward events to a collector (Windows Event Forwarding or your SIEM agent) so a copy exists off the box. See [security log analysis for Windows and web servers](/blog/log-analysis-security-windows-webserver) for what to look for in them.
 
 ---
 
-### User Rights Assignments
+## User rights assignment
 
-These control which accounts can perform privileged operations. CIS Level 1 tightens defaults that are far too permissive.
-
-Key assignments to enforce:
+Selected Member Server Level 1 values:
 
 ```
-Access this computer from the network:     Administrators, Authenticated Users
-Allow log on locally:                      Administrators only (servers — not DCs)
-Allow log on through RDP:                  Administrators, Remote Desktop Users
-Deny access from network:                  Guests, Local accounts (on domain members)
-Act as part of OS:                         Empty (no accounts)
-Debug programs:                            Empty (no accounts)
-Take ownership of files:                   Administrators only
+Access this computer from the network:          Administrators, Authenticated Users
+Allow log on locally:                           Administrators
+Allow log on through Remote Desktop Services:   Administrators, Remote Desktop Users
+Deny access to this computer from the network:  Guests, Local account and member of Administrators group
+Deny log on through Remote Desktop Services:    Guests, Local account
+Debug programs:                                 Administrators
+Act as part of the operating system:            No One
 ```
 
-Configure via GPO:
-`Computer Configuration > Policies > Windows Settings > Security Settings > Local Policies > User Rights Assignment`
+> **What breaks:** the two "Deny … Local account" rights stop **local** accounts, including a LAPS-managed local admin, from logging on over the network or RDP. That's intentional, because it blocks lateral movement with a shared local admin password. It also breaks admin scripts, PsExec sessions, backup or monitoring agents, and RDP sessions that authenticate with local credentials.
 
-> **⚠️ Warning — "Deny log on locally" breaks console access during domain failure**
->
-> **What breaks:** If you add `Local accounts` to the deny list and the server loses domain connectivity, you cannot log in via console with local credentials.
->
-> **Fix:** Before applying, ensure a local administrator account with a known password exists and is **not** in the deny list. Store the credential in your password vault. Document it. Test console login before the domain controller goes down, not after.
+Before applying: make sure remote administration uses domain accounts, keep the LAPS local admin for **console** break-glass use (local console logon is still allowed for Administrators), and find tools that authenticate with local accounts (look for 4624 logon type 3 with a local account name).
+
+On DCs the values differ (for example, "Allow log on through Remote Desktop Services" is Administrators only). Use the DC profile there.
 
 ---
 
-### Security Options
+## Security options: NTLM, SMB signing, anonymous access
 
-This section breaks more legacy applications than any other. Most of the NTLM-related controls live here.
-
-Critical settings:
+Selected Level 1 values:
 
 ```
 Network security: LAN Manager authentication level
-  → Send NTLMv2 response only. Refuse LM & NTLM
-
-Network security: Minimum session security for NTLM SSP (servers)
-  → Require NTLMv2 session security, 128-bit encryption
-
-Interactive logon: Don't display last signed-in
-  → Enabled
-
-Network access: Do not allow anonymous enumeration of SAM accounts
-  → Enabled
-
-Network access: Do not allow anonymous enumeration of SAM accounts and shares
-  → Enabled
-
-Accounts: Rename administrator account
-  → Rename to something non-obvious
-
-Microsoft network server: Digitally sign communications (always)
-  → Enabled
-
+  -> Send NTLMv2 response only. Refuse LM & NTLM
+Network security: Minimum session security for NTLM SSP (clients and servers)
+  -> Require NTLMv2 session security, Require 128-bit encryption
 Network security: LDAP client signing requirements
-  → Require signing
+  -> Negotiate signing (or higher)
+Microsoft network client: Digitally sign communications (always)  -> Enabled
+Microsoft network server: Digitally sign communications (always)  -> Enabled
+Network access: Do not allow anonymous enumeration of SAM accounts            -> Enabled
+Network access: Do not allow anonymous enumeration of SAM accounts and shares -> Enabled
+Interactive logon: Don't display last signed-in                    -> Enabled
+Accounts: Guest account status                                     -> Disabled
+Accounts: Rename administrator account                             -> (a non-default name)
 ```
 
-> **⚠️ Warning — NTLMv2-only breaks legacy applications silently**
->
-> **What breaks:** Any application using LM or NTLMv1 — older ERP systems, NAS devices, scanners and printers authenticating to shares, some RADIUS implementations, monitoring agents built before 2008.
->
-> **Why it breaks:** These systems use hardcoded authentication libraries that predate NTLMv2. They do not log "NTLM version mismatch." They throw generic "access denied" errors or just silently stop working. The connection between the error and the NTLM policy change is non-obvious.
->
-> **Fix:** Before enforcing, run NTLM audit mode across the domain for 2–4 weeks:
-> ```
-> Network security: Restrict NTLM: Audit NTLM authentication in this domain → Enable all
-> ```
-> Review Event ID 4776 in the Security log. Identify every system still using NTLMv1 or LM. Fix or isolate them. Enforce only after remediation is complete.
+### NTLM: find v1 users before refusing them
+
+> **What breaks:** devices and software that can only do LM or NTLMv1, typically old NAS appliances, scanners and copiers saving to shares, legacy application components. They usually fail with a generic "access denied," with nothing pointing at NTLM.
+
+Measure first:
+
+- On servers and DCs, **Event 4624** (successful logon) includes `Package Name (NTLM only)`. Filter for `NTLM V1` to find who still uses it, from which workstation name and IP.
+- On DCs, enable **"Network security: Restrict NTLM: Audit NTLM authentication in this domain"**, and on servers **"Restrict NTLM: Audit Incoming NTLM Traffic"**. The results appear in the `Microsoft-Windows-NTLM/Operational` log.
+- Leave the audit running long enough to catch monthly and quarterly jobs, not just a week.
+
+NTLMv1 is on its way out regardless: Microsoft removed it in Windows 11 24H2 and Windows Server 2025, so anything that depends on it needs replacing anyway.
+
+### SMB signing
+
+Requiring signing breaks old SMB clients and appliances that don't support it, and adds CPU overhead on very high-throughput file servers. Server 2025 and Windows 11 24H2 already require signing by default in more cases. Test file servers and anything that writes to them (scanners, backup targets).
 
 ---
 
-### Windows Firewall
+## Windows Defender Firewall
 
-CIS Level 1 requires Windows Firewall enabled on all profiles with default inbound deny.
+Recent Level 1 recommendations for all three profiles: firewall **On**, inbound **Block** (default), outbound **Allow** (default), notifications off, logging of dropped packets and successful connections, and a log size of at least 16,384 KB. For the **Public** profile, they also set the firewall to **ignore locally created rules**, so only rules from Group Policy apply.
+
+> **Lockout warning:** if a server ends up on the Public profile (a standalone server, or a domain server whose network wasn't identified as the domain network), the local allow rules your applications and admins created stop applying, including RDP or WinRM rules added by hand. Deliver required allow rules (RDP from your management subnet, WinRM, monitoring, backup) **through GPO**, and check `Get-NetConnectionProfile` on a test server before rollout.
 
 ```powershell
-# Enable firewall with default deny inbound on all profiles
-Set-NetFirewallProfile -Profile Domain,Public,Private `
-  -Enabled True `
-  -DefaultInboundAction Block `
-  -DefaultOutboundAction Allow `
-  -NotifyOnListen True `
-  -LogAllowed True `
-  -LogBlocked True `
-  -LogFileName "%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log" `
-  -LogMaxSizeKilobytes 32768
+Get-NetConnectionProfile                       # which profile is each NIC on?
+Get-NetFirewallProfile | Format-Table Name, Enabled, DefaultInboundAction, AllowLocalFirewallRules
 
-# Allow required inbound traffic — example: RDP from management VLAN only
-New-NetFirewallRule -DisplayName "RDP - Management VLAN" `
-  -Direction Inbound -Protocol TCP -LocalPort 3389 `
-  -RemoteAddress 10.10.1.0/24 -Action Allow
+# Find what currently comes in, before enforcing anything
+Get-NetTCPConnection -State Established |
+  Where-Object LocalPort -lt 49152 |
+  Group-Object LocalPort | Sort-Object Count -Descending
 ```
 
-> **⚠️ Warning — Default deny inbound immediately breaks internal services**
->
-> **What breaks:** Monitoring agents being polled (SCOM, Zabbix, Nagios), backup clients (Veeam, CommVault), WMI-based queries, SCCM communications, custom health check endpoints, anything that receives inbound connections.
->
-> **Why it breaks:** Most servers have no documented inbound communication requirements. Nobody knows what is connecting until it stops working.
->
-> **Fix:** Enable firewall logging one week *before* changing the default action. Review `pfirewall.log` for all inbound allow traffic. Build role-specific GPOs with the required rules. Apply firewall blocking only after the allow rules are in place and tested.
-
-[See also: Linux SSH Hardening and Remote Access Security](/blog/nginx-ssl-hardening) — for comparison with Linux remote access hardening approaches.
+Turn on logging of allowed connections a week or two ahead and review `pfirewall.log` to build the allow list from real traffic.
 
 ---
 
-## Tools for Applying CIS Windows Server Level 1
+## Name resolution hardening (worth doing anyway)
 
-### Group Policy (GPO) — The Standard Method
+**"Turn off multicast name resolution"** (LLMNR) is in the benchmark, and recent versions also restrict NetBIOS name resolution. Both protocols are abused by LLMNR/NBT-NS poisoning tools to capture NTLM hashes on the local network. Disable them through GPO in a domain:
 
-For domain-joined servers, GPO is the right delivery mechanism.
-
-1. Download the CIS Benchmark from [cisecurity.org](https://www.cisecurity.org/) — includes `.inf` and `.admx` templates
-2. Import via `secedit.exe` or Group Policy Management Console
-3. Test with a dedicated OU before domain-wide rollout
-4. Verify with `gpresult /H report.html`
-
-```cmd
-:: Import security template
-secedit /configure /db %windir%\security\local.sdb /cfg CIS_Level1_Template.inf /log secedit.log
-
-:: Analyze compliance against template
-secedit /analyze /db %windir%\security\local.sdb /cfg CIS_Level1_Template.inf /log analyze.log
+```
+Computer Configuration > Administrative Templates > Network > DNS Client
+  > Turn off multicast name resolution = Enabled
 ```
 
-### LGPO — For Non-Domain Servers
-
-Microsoft's tool for applying GPO settings to standalone servers. Download from the Microsoft Security Compliance Toolkit.
-
-```cmd
-:: Apply CIS policy to local machine
-LGPO.exe /g "CIS_Level1_Policy_Backup_Folder\"
-
-:: Backup current settings before applying
-LGPO.exe /b "C:\Backup\Pre-CIS-Settings\"
-```
-
-### CIS-CAT Pro — Automated Compliance Scanning
-
-Official CIS assessment tool. Produces a scored HTML report per control.
+For one server without GPO:
 
 ```powershell
-.\CIS-CAT.bat -b benchmarks\CIS_Microsoft_Windows_Server_2022_Benchmark_v1.0.0-xccdf.xml `
-              -p "Level 1 - Member Server" `
-              -r C:\Reports\ `
-              -rd html
+New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Force | Out-Null
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" `
+  -Name EnableMulticast -Value 0 -Type DWord
+
+# NetBIOS over TCP/IP off on all IP-enabled adapters (2 = disable)
+Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled = TRUE" |
+  Invoke-CimMethod -MethodName SetTcpipNetbios -Arguments @{ TcpipNetbiosOptions = 2 }
 ```
 
-Run CIS-CAT before and after hardening. The delta between scans is your audit evidence.
+Check first that nothing still relies on NetBIOS names (very old applications, some legacy clusters).
 
-### Microsoft Security Compliance Toolkit (SCT)
-
-Free from Microsoft. Includes security baselines for each Windows Server version, Policy Analyzer for GPO comparison, and LGPO.exe. The Microsoft baselines overlap significantly with CIS Level 1 and are a useful cross-reference.
+To rename the local Administrator on a standalone server: `Rename-LocalUser -Name Administrator -NewName <name>`. In a domain, use the GPO setting so it's enforced everywhere.
 
 ---
 
-## Real-World Lessons from Production Environments
+## Rollout order
 
-**Lesson 1 — NTLM restriction took down a hospital ERP integration.**
-
-A hospital applied NTLMv2-only policy across all servers. Three days later, a billing integration stopped. The ERP used a COM-based file transfer component from 2009 — LM auth only. No error message mentioned NTLM. The "access denied" errors looked like a permissions problem.
-
-The fix took two weeks: identify the component, contact the vendor, implement an NTLMv2-capable wrapper.
-
-**Lesson: run NTLM audit logging for a full billing cycle before enforcing. Monthly batch jobs surface late.**
-
----
-
-**Lesson 2 — Account lockout took down payment processing at 2am.**
-
-A service account password was rotated in a routine change. The Windows service was not updated. It retried on 30-second intervals, hit 5 attempts in 2.5 minutes, locked the account. Auto-unlocked after 15 minutes. Relocked. Cycled for 4 hours before anyone identified Event ID 4740.
-
-The payment processing queue backed up. Recovery took 6 hours including the investigation.
-
-**Lesson: monitor Event ID 4740 continuously. Alert on every lockout. Convert service accounts to gMSA before enabling lockout policy.**
+```
+1. Baseline scan per server role; gpresult to see existing GPO conflicts
+2. Test OU with one server per role; console/ILO/hypervisor access confirmed
+3. Low risk: anonymous enumeration, LLMNR, guest account, admin rename, log sizes, event forwarding
+4. Audit policy; measure event volume on DCs and busy servers
+5. Account lockout (local accounts; domain policy separately, deliberately) with 4740 alerting
+6. User rights (local account deny) after moving remote admin to domain accounts
+7. NTLM audit for weeks, then enforce; SMB signing tested on file servers
+8. Firewall rules delivered via GPO, verified on the Public profile case, then enforce
+9. Post-hardening scan; exceptions documented with reason and compensating control
+```
 
 ---
 
-**Lesson 3 — Audit policy halted a domain controller at 3am.**
+## FAQ
 
-CIS Level 1 audit policy was pushed via GPO to all servers — including a domain controller handling 8,000 logins per hour. Security log was at the 512MB default. `CrashOnAuditFail = 1`. The log filled in under 2 hours. The DC halted. Authentication across the domain stopped.
+**Does CIS Level 1 apply to domain controllers?**
+Yes, through the Domain Controller profile in the same benchmark. Several values differ from the Member Server profile, so keep DCs in their own OU with their own GPO.
 
-The fix was two parts: Security log to 2GB minimum, Windows Event Forwarding to a dedicated collector before re-enabling audit policy.
+**Will CIS Level 1 break Active Directory?**
+Not by itself on supported Windows Server versions, but LDAP signing and NTLM restrictions can break old clients, appliances and applications that bind to AD. Audit before enforcing.
 
-**Lesson: `CrashOnAuditFail = 1` is correct for compliance. It is a loaded gun without sized logs and log forwarding.**
+**Is the Microsoft security baseline the same as CIS?**
+No, but they overlap heavily. Some organizations apply the Microsoft baseline and document the differences. If an auditor asks for CIS specifically, scan against CIS.
 
----
-
-## Implementation Strategy: Deploy Without Breaking Things
-
-Apply in phases. Never in one shot.
-
-**Phase 1 — Baseline (Week 1)**
-- Run CIS-CAT on representative servers per role (DC, member server, web server, DB)
-- Document failure rate per category
-- Identify conflicts: legacy apps, service accounts, monitoring agents
-
-**Phase 2 — Zero-risk controls (Week 2)**
-- Disable LLMNR and NetBIOS over TCP/IP
-- Rename administrator account
-- Enable Windows Firewall logging (not enforcement — logging only)
-- Set Security log to 2GB
-- Apply audit policy to staging — measure log volume
-
-**Phase 3 — Account policies (Week 3)**
-- Audit all service accounts — convert to gMSA
-- Apply lockout policy to a test OU with Event ID 4740 monitoring
-- Apply to production in a low-traffic window with on-call coverage
-
-**Phase 4 — NTLM restrictions (Week 4–6)**
-- Enable NTLM audit mode domain-wide
-- Collect 2–4 weeks of Event ID 4776 data
-- Fix or isolate legacy systems
-- Enforce NTLMv2-only after remediation
-
-**Phase 5 — Firewall hardening (Week 5–7)**
-- Review firewall logs collected in Phase 2
-- Build role-specific firewall GPOs with required allow rules
-- Test in staging for 1 week
-- Apply to production with rollback plan ready
-
-**Phase 6 — Verify and document**
-- Run CIS-CAT post-hardening
-- Document all exceptions with business justification
-- Store exception register with compliance evidence
+**Can I use this on Azure or AWS VMs?**
+Yes. Domain-joined VMs get the GPOs like any other server, and standalone VMs can use LGPO. CIS also publishes pre-hardened images in the major cloud marketplaces.
 
 ---
 
-## Best Practices
-
-**Use GPO for everything.** Manual changes drift. GPO enforces on every refresh cycle and reverts tampering. Build your CIS baseline into a dedicated GPO on a hardened servers OU. Never apply by hand.
-
-**Separate GPOs by control category.** One GPO for account policy, one for audit policy, one for security options. Rollback becomes surgical — disable one GPO without reverting everything else.
-
-**Monitor Event ID 4740 before and after lockout policy.** This fires on every account lockout. Unexpected alerts mean something is churning through lockout cycles in production right now.
-
-**Size your Security log before enabling audit policy.** 1GB minimum on member servers. 2GB on domain controllers. Configure Windows Event Forwarding before you need it — not after a disk fills up.
-
-**Test NTLM changes for 4 weeks minimum.** Not 2. Not 1. Four. Monthly batch jobs, quarterly reports, and annual integrations all use NTLM. They will not fail in your first week of testing.
-
----
-
-## Frequently Asked Questions
-
-**Does CIS Windows Server Level 1 apply to domain controllers?**
-Yes, with significant caution. Domain controllers need their own OU and their own GPO. Some Level 1 controls behave differently on DCs — particularly local logon rights and security options. CIS publishes DC-specific benchmarks. Use those, not the member server benchmark, for DCs.
-
-**Does CIS Level 1 break Active Directory replication?**
-It should not — but NTLM restrictions and LDAP signing requirements can affect DC replication in environments with older OS versions. If you have 2012 R2 or older DCs, test LDAP signing requirements carefully before enforcing.
-
-**Can I apply CIS Level 1 to Azure VMs?**
-Yes. GPO for domain-joined VMs. LGPO or DSC for standalone. Microsoft Defender for Cloud has CIS benchmark assessment built in — use it for continuous monitoring on Azure.
-
-**How often should I re-scan?**
-Monthly minimum. Windows Updates, software installs, and domain policy changes all drift settings. Schedule CIS-CAT as a monthly scheduled task and alert on score drops greater than 5 points.
-
----
-
-## Conclusion: Engineering Project, Not a GPO Import
-
-**CIS Windows Server Level 1** closes the gaps attackers actually exploit: NTLMv1 relay, anonymous enumeration, brute-force through absent lockout policy, lateral movement via default admin shares, and zero forensic capability from absent audit logging.
-
-The controls that matter most are also the ones with the worst failure modes when applied wrong. Account lockout, NTLM restrictions, audit log volume, and firewall default-deny — every one has a documented production incident behind it. Every one is preventable with the right sequence.
-
-Apply the CIS benchmark for Windows in phases. Test NTLM changes for four weeks before enforcing. Convert service accounts to gMSA before enabling lockout. Size your audit logs before turning on verbose logging. Document every exception.
-
-**The teams that succeed treat this as an engineering project. The teams that fail treat it as a GPO import.**
-
----
-
-*Related reading: [CIS Level 1 Ubuntu Hardening: A Field-Tested Production Guide](/blog/cis-level1-ubuntu-hardening) — the same hardening discipline applied to Linux. For building forensic capability across both platforms: [Reading Logs Like a Detective: A Field Guide to Incident Triage](/blog/log-analysis-incident-triage).*
-
----
-
-## Alternative Title Suggestions
-
-> *These are included for the author's reference — remove before publishing.*
-
-1. **"CIS Windows Server Level 1: The Engineer's Guide to Hardening Without Breaking Production"**
-   — Higher CTR, speaks directly to fear of breakage. Slightly long but strong.
-
-2. **"CIS Windows Server Level 1 Hardening: NTLM, Audit Logs, and the Mistakes That Cause Outages"**
-   — Specific and problem-driven. Engineers searching for why CIS broke something will click this.
-
-3. **"Windows Server Security Baseline: What CIS Level 1 Actually Requires and What Breaks"**
-   — Targets "Windows security baseline" keyword variant. Good for broader reach.
+*Related: [Linux security hardening guide](/blog/linux-security-hardening-guide) for the same rollout approach on Linux. [Log analysis for incident triage](/blog/log-analysis-incident-triage) for putting the audit trail to use.*

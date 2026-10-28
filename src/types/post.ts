@@ -4,6 +4,7 @@ export interface Post {
   slug: string;
   title: string;
   date: string;
+  updated?: string;
   excerpt: string;
   tags: string[];
   category: Category;
@@ -16,6 +17,7 @@ export interface Post {
 export interface PostMeta {
   title: string;
   date: string;
+  updated?: string; // last substantive revision; drives dateModified + sitemap lastmod
   excerpt: string;
   tags: string[];
   category: Category;

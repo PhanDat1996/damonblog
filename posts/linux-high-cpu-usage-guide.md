@@ -1,330 +1,223 @@
 ---
-title: "Linux High CPU Usage: Step-by-Step Troubleshooting Guide"
+title: "Linux High CPU Usage: How to Find the Real Cause"
 date: "2026-04-21"
-excerpt: "Step-by-step guide to diagnosing Linux high CPU usage — using ps, top, and htop to identify the culprit, distinguish user vs kernel vs I/O wait CPU, and resolve the issue in production."
+updated: "2026-10-28"
+excerpt: "CPU alert firing on a Linux server? Tell user, kernel, iowait and steal apart, find the process and thread, and see what it's doing before you kill it."
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
-slug: "linux-high-cpu-usage-troubleshooting"
 category: "linux"
+---
+
+The alert says CPU is at 95%. Response times are climbing. You open `top`, see a Java process at the head of the list, and your hand is already moving toward `kill`.
+
+Wait. "High CPU" covers at least four different problems: an application doing too much work, the kernel doing work on its behalf, a hypervisor taking your CPU away, and a storage problem that only *looks* like CPU because the load average went up. Each has a different fix, and killing the top process only fixes one of them.
+
+This is the order to work through it. If you just need the numbers, [How to Check CPU Usage in Linux](/blog/check-cpu-usage-linux) is the short version.
+
 ---
 
 ## TL;DR
 
-- High load average does not always mean high CPU — check `%wa` (I/O wait) in top first
-- **`ps aux --sort=-%cpu | head -10`** — fastest way to find the CPU culprit
-- Press **`1`** in top to see per-core breakdown — one saturated core is easy to miss in aggregate
-- `%CPU` in ps is a lifetime average — use top for current spikes
-- High `%sy` (kernel CPU) means system call overhead — check for excessive I/O or context switching
-- High `%st` (steal time) on a VM means the hypervisor is throttling your instance
-- **Never kill -9 first** — identify the cause, then decide
+```bash
+uptime; nproc                         # load vs CPU count (load includes D-state tasks!)
+top                                   # read us / sy / wa / st, press 1 for per-core
+vmstat 1 5                            # r (run queue) and b (blocked) columns
+top -H -p <PID>                       # which thread inside the process
+perf top -p <PID>                     # which functions are burning the CPU
+```
+
+Don't `kill -9` before you know what the process is doing. If it's a legitimate job, you'll lose its work. If it's a bug, it will come back after the restart.
 
 ---
 
-## Introduction: Not All High CPU Is the Same
-
-An alert fires: CPU is at 85%. Engineers open `top` and start looking for the process to kill. Half the time, the process they find is not the actual problem — it is a symptom.
-
-**Linux high CPU usage** troubleshooting starts with understanding what kind of CPU usage you are dealing with. User-space CPU (`%us`) is different from kernel CPU (`%sy`), I/O wait (`%wa`), and steal time (`%st`). Each points to a different root cause and a different fix.
-
-This guide walks through the exact steps to diagnose high CPU on a Linux system, with real commands and real scenarios.
-
----
-
-## Step 1: Get the Overview
-
-Before touching anything, understand the scope.
+## Step 1: Is it actually CPU?
 
 ```bash
-# Uptime and load average
 uptime
-# 15:42:07 up 14 days,  2:31,  3 users,  load average: 6.32, 4.21, 2.87
-
-# How many CPUs do you have?
+#  15:42:07 up 14 days,  2:31,  3 users,  load average: 6.32, 4.21, 2.87
 nproc
-grep -c processor /proc/cpuinfo
+# 4
 ```
 
-**Interpreting load average:**
-- Load average / CPU core count = utilization ratio
-- Load 6.32 on 4 cores = 158% — significantly overloaded
-- Load 6.32 on 8 cores = 79% — high but not critical
+A load of 6.3 on 4 CPUs looks like CPU saturation. It might not be. On Linux the load average counts tasks that are running, waiting for a CPU, **and** stuck in uninterruptible sleep (`D` state, usually waiting on disk or NFS). Confirm with vmstat:
 
-A rising load average (1-min > 15-min) means the system is getting worse. A falling load average means it is recovering.
+```bash
+vmstat 1 5
+```
+
+```
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 7  0      0 512304  88120 3912004    0    0     0    36 3120 5210 84  9  7  0  0
+ 6  0      0 512100  88120 3912010    0    0     0    20 3075 5098 86  8  6  0  0
+```
+
+(The first line of vmstat output is the average since boot. Skip it.)
+
+- `r` above `nproc`, `id` near 0: real CPU saturation. Continue.
+- `b` high, `wa` high, `id` not zero: tasks are blocked on I/O. That's a storage problem; go to [Check Disk I/O with iostat](/blog/linux-check-disk-io-iostat).
+- Neither high but load is high: look for D-state tasks with `ps -eo stat,pid,comm | awk '$1 ~ /^D/'`. See [Linux Process States](/blog/linux-process-states-guide).
 
 ---
 
-## Step 2: Identify What Kind of CPU Usage
+## Step 2: What kind of CPU usage?
 
-```bash
-top
-```
-
-Look at the CPU line immediately:
+Open `top` and read the CPU line:
 
 ```
 %Cpu(s): 78.2 us,  8.1 sy,  0.0 ni, 10.4 id,  2.8 wa,  0.0 hi,  0.5 si,  0.0 st
 ```
 
-| Reading | What it means | What to do |
+| Dominant field | What's happening | Where to look next |
 |---|---|---|
-| High `us` (>70%) | Application consuming CPU | Find which process — next step |
-| High `sy` (>20%) | Kernel overhead | Check system calls, context switching |
-| High `wa` (>10%) | I/O wait — disk/NFS | Not a CPU problem — check storage |
-| High `st` (>5%) | VM steal time | Hypervisor throttling — infrastructure issue |
-| Low `id` (<10%) | System near capacity | Prioritize finding the cause |
+| `us` | Application code running in user space | The process and thread (Step 3) |
+| `sy` | Kernel work: syscalls, locking, networking, page faults | Syscall pattern, context switches (Scenario 3) |
+| `si` | Softirq: packet processing | Network traffic level, NIC queues/IRQ balance |
+| `wa` | CPU idle while I/O is outstanding | Storage, not CPU |
+| `st` | Hypervisor ran someone else on your vCPU | The VM host or instance type (Scenario 4) |
 
-**Critical insight:** If `%wa` is high and `%id` is also non-trivial, the system is waiting on I/O. Adding CPU or killing processes will not help. The bottleneck is storage.
+Then press `1` for per-core. A single core at 100% while the others idle means a single-threaded bottleneck. Adding cores will do nothing for it.
 
 ---
 
-## Step 3: Find the Process Consuming CPU
+## Step 3: Which process, which thread?
 
-### Snapshot with ps
+In `top`, the list is sorted by `%CPU` by default (press `P` if it isn't). That number is per-core: a process using two full cores shows ~200%.
+
+Avoid relying on `ps aux --sort=-%cpu` here. `ps` reports CPU time averaged over the whole lifetime of the process, so a service that started spinning five minutes ago after a week of idling will barely register. For a current, scriptable view use `pidstat` from sysstat:
 
 ```bash
-ps aux --sort=-%cpu | head -15
+pidstat -u 5 1                            # per-process %usr, %system, %CPU over 5 seconds
 ```
 
-This shows the top CPU consumers. The `%CPU` column is averaged over the process lifetime — useful for identifying sustained consumers, but it misses brief spikes.
+Like top, pidstat's `%CPU` can exceed 100% for multithreaded processes.
+
+Once you have a PID, look inside it:
 
 ```bash
-# Watch it update every 2 seconds
-watch -n 2 'ps aux --sort=-%cpu | head -10'
+top -H -p 8823                           # one line per thread
+ps -L -p 8823 -o tid,pcpu,stat,comm --sort=-pcpu | head
 ```
 
-### Live view with top
+The two patterns that matter:
+
+- **One thread at ~100%, the rest idle.** A tight loop, a single-threaded event loop saturated, or one thread doing all the work.
+- **Many threads each moderately busy.** Genuine parallel load, or lock contention (look at `sy` and context switches).
+
+Also check how long the process has been running and what exactly it is:
 
 ```bash
-top
-# P = sort by CPU (should be default)
-# Press 1 to see per-core breakdown
-```
-
-**Always press `1` in top.** On a multi-core server, a single thread saturating one core shows as 25% in aggregate view on a 4-core system. That 25% does not look alarming — but that thread is completely bottlenecked and all work assigned to it is queued.
-
-```bash
-# After identifying the PID in top, monitor it specifically
-top -p 1234
-```
-
-### Filter by user
-
-```bash
-# If you know which service is slow
-ps -u appuser -o pid,%cpu,%mem,comm --sort=-%cpu | head -10
+ps -p 8823 -o pid,ppid,user,etime,stat,args
 ```
 
 ---
 
-## Step 4: Investigate the High-CPU Process
+## Step 4: What is it actually doing?
 
-Once you have the PID, understand what it is doing.
+### perf: where the CPU time goes
 
-### Check the full command
-
-```bash
-ps -p 1234 -o pid,ppid,user,%cpu,stat,cmd
-# Shows full command line, not just process name
-```
-
-### Check how long it has been running
+`perf` samples the stack with low overhead and is the right first tool for user-space CPU:
 
 ```bash
-ps -p 1234 -o pid,etime,%cpu,comm
-# etime shows elapsed time since process started
+perf top -p 8823                          # live view of hottest functions
+perf record -F 99 -g -p 8823 -- sleep 30  # 30-second profile with call graphs
+perf report
 ```
 
-A process that just spiked in the last minute behaves differently from one that has been consuming CPU for hours.
-
-### Check CPU usage breakdown for threads
+For interpreted or JIT runtimes (Java, Node.js, Python) you'll see JIT or interpreter frames unless symbol maps are enabled. Use the runtime's own tools for readable stacks:
 
 ```bash
-# Show individual threads of a multi-threaded process
-ps -eLf | grep 1234 | sort -k12 -rn | head -10
-# or
-top -H -p 1234
-# H = thread mode inside top
+jstack 8823 > /tmp/jstack.txt             # Java: then match thread IDs
+printf '%x\n' 8841                        # top -H thread ID -> hex nid in jstack
+py-spy top --pid 8823                     # Python (if py-spy is installed)
 ```
 
-If one thread is consuming 100% and others are idle, you have a single-threaded bottleneck or a deadlock.
-
-### Check what the process is actually doing
+### strace: syscall pattern (use with care)
 
 ```bash
-# What system calls is it making?
-strace -c -p 1234   # summary mode, 10-30 second window
-
-# If output shows high time in futex: thread contention
-# If output shows high time in read/write: I/O bound
-# If no syscalls dominate: pure compute in user space
+timeout 15 strace -c -f -p 8823
 ```
+
+`strace -c` prints a per-syscall summary when it stops; without `timeout` it runs until you press Ctrl+C. Be aware that strace uses ptrace and can slow a busy process down a lot, so keep the window short on production.
+
+How to read it:
+
+- Dominated by `futex`: threads waiting on locks.
+- Dominated by `read`/`write`/`sendto`/`recvfrom` with huge call counts: many tiny I/O operations.
+- Dominated by `clone`/`execve`: something keeps spawning processes.
+- Almost no syscalls while the process is at 100%: pure computation in user space. perf is the tool for that.
+
+### Logs around the start time
 
 ```bash
-# What is the kernel wait channel?
-cat /proc/1234/wchan
-# schedule = voluntarily yielding CPU (normal)
-# futex = waiting on mutex
-# poll_schedule_timeout = waiting on I/O polling
+journalctl -u myapp --since "15:30" --until "15:45" --no-pager | grep -iE "warn|error|gc|timeout"
 ```
+
+A batch job starting at 15:31 that matches the CPU graph is not an incident. A retry storm against a failing dependency is.
 
 ---
 
-## Step 5: Correlate With Application Behavior
+## Typical scenarios
 
-High CPU is a symptom. The cause is in the application logs.
+### Java process at 200% with two hot threads
 
-```bash
-# When did CPU spike? Check logs around that time
-journalctl -u myapp --since "15:30:00" --until "15:45:00" --no-pager | grep -iE "warn|error|exception"
-
-# Is it processing a large job?
-journalctl -u myapp --since "15:30:00" | grep -i "processing\|batch\|job\|queue"
-```
-
-**Pattern matching:**
-- CPU spike + "batch job started" in logs = expected behavior, not a bug
-- CPU spike + "queue backed up" = processing backlog, may need scaling
-- CPU spike + no relevant log activity = something unexpected is running
-
----
-
-## Real Troubleshooting Scenarios
-
-### Scenario 1: Java Process at 200% CPU
+`top -H -p` shows two threads near 100%. Convert their TIDs to hex and find them in `jstack`. If they're named like `GC Thread#0` or `G1 Conc#0`, the JVM is collecting garbage nonstop, usually because the heap is nearly full. Check with:
 
 ```bash
-ps aux --sort=-%cpu | head -5
-# app  8823  198.4  4.2  ... java -jar service.jar
+jstat -gcutil 8823 1000 5                 # O column near 100 with FGC climbing = heap pressure
 ```
 
-Java at 198% on a 4-core server (50% of total capacity).
+That's a memory problem showing up as CPU. See [Linux Memory Leak Troubleshooting](/blog/linux-memory-leak-troubleshooting).
+
+### CPU at 80%, no single process above 10%
+
+Many processes each taking a slice: a forking workload (CGI, shell loops in cron, a health check spawning processes every second) or too many workers for the core count.
 
 ```bash
-# Check thread breakdown
-top -H -p 8823
-# Shows: 2 threads at ~99%, rest near 0%
+vmstat 1 5                     # r column vs nproc
+pidstat -w 1 5                 # cswch/s and nvcswch/s per process
 ```
 
-Two threads are maxed out. Check Java GC:
+There's no universal "too many context switches" threshold; a busy server can do tens of thousands per second without trouble. What matters is a big change from your baseline, especially a rise in **involuntary** switches (`nvcswch/s`), which means tasks are being preempted because there are more runnable tasks than CPUs.
 
-```bash
-# Check if GC is the problem
-journalctl -u myapp | grep -i "gc\|garbage" | tail -20
+Short-lived processes are easy to miss in top because they exit between refreshes. If you suspect them, `execsnoop` (from bcc-tools or bpftrace) lists every new process.
 
-# Or check JVM metrics if available
-# jstat -gcutil 8823 1000 10  (if JDK is installed)
-```
-
-High GC activity causes CPU spikes because the JVM is spending time collecting garbage instead of running application code. The fix is usually heap sizing or memory leak investigation.
-
-### Scenario 2: High CPU But No Obvious Process
-
-`top` shows CPU at 80% but no single process over 10%.
-
-```bash
-# Check context switching rate
-vmstat 1 5
-# r  b    cs
-# 4  0  8234  <- 8234 context switches/second is high
-```
-
-High context switching with many moderate-CPU processes = CPU contention between too many active processes. The system is spending more time switching contexts than doing work.
-
-```bash
-# Count R-state processes
-ps -eo stat | grep '^R' | wc -l
-# If more than 2-3x your core count, you have run queue saturation
-```
-
-### Scenario 3: CPU Spike in `%sy` (Kernel Space)
+### High `%sy`
 
 ```
-%Cpu(s): 12.3 us, 67.4 sy,  0.0 ni, 18.1 id,  1.8 wa
+%Cpu(s): 12.3 us, 67.4 sy,  0.0 ni, 18.1 id,  1.8 wa,  0.0 hi,  0.4 si,  0.0 st
 ```
 
-67% kernel CPU. The OS itself is doing heavy work.
+The kernel is doing most of the work. Common causes: lock contention (`futex`), very high syscall rates from small reads/writes, heavy page-fault activity under memory pressure, or a lot of process creation. `perf top` (system-wide, no `-p`) shows the hot kernel functions directly, which is usually faster than guessing.
 
-```bash
-# High sy often means excessive system calls — check which process
-strace -c -p <top_pid> 2>&1
-# If futex dominates: thread lock contention
-# If read/write dominates: I/O-heavy app making many small syscalls
-# If clone/fork dominates: process spawning excessively
-```
-
-High `%sy` from a web server often means too many small I/O operations — sending small packets, writing many tiny files. Batching I/O operations usually resolves it.
-
-### Scenario 4: High Steal Time on a VM
+### High steal time on a VM
 
 ```
 %Cpu(s): 15.2 us,  3.1 sy,  0.0 ni, 42.3 id,  0.4 wa,  0.0 hi,  0.2 si, 38.8 st
 ```
 
-38.8% steal time. The hypervisor is taking 39% of this VM's CPU allocation.
-
-This is an infrastructure problem, not an application problem. The VM is oversubscribed on the hypervisor.
-
-```bash
-# Confirm with vmstat
-vmstat 1 | awk '{print $15}' | head -10  # st column
-```
-
-Actions:
-- Move the VM to a less-loaded hypervisor host
-- Upgrade to a larger instance type
-- Contact cloud provider if on a dedicated instance that should not have steal
+Nearly 40% of the time, your vCPU was ready to run but the hypervisor ran something else. Nothing inside the guest fixes that. Common causes are a noisy neighbor on an oversubscribed host, or a burstable instance type (for example AWS T-series) that has used up its CPU credits. Options: move or resize the instance, switch to a non-burstable type, or raise it with the provider.
 
 ---
 
-## What Not To Do
+## Before you kill or restart
 
-**Do not kill -9 the high-CPU process immediately.**
-Understand why it is running hot first. It might be doing legitimate work (batch job, index rebuild, backup). Killing it might:
-- Corrupt data mid-write
-- Leave lock files that prevent restart
-- Cause the parent to respawn it immediately
-
-**Do not restart the service without checking logs.**
-If you restart without understanding the cause, it will happen again. Check application logs first.
-
-**Do not add more servers before diagnosing.**
-High CPU caused by a bug (infinite loop, N+1 query, GC thrash) scales linearly with more servers — you just have the problem on more machines.
+- **Find out what it is.** A backup, reindex or batch job at 100% may be working as designed.
+- **Capture evidence first.** A `jstack`, a 30-second `perf record`, or at least `top -H -b -n 1 -p <PID>` output. After a restart, it's gone.
+- **Prefer `kill` (SIGTERM) to `kill -9`.** SIGKILL gives the process no chance to flush data or release locks, and a supervisor like systemd will often just start it again.
+- **Don't scale out before diagnosing.** An infinite loop or a retry storm runs on every new server too.
 
 ---
 
-## Quick Reference
+## Quick checklist
 
-```bash
-# ── OVERVIEW ─────────────────────────────────────────────────────
-uptime                              # load average
-nproc                               # CPU core count
-top                                 # live CPU breakdown
-
-# ── FIND THE CULPRIT ─────────────────────────────────────────────
-ps aux --sort=-%cpu | head -10      # snapshot top consumers
-top                                 # live, press P then 1
-watch -n 2 'ps aux --sort=-%cpu | head -5'  # watch over time
-
-# ── INVESTIGATE ──────────────────────────────────────────────────
-top -H -p <pid>                     # thread CPU breakdown
-strace -c -p <pid>                  # syscall summary
-cat /proc/<pid>/wchan               # kernel wait channel
-vmstat 1 5                          # context switch rate
-
-# ── CORRELATE ─────────────────────────────────────────────────────
-journalctl -u service --since "HH:MM" --no-pager  # logs around spike time
-```
+1. `uptime` + `vmstat 1 5`: is it CPU (`r` high) or I/O (`b`/`wa` high)?
+2. `top`, press `1`: which field dominates, and is it one core or all?
+3. Find the process (`top`, `pidstat`) and the thread (`top -H -p`).
+4. See what it's doing: `perf top`, runtime stack dump, short `strace -c`.
+5. Check logs for what started at that moment.
+6. Capture evidence, then fix or restart.
 
 ---
 
-## Conclusion
-
-**Linux high CPU usage** is almost always one of: a misbehaving application process, CPU contention between too many processes, I/O wait being mistaken for CPU usage, or hypervisor steal time.
-
-The diagnostic order matters: check what type of CPU usage it is first (`%us` vs `%wa` vs `%sy` vs `%st`), then find which process, then understand why that process is consuming CPU.
-
-**`top` gives you the type. `ps` gives you the process. Logs give you the reason.** Use all three, in that order.
-
----
-
-*Related reading: [top Command Linux: Real-World Guide](/blog/top-command-linux-guide) — full top guide including CPU line interpretation. [ps Command Linux: The Engineer's Troubleshooting Guide](/blog/ps-command-linux-troubleshooting-guide) — ps-based CPU investigation. [Linux Process States Explained](/blog/linux-process-states-guide) — understanding D-state high load.*
+*Related: [Linux Performance Troubleshooting](/blog/linux-performance-troubleshooting-guide) for the whole-system triage. [strace Tutorial](/blog/strace-tutorial-linux) for reading syscall output in depth.*

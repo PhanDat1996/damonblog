@@ -1,449 +1,289 @@
 ---
-title: "Linux TIME_WAIT Explained: Why It Causes Connection Failures and How to Fix It"
+title: "Linux TIME_WAIT Explained: When It Actually Breaks Things"
 date: "2024-12-05"
-excerpt: "Linux TIME_WAIT exhausts ephemeral ports and causes ECONNREFUSED under load — even when your app is healthy. Learn what TIME_WAIT is, how to detect port exhaustion with ss and netstat, and the exact sysctl fixes that resolve it."
+updated: "2026-10-28"
+excerpt: "Thousands of TIME_WAIT sockets are usually harmless. Learn when they exhaust ephemeral ports, how to confirm it, and which sysctls help or hurt."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 category: "linux"
 ---
 
-## Introduction
-
-Your application is healthy. Your database is healthy. NGINX is running. But under load, connections start failing with `ECONNREFUSED` or `cannot assign requested address`. You check everything and find nothing wrong.
-
-Then you run `ss -s` and see this:
+Under load, outgoing connections start failing:
 
 ```
-TCP: 31,204 (estab 312, closed 30,891, orphaned 0, timewait 30,847)
+connect() failed (99: Cannot assign requested address) while connecting to upstream
+dial tcp 10.0.1.20:8080: connect: cannot assign requested address
 ```
 
-30,000 sockets in `TIME_WAIT`. That is your problem — and it is **entirely invisible until it is catastrophic**.
+You check `ss -s` and see tens of thousands of sockets in TIME-WAIT. Is that the cause?
 
-This article explains what `TIME_WAIT` actually is at the TCP level, why Linux enforces it, when it becomes a problem, and how to fix it without breaking your network stack.
-
-> **Related:** If you are hitting this from an NGINX context, see [NGINX Upstream Keepalive Explained](/blog/nginx-upstream-keepalive) and [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load).
+Sometimes. Often a high TIME-WAIT count is completely harmless, and the sysctl "fixes" passed around for it range from useful to actively harmful. This page explains what TIME_WAIT is, the one situation where it really breaks things, and what to change in which order.
 
 ---
 
 ## TL;DR
 
-**What is TIME_WAIT?**
-A mandatory TCP state after a connection closes. The socket holds its port for 60 seconds before being freed — by design, to prevent stale packets from corrupting new connections.
-
-**When does it become a problem?**
-When connections close faster than TIME_WAIT drains, **ephemeral ports exhaust**. Linux defaults give you ~28,000 ports. At 467 short-lived connections/second, you hit the ceiling in 60 seconds. Result: `ECONNREFUSED` or `EADDRNOTAVAIL` — even though your app is perfectly healthy.
-
-**Key fixes, in order:**
-1. **Eliminate short-lived connections** — add keepalive to NGINX upstreams, use connection pools in app code
-2. **Widen the port range** — `net.ipv4.ip_local_port_range = 1024 65535`
-3. **Enable socket reuse** — `net.ipv4.tcp_tw_reuse = 1`
-4. **Never use `tcp_tw_recycle`** — removed in kernel 4.12, breaks NAT
+- TIME_WAIT is a normal TCP state on the side that **closes first**. On Linux it lasts a fixed **60 seconds**.
+- On a **server** handling inbound connections, lots of TIME-WAIT costs a little memory and nothing else.
+- It hurts on a **client** making many short-lived connections to the **same destination IP and port**: each one holds a local port for 60 s, and the ephemeral range runs out. The error is `EADDRNOTAVAIL` ("Cannot assign requested address"), not "connection refused".
+- Fix it by **reusing connections** (keepalive, pools). Then, if needed, widen `ip_local_port_range` and enable `tcp_tw_reuse`.
+- `tcp_fin_timeout` does not change TIME_WAIT. `tcp_tw_recycle` no longer exists.
 
 ---
 
-## TCP Lifecycle: The Full Picture
-
-> 💡 **Diagram suggestion:** A side-by-side flow showing "connection without keepalive" (7 round trips, TIME_WAIT at end) vs "connection with keepalive" (1 handshake, N requests, 1 teardown) would make the cost of short-lived connections immediately obvious here.
-
-To understand `TIME_WAIT`, you need to understand the **full lifecycle of a TCP connection**. Most engineers know the three-way handshake. Fewer know the teardown sequence — and that is where `TIME_WAIT` lives.
-
-### Connection Establishment: The 3-Way Handshake
+## Where TIME_WAIT comes from
 
 ```
-Client                          Server
-  |                               |
-  |-------- SYN (seq=x) -------->|
-  |                               |
-  |<------ SYN-ACK (seq=y) ------|
-  |                               |
-  |-------- ACK (seq=x+1) ------->|
-  |                               |
-  |      Connection ESTABLISHED   |
+Active closer (A)                        Passive closer (B)
+   ESTABLISHED                              ESTABLISHED
+       |  ---------------- FIN -------------->  |
+   FIN-WAIT-1                               CLOSE-WAIT
+       |  <--------------- ACK ---------------  |
+   FIN-WAIT-2                                   |  (app calls close())
+       |  <--------------- FIN ---------------  |
+       |                                     LAST-ACK
+       |  ---------------- ACK -------------->  |
+   TIME-WAIT                                 CLOSED
+   (60 s on Linux)
+       |
+     CLOSED
 ```
 
-### Data Transfer
+Whichever side sends the first FIN ends up in TIME-WAIT. It can be the client or the server; it depends on who closes. For HTTP, that's often the server when it doesn't keep connections alive, or the client when it closes after each request.
 
-```
-Client                          Server
-  |                               |
-  |-------- HTTP Request -------->|
-  |<------- HTTP Response --------|
-  |                               |
-```
+TIME-WAIT exists for two reasons:
 
-### Connection Teardown: The 4-Way Handshake
+1. **The last ACK can get lost.** If it does, B retransmits its FIN. A has to still remember the connection to ACK it again instead of answering with a RST.
+2. **Delayed packets.** A late segment from the old connection must not be accepted by a new connection using the same four-tuple (source IP, source port, destination IP, destination port).
 
-**This is the sequence that creates `TIME_WAIT`:**
-
-```
-Client                          Server
-  |                               |
-  |---------- FIN --------------->|   Client says: "I'm done sending"
-  |<---------- ACK ---------------|   Server acknowledges
-  |                               |
-  |<---------- FIN ---------------|   Server says: "I'm done too"
-  |----------- ACK -------------->|   Client acknowledges
-  |                               |
-  |   Client enters TIME_WAIT     |
-  |   (waits 2×MSL before close)  |
-```
-
-The side that sends the **first FIN** — the **active closer** — is the one that enters `TIME_WAIT`. In a reverse proxy setup like NGINX, **NGINX is the active closer** making requests to your upstream — so NGINX accumulates `TIME_WAIT` sockets, not the upstream app.
+The TCP spec suggests holding the state for 2×MSL, which with the RFC's 2-minute MSL would be 4 minutes. Linux uses a fixed 60 seconds (`TCP_TIMEWAIT_LEN` in the kernel source), and there's no sysctl to change it.
 
 ---
 
-## What Is Linux TIME_WAIT?
+## When it's harmless
 
-`TIME_WAIT` is a **mandatory holding period** after a TCP connection closes. The socket stays allocated, consuming a port, for a duration of **2 × MSL** (Maximum Segment Lifetime).
+**Server side, inbound connections.** Every connection to your web server uses the same local port (443). TIME-WAIT entries differ only by the client's address and port, so they don't consume anything you'll run out of. The kernel also caps them with `net.ipv4.tcp_max_tw_buckets`. If that cap is reached, it destroys the oldest entries early and logs `TCP: time wait bucket table overflow`. That's a warning, not an outage.
 
-On Linux, MSL is hardcoded at 60 seconds. So `TIME_WAIT` should last 120 seconds — but the kernel constant `TCP_TIMEWAIT_LEN` is set to **60 seconds** in practice:
+So 30,000 TIME-WAIT sockets on an NGINX box are not a problem in themselves. Look at which direction they're in before changing anything.
+
+---
+
+## When it breaks things: ephemeral port exhaustion
+
+When a process opens an **outgoing** connection, the kernel picks a local port from the ephemeral range:
 
 ```bash
-# You cannot change this without recompiling the kernel
-grep TCP_TIMEWAIT_LEN /usr/include/linux/tcp.h
-# #define TCP_TIMEWAIT_LEN (60*HZ)
+sysctl net.ipv4.ip_local_port_range
+# net.ipv4.ip_local_port_range = 32768	60999
 ```
 
-### Why TIME_WAIT Exists: Two Reasons
+That's 28,232 ports. A four-tuple only has to be unique, so the same local port can be reused for *different* destinations. The limit therefore applies **per destination IP and port**:
 
-**Reason 1: Guarantee the final ACK was delivered**
+```
+28,232 ports / 60 s in TIME-WAIT ≈ 470 new connections per second
+                                     to one destination ip:port
+```
 
-The last packet in teardown is an `ACK` from the active closer. If that `ACK` is lost, the passive closer retransmits its `FIN`. The active closer must still be alive to re-send the `ACK`. Without `TIME_WAIT`, the retransmitted `FIN` would hit a dead socket and get a `RST` — a protocol error.
+Exceed that rate to one destination (an NGINX upstream without keepalive, a service calling a single database or Redis endpoint, a load test client) and `connect()` fails with `EADDRNOTAVAIL`:
 
-**Reason 2: Prevent stale packets from corrupting new connections**
+| Where | Message |
+|---|---|
+| NGINX | `connect() failed (99: Cannot assign requested address) while connecting to upstream` |
+| Go | `dial tcp ...: connect: cannot assign requested address` |
+| Python | `OSError: [Errno 99] Cannot assign requested address` |
+| Java | `java.net.BindException: Cannot assign requested address` |
 
-TCP packets can be delayed in the network. If `src:50234 → dst:8080` closes and a new connection immediately opens on the **same 4-tuple**, delayed packets from the old connection could be misread as data for the new one. `TIME_WAIT` prevents port reuse until those packets have definitely expired.
-
-**`TIME_WAIT` is not a bug — it is a feature.** The problem is when it accumulates faster than it drains.
+If you see `Connection refused` (errno 111), that's a different problem: the destination isn't accepting. Start with [cannot connect to server](/blog/cannot-connect-to-server-linux-troubleshooting).
 
 ---
 
-## When Linux TIME_WAIT Becomes a Problem: Ephemeral Port Exhaustion
-
-`TIME_WAIT` only becomes destructive when you exhaust the **ephemeral port range**.
-
-### What Are Ephemeral Ports?
-
-When a process opens an outgoing TCP connection, the kernel assigns a **local (source) port** from the ephemeral range. This port is what differentiates multiple connections to the same destination.
+## Confirm it
 
 ```bash
-# Check your current ephemeral port range
-cat /proc/sys/net/ipv4/ip_local_port_range
-# 32768   60999
-```
-
-The default range gives you **~28,000 ports**. Each port in `TIME_WAIT` is **unavailable for new outgoing connections** to the same destination. When the pool empties, the kernel cannot assign a new port:
-
-```
-EADDRNOTAVAIL: Cannot assign requested address
-```
-
-or more commonly:
-
-```
-ECONNREFUSED: Connection refused
-```
-
-### The Port Exhaustion Math
-
-```
-Ephemeral ports available:    ~28,000
-TIME_WAIT duration:            60 seconds
-Max sustainable conn rate:     28,000 / 60 = ~467 connections/second
-```
-
-At **467 new TCP connections per second**, you will exhaust the port pool within 60 seconds. In practice, exhaustion happens much sooner because:
-
-- **Multiple worker processes** each open their own connections (NGINX `worker_processes 4` means 4× the connection rate)
-- **Multiple upstream services** compete for the same port pool
-- **Default port range** is not widened on most systems
-
-Engineers typically see this at **50–200 req/s** on an NGINX server with no upstream keepalive configured.
-
----
-
-## How to Detect TIME_WAIT Exhaustion on Linux
-
-### Method 1: ss — The Right Tool
-
-```bash
-# Summary of all socket states
 ss -s
 ```
 
-Key output to watch:
-
 ```
-Total: 31847
-TCP:   30203 (estab 187, closed 29901, orphaned 0, timewait 29893)
+Total: 31402
+TCP:   30815 (estab 341, closed 30402, orphaned 0, timewait 30388)
+
+Transport Total     IP        IPv6
+RAW       0         0         0
+UDP       7         5         2
+TCP       413       401       12
+INET      420       406       14
+FRAG      0         0         0
 ```
 
-Watch it live during a load test:
+Then see **which direction** they are in, grouped by remote endpoint:
 
 ```bash
-# Update every 0.5 seconds
-watch -n 0.5 'ss -s | grep timewait'
+ss -Htn state time-wait | awk '{print $4}' | sort | uniq -c | sort -rn | head
 ```
 
-**If `timewait` climbs continuously** without plateauing → you have a connection leak. **If it plateaus below ~20,000** → you are fine.
-
-```bash
-# TIME_WAIT sockets to a specific upstream
-ss -tn state time-wait dst 127.0.0.1:8080 | wc -l
-
-# All TIME_WAIT sockets with source/destination
-ss -tn state time-wait | head -20
-
-# Group by destination port to find the leaking upstream
-ss -tn state time-wait | awk '{print $4}' | cut -d: -f2 | sort | uniq -c | sort -rn | head
+```
+  28104 10.0.1.20:8080
+    511 203.0.113.7:51234
+    ...
 ```
 
-### Method 2: netstat — Works Everywhere
+With a `state` filter, `ss` drops the State column, so column 4 is the peer address. One peer `ip:port` with a count close to the size of your port range is exhaustion in the making. Many different client IPs connecting to your own server port is the harmless case.
 
-```bash
-# Count all sockets by state
-netstat -ant | awk '{print $6}' | sort | uniq -c | sort -rn
-# Output:
-#   30201 TIME_WAIT
-#     312 ESTABLISHED
-#      45 LISTEN
-
-# Watch live
-watch -n 1 'netstat -ant | grep TIME_WAIT | wc -l'
-```
-
-### Method 3: /proc/net/sockstat — Raw Kernel Data
+Also check the raw kernel counter, which is what `node_exporter` exports as `node_sockstat_TCP_tw`:
 
 ```bash
 cat /proc/net/sockstat
-# TCP: inuse 302 orphan 0 tw 29893 alloc 30195 mem 1847
+# TCP: inuse 402 orphan 0 tw 30388 alloc 455 mem 61
 ```
-
-The `tw` field is your `TIME_WAIT` count. This is what **Prometheus `node_exporter`** exposes as `node_sockstat_TCP_tw`.
-
-### Confirming Port Exhaustion
-
-These error messages, combined with high `TIME_WAIT` count, confirm exhaustion:
-
-```bash
-# Application-level (Go, Python, etc.)
-dial tcp 127.0.0.1:8080: connect: cannot assign requested address
-
-# NGINX error log
-connect() failed (99: Cannot assign requested address) while connecting to upstream
-connect() failed (111: Connection refused) while connecting to upstream
-```
-
-> **See also:** For a full breakdown of reading and correlating these error logs, see [Reading Logs Like a Detective: A Field Guide to Incident Triage](/blog/log-analysis-incident-triage).
 
 ---
 
-## How to Fix Linux TIME_WAIT: In the Right Order
+## Fix it, in this order
 
-There are several approaches. **Apply them in this order** — kernel tuning should be a last resort, not a first instinct.
+### 1. Reuse connections
 
-### Fix 1: Eliminate Unnecessary Short-Lived Connections (Root Cause Fix)
+This is the actual fix. Fewer new connections means fewer TIME-WAIT sockets, and it saves a TCP (and often TLS) handshake per request too.
 
-The correct fix is to stop creating so many `TIME_WAIT` sockets in the first place.
-
-**For NGINX upstream connections** — add keepalive (see [NGINX Upstream Keepalive Explained](/blog/nginx-upstream-keepalive)):
+NGINX upstreams need three things for keepalive, not one:
 
 ```nginx
 upstream app_backend {
-    server 127.0.0.1:8080;
-    keepalive 64;
+    server 10.0.1.20:8080;
+    keepalive 32;                 # idle connections kept per worker
+}
+
+server {
+    location / {
+        proxy_pass http://app_backend;
+        proxy_http_version 1.1;          # keepalive needs HTTP/1.1
+        proxy_set_header Connection "";  # don't forward "Connection: close"
+    }
 }
 ```
 
-**For application HTTP clients** — use a connection pool:
+See [NGINX upstream keepalive](/blog/nginx-upstream-keepalive) for the details.
+
+Application HTTP clients:
 
 ```python
-# Python requests — Session reuses connections automatically
+# Python requests: a Session keeps a connection pool
 session = requests.Session()
-session.get('http://upstream/api')   # ✓ reuses connection
+for item in items:
+    session.get("http://10.0.1.20:8080/api")   # reuses connections
 
-# NOT this — opens a new TCP connection every call
-requests.get('http://upstream/api')  # ✗
+# requests.get() on its own creates a new connection each call
 ```
 
 ```go
-// Go — reuse the http.Client, never create one per request
-var client = &http.Client{}     // ✓ declare once, reuse everywhere
+// Go: http.Client and its Transport pool connections; create once, reuse.
+var client = &http.Client{Timeout: 5 * time.Second}
 
-http.Get("http://upstream/api") // ✗ creates a new client (new connection) each time
+resp, err := client.Get(url)
+if err == nil {
+    io.Copy(io.Discard, resp.Body) // read the body fully...
+    resp.Body.Close()              // ...and close it, or the connection can't be reused
+}
 ```
 
-### Fix 2: Widen the Ephemeral Port Range
+In Go, the common causes of connection churn are creating a new `http.Transport` (or a client with its own Transport) per request, and not draining and closing the response body.
 
-More ports = more headroom before exhaustion. This does not fix the root cause, but it buys time.
+Database clients: use the driver's pool, or a pooler like PgBouncer, instead of connect-per-query.
+
+### 2. Widen the ephemeral port range
 
 ```bash
-# Check current range
-cat /proc/sys/net/ipv4/ip_local_port_range
-# 32768   60999  (~28,000 ports)
-
-# Apply immediately
-echo "1024 65535" > /proc/sys/net/ipv4/ip_local_port_range
-
-# Make permanent
-echo "net.ipv4.ip_local_port_range = 1024 65535" >> /etc/sysctl.conf
-sysctl -p
+# /etc/sysctl.d/90-ephemeral-ports.conf
+net.ipv4.ip_local_port_range = 10240 65535
 ```
 
-This gives you **~64,500 ports** — over double the default. At 200 connections/second, exhaustion time goes from ~140 seconds to ~322 seconds.
-
-> **Safe to apply.** Ports below 1024 are privileged for listening — widening the ephemeral range to 1024 only affects outgoing connections.
-
-### Fix 3: Enable tcp_tw_reuse
-
-`tcp_tw_reuse = 1` allows the kernel to **reuse a `TIME_WAIT` socket** for a new outgoing connection when it is safe — verified via TCP timestamps (enabled by default).
-
 ```bash
-echo "net.ipv4.tcp_tw_reuse = 1" >> /etc/sysctl.conf
-sysctl -p
-
-# Verify
-cat /proc/sys/net/ipv4/tcp_tw_reuse
-# 1
+sudo sysctl --system
 ```
 
-**Safe and recommended** for servers making many outgoing connections (NGINX → upstream, microservices → database). Does not affect incoming connections.
+That's about 55,000 ports per destination, roughly double. Don't go down to 1024: ports in this range can be grabbed as source ports by outgoing connections, which can collide with services that listen on them (8080, 9090, 5432…). Protect specific ports you listen on with `net.ipv4.ip_local_reserved_ports`.
 
-> **Kernel version note:** Since Linux 4.12, `tcp_tw_reuse = 1` only applies to loopback by default. For all interfaces, use `tcp_tw_reuse = 2`.
-
-### Fix 4: Tune tcp_fin_timeout
-
-`tcp_fin_timeout` controls `FIN_WAIT_2` duration — a **different** state that also holds ports. Reducing it frees ports slightly faster:
+### 3. tcp_tw_reuse
 
 ```bash
-# Default: 60 seconds — reduce to 15
-echo "net.ipv4.tcp_fin_timeout = 15" >> /etc/sysctl.conf
-sysctl -p
+sysctl net.ipv4.tcp_tw_reuse
 ```
 
-> **Important:** `tcp_fin_timeout` does **not** control `TIME_WAIT` duration. That is hardcoded at 60 seconds in the kernel and cannot be changed without a recompile.
-
-### ⚠️ Do NOT Use tcp_tw_recycle
-
-`net.ipv4.tcp_tw_recycle = 1` appears in countless old guides. **Do not use it — ever.**
-
-- **Removed from the kernel in Linux 4.12 (2017)**
-- Before removal, it broke connections from clients behind NAT by using per-destination timestamp tracking — most of the internet is behind NAT
-- On modern kernels, the sysctl simply does not exist
+| Value | Meaning |
+|---|---|
+| `0` | Disabled |
+| `1` | Reuse TIME-WAIT sockets for new **outgoing** connections when TCP timestamps show it's safe |
+| `2` | Same, but only for loopback traffic. The default on recent kernels |
 
 ```bash
-# Verify it's gone on your system
-sysctl net.ipv4.tcp_tw_recycle 2>&1
-# sysctl: cannot stat /proc/sys/net/ipv4/tcp_tw_recycle: No such file or directory
-```
-
-If you see it in a runbook or Ansible playbook, remove it.
-
----
-
-## Production-Ready sysctl Configuration
-
-```bash
-# /etc/sysctl.d/99-network-tuning.conf
-
-# Widen ephemeral port range (~64,500 ports vs ~28,000 default)
-net.ipv4.ip_local_port_range = 1024 65535
-
-# Reuse TIME_WAIT sockets for outgoing connections (safe)
+# /etc/sysctl.d/90-tw-reuse.conf
 net.ipv4.tcp_tw_reuse = 1
-
-# Reduce FIN_WAIT_2 timeout (does NOT affect TIME_WAIT)
-net.ipv4.tcp_fin_timeout = 15
-
-# Increase socket listen backlog for high connection rate
-net.core.somaxconn = 65535
-net.ipv4.tcp_max_syn_backlog = 65535
-
-# TCP timestamps — required for tcp_tw_reuse to work
-net.ipv4.tcp_timestamps = 1
 ```
 
-```bash
-# Apply
-sysctl -p /etc/sysctl.d/99-network-tuning.conf
+It only affects connections this host *initiates*, and it relies on TCP timestamps (`net.ipv4.tcp_timestamps = 1`, the default). It's the reasonable kernel-side setting for a busy client or proxy. It doesn't replace step 1.
 
-# Verify
-sysctl net.ipv4.ip_local_port_range net.ipv4.tcp_tw_reuse net.ipv4.tcp_fin_timeout
-```
+### Settings that don't do what people think
+
+**`tcp_fin_timeout`** controls how long an orphaned socket waits in **FIN-WAIT-2**. It has no effect on TIME-WAIT duration. Lowering it is harmless but won't fix this.
+
+**`tcp_tw_recycle`** was removed in Linux 4.12. Before that, it broke clients behind NAT by rejecting their connections based on per-host timestamps. If a runbook or Ansible role still sets it, `sysctl` will error with `cannot stat /proc/sys/net/ipv4/tcp_tw_recycle`. Delete the line.
+
+**`SO_LINGER` with a zero timeout** in application code makes `close()` send a RST instead of a FIN, so no TIME-WAIT is created. It also throws away unsent data and loses the protections above. Treat it as a last resort for very specific cases, not a fix.
 
 ---
 
-## Monitoring TIME_WAIT in Production
+## Monitor it
 
-Do not wait for 2am alerts to discover port exhaustion. Add proactive monitoring.
+Alert on the error, not the TIME-WAIT count. A Prometheus rule on `node_sockstat_TCP_tw` alone will page you for harmless server-side TIME-WAIT. Better signals:
 
-### Prometheus + node_exporter
-
-```promql
-# Current TIME_WAIT socket count
-node_sockstat_TCP_tw
-
-# Alert rule
-alert: HighTimeWait
-expr: node_sockstat_TCP_tw > 20000
-for: 2m
-labels:
-  severity: warning
-annotations:
-  summary: "High TIME_WAIT count on {{ $labels.instance }}"
-  description: "{{ $value }} TIME_WAIT sockets. Port exhaustion risk."
-```
-
-### Shell Script Monitor (No Prometheus)
+- Application or NGINX error logs containing `Cannot assign requested address` / errno 99.
+- TIME-WAIT toward **one** upstream as a fraction of the port range, using the `ss` grouping above in a script:
 
 ```bash
 #!/bin/bash
-# /usr/local/bin/check-timewait.sh
-
-THRESHOLD=15000
-TW_COUNT=$(awk '/TCP:/ {print $6}' /proc/net/sockstat)
-PORT_RANGE=$(awk '{print $2 - $1}' /proc/sys/net/ipv4/ip_local_port_range)
-
-echo "TIME_WAIT: $TW_COUNT / $PORT_RANGE ports used ($(( TW_COUNT * 100 / PORT_RANGE ))%)"
-
-if [ "$TW_COUNT" -gt "$THRESHOLD" ]; then
-    echo "WARNING: TIME_WAIT count is high — risk of port exhaustion"
-    exit 1
-fi
+# warn when TIME-WAIT toward one peer uses > 70% of the ephemeral range
+read -r low high < /proc/sys/net/ipv4/ip_local_port_range
+range=$(( high - low + 1 ))
+ss -Htn state time-wait | awk '{print $4}' | sort | uniq -c | sort -rn | head -1 |
+while read -r count peer; do
+  pct=$(( count * 100 / range ))
+  echo "top peer $peer: $count TIME-WAIT ($pct% of $range ports)"
+  [ "$pct" -gt 70 ] && exit 1
+done
 ```
 
 ---
 
-## Summary: TIME_WAIT Diagnostic Decision Tree
+## Decision tree
 
 ```
-Seeing ECONNREFUSED or "cannot assign requested address" under load?
+Errors under load?
 │
-├─ Step 1: ss -s | grep timewait
+├─ "Cannot assign requested address" (errno 99)
+│     └─ ss -Htn state time-wait, grouped by peer
+│          ├─ one peer ip:port dominates  → ephemeral port exhaustion
+│          │      1. keepalive / connection pooling
+│          │      2. ip_local_port_range = 10240 65535
+│          │      3. tcp_tw_reuse = 1
+│          └─ spread over many peers      → look elsewhere
 │
-├─ timewait < 5,000
-│   └─ Not a TIME_WAIT problem
-│       Check: upstream health, app logs, NGINX worker_connections
+├─ "Connection refused" (errno 111)   → destination not accepting; not TIME_WAIT
 │
-└─ timewait > 10,000 and climbing
-    │
-    ├─ Fix 1: Add keepalive to NGINX upstream blocks
-    ├─ Fix 2: Use connection pooling in app HTTP clients
-    ├─ Fix 3: Widen ip_local_port_range → 1024 65535
-    ├─ Fix 4: Enable tcp_tw_reuse = 1
-    └─ Fix 5: Reduce tcp_fin_timeout → 15
+└─ High TIME-WAIT, no errors          → probably server-side and harmless
 ```
 
 ---
 
-## Conclusion
+## FAQ
 
-**Linux `TIME_WAIT` is not a bug** — it is a deliberate TCP safety mechanism that protects against stale packets and lost ACKs. The problem is when short-lived connections accumulate faster than the 60-second `TIME_WAIT` timer drains, exhausting the ephemeral port pool.
+**Can I shorten TIME_WAIT on Linux?**
+Not with a sysctl. The 60-second value is a kernel constant. Reduce the number of connections instead, or let `tcp_tw_reuse` reuse them for outgoing traffic.
 
-The fix starts with **eliminating unnecessary connections** — upstream keepalive in NGINX, connection pools in application HTTP clients. Kernel tuning (`tcp_tw_reuse`, wider port range) provides safety margin but is not a substitute for fixing the connection pattern.
+**Is a high TIME_WAIT count bad?**
+On its own, no. It matters only when it's toward a single destination on a host that opens outgoing connections, and you see `Cannot assign requested address`.
 
-**Monitor `TIME_WAIT` counts in production.** A rising count is an early warning you can act on before users see a single error.
+**What's the difference between TIME_WAIT and CLOSE_WAIT?**
+TIME-WAIT is on the side that closed first and goes away by itself after 60 seconds. CLOSE-WAIT is on the side that received the FIN and hasn't closed its socket yet. It doesn't time out, and a growing count is an application bug. See [check open connections](/blog/linux-check-open-connections) to find which process holds them.
 
 ---
 
-*For the NGINX-specific side of this problem, see [NGINX Upstream Keepalive Explained](/blog/nginx-upstream-keepalive) and [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load). For general socket-level debugging, see [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging).*
+*Related: [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load) for the proxy side of this problem. [strace, lsof, and ss](/blog/strace-lsof-ss-debugging) for general socket debugging.*

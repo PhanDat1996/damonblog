@@ -1,248 +1,209 @@
 ---
-title: "Docker Inspect Container IP Address: Step-by-Step"
+title: "Docker Inspect: Get a Container's IP Address on Any Network"
 date: "2026-04-22"
-excerpt: "Get a Docker container's IP address using docker inspect, docker exec, and network commands — with real examples for bridge, host, and custom networks."
+updated: "2026-10-28"
+excerpt: "Get a Docker container's IP with docker inspect, including Compose and user-defined networks where the common one-liner returns empty or glued output."
 tags: ["docker", "networking", "infrastructure", "troubleshooting"]
 featured: false
-slug: "docker-inspect-container-ip-address"
 category: "devops"
 ---
 
-Need the IP of a running container? There are several ways depending on whether you want just the IP, the full network config, or IPs across multiple networks.
+The quick answer:
+
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' mycontainer
+# 172.18.0.3
+```
+
+That works for most containers. It breaks in a few common situations: the container is on two networks, the network name has a hyphen in it, it uses host networking, or you're using the older `.NetworkSettings.IPAddress` field. Those cases are covered below, along with why you often shouldn't need the IP at all.
 
 ---
 
-## TL;DR
+## Why the IP lives under `Networks`
 
-```bash
-# Quickest — just the IP
-docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container>
-
-# Full network info
-docker inspect <container> | grep IPAddress
-
-# From inside the container
-docker exec <container> hostname -I
-```
-
----
-
-## Method 1: docker inspect with Format Template
-
-The cleanest approach — no `grep`, no `jq` needed:
-
-```bash
-docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mycontainer
-# Output: 172.17.0.3
-```
-
-For named networks, also show the network name:
-
-```bash
-docker inspect -f '{{range $net, $cfg := .NetworkSettings.Networks}}{{$net}}: {{$cfg.IPAddress}}{{"\n"}}{{end}}' mycontainer
-# Output:
-# bridge: 172.17.0.3
-# myapp_network: 10.10.0.5
-```
-
----
-
-## Method 2: docker inspect + grep
-
-Fast but less precise — useful for a quick look:
-
-```bash
-docker inspect mycontainer | grep IPAddress
-```
-
-Output:
-```json
-"SecondaryIPAddresses": null,
-"IPAddress": "172.17.0.3",
-        "IPAddress": "172.17.0.3",
-```
-
-The duplicate is from nested network config. Use method 1 for a clean single value.
-
----
-
-## Method 3: docker inspect + jq
-
-Best for scripting:
-
-```bash
-# Install jq if needed
-apt install jq
-
-# Get IP
-docker inspect mycontainer | jq -r '.[0].NetworkSettings.IPAddress'
-
-# Get IP for a specific named network
-docker inspect mycontainer | jq -r '.[0].NetworkSettings.Networks.bridge.IPAddress'
-
-# Get all network IPs as key-value
-docker inspect mycontainer | jq -r '.[0].NetworkSettings.Networks | to_entries[] | "\(.key): \(.value.IPAddress)"'
-```
-
----
-
-## Method 4: From Inside the Container
-
-```bash
-# hostname -I (all IPs assigned to container)
-docker exec mycontainer hostname -I
-# Output: 172.17.0.3
-
-# Or with ip command
-docker exec mycontainer ip addr show eth0
-docker exec mycontainer ip route
-
-# On Alpine containers (no ip command)
-docker exec mycontainer ifconfig eth0 2>/dev/null || docker exec mycontainer cat /proc/net/fib_trie
-```
-
----
-
-## Real Examples
-
-### Get IPs of all running containers
-
-```bash
-docker ps -q | while read id; do
-  name=$(docker inspect -f '{{.Name}}' $id | tr -d '/')
-  ip=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $id)
-  echo "$name: $ip"
-done
-```
-
-Output:
-```
-nginx: 172.17.0.2
-postgres: 172.17.0.3
-redis: 172.17.0.4
-```
-
-### Container on multiple networks
-
-```bash
-docker inspect mycontainer | jq -r '
-  .[0].NetworkSettings.Networks
-  | to_entries[]
-  | "\(.key): \(.value.IPAddress) (gateway: \(.value.Gateway))"
-'
-```
-
-Output:
-```
-bridge: 172.17.0.3 (gateway: 172.17.0.1)
-myapp_backend: 10.10.0.5 (gateway: 10.10.0.1)
-```
-
-### Find which container has a specific IP
-
-```bash
-docker ps -q | xargs docker inspect -f '{{.Name}} {{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
-  | grep "172.17.0.3"
-```
-
-### Get IP from docker-compose service
-
-```bash
-# Using service name (not container name)
-docker compose exec web hostname -I
-
-# Or
-docker inspect $(docker compose ps -q web) \
-  | jq -r '.[0].NetworkSettings.Networks | to_entries[0].value.IPAddress'
-```
-
----
-
-## Output Explanation
-
-Full `docker inspect` network section:
+A container gets **one IP per network it's attached to**. `docker inspect` stores them in a map keyed by network name:
 
 ```json
 "NetworkSettings": {
-    "IPAddress": "172.17.0.3",          ← legacy field, default bridge only
+    "IPAddress": "",
     "Networks": {
-        "bridge": {
-            "IPAddress": "172.17.0.3",  ← use this for bridge network
-            "Gateway": "172.17.0.1",
-            "MacAddress": "02:42:ac:11:00:03",
-            "NetworkID": "abc123..."
+        "myapp_default": {
+            "IPAddress": "172.18.0.3",
+            "IPPrefixLen": 16,
+            "Gateway": "172.18.0.1",
+            "MacAddress": "02:42:ac:12:00:03",
+            "DNSNames": ["myapp-web-1", "web", "3f2a9c1b7d4e"]
         }
     }
 }
 ```
 
-**`IPAddress` at the top level** is only populated for the default bridge network and is considered legacy. Use `Networks.<name>.IPAddress` instead — it works for all network types.
+The top-level `NetworkSettings.IPAddress` is a **legacy** field, deprecated since Docker 1.13. It's only filled in for the default `bridge` network. Containers on user-defined networks (which includes everything started by Docker Compose) show an empty string there. Old scripts that read it report "no IP" for perfectly healthy containers. Always read from `Networks`.
 
 ---
 
-## Common Mistakes
+## Get the IP: by situation
 
-**Mistake 1: Container on a custom network returns empty IP from legacy field**
-
-```bash
-# Wrong — returns empty for custom network containers
-docker inspect mycontainer | jq '.[0].NetworkSettings.IPAddress'
-# ""
-
-# Correct
-docker inspect mycontainer | jq '.[0].NetworkSettings.Networks.myapp_network.IPAddress'
-# "10.10.0.5"
-```
-
-**Mistake 2: Using container name that doesn't match**
-Docker container names start with `/`. When grepping:
+### One network (most containers)
 
 ```bash
-docker inspect /mycontainer   # works
-docker inspect mycontainer    # also works
-# But programmatically, .Name returns "/mycontainer" with the slash
-docker inspect -f '{{.Name}}' mycontainer
-# Output: /mycontainer
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web
 ```
 
-**Mistake 3: Expecting a stable IP**
-Container IPs change on restart unless you assign static IPs or use DNS service discovery. Never hardcode container IPs.
+### Several networks: label them
+
+Without a separator, a container on two networks prints `172.18.0.310.10.0.5`, which looks like one corrupted address. Print the network name with each IP:
+
+```bash
+docker inspect -f '{{range $name, $net := .NetworkSettings.Networks}}{{$name}} {{$net.IPAddress}}{{println}}{{end}}' web
+# myapp_backend 10.10.0.5
+# myapp_frontend 172.18.0.3
+```
+
+### A specific network: use `index`
+
+You might expect dot syntax to work:
+
+```bash
+docker inspect -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' web
+```
+
+It does for `bridge`, but Go templates only accept identifier-style names after a dot. A Compose project called `my-app` creates the network `my-app_default`, and the dot form fails with a template parse error (`bad character U+002D '-'`). `index` works for any name:
+
+```bash
+docker inspect -f '{{(index .NetworkSettings.Networks "my-app_default").IPAddress}}' web
+```
+
+Not sure of the exact network name? List them with `docker inspect -f '{{json .NetworkSettings.Networks}}' web | jq 'keys'`.
+
+### Host or none networking: there is no container IP
+
+```bash
+docker inspect -f '{{.HostConfig.NetworkMode}}' web
+# host
+```
+
+With `--network host` the container shares the host's network stack and has no IP of its own, so the template prints nothing. Use the host's address. With `--network none` there's nothing to reach.
+
+### IPv6
+
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.GlobalIPv6Address}} {{end}}' web
+```
+
+Empty unless the network was created with IPv6 enabled.
+
+---
+
+## Every container on a network, at once
+
+Usually faster than inspecting containers one by one:
+
+```bash
+docker network inspect -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' myapp_default
+# myapp-db-1 172.18.0.2/16
+# myapp-web-1 172.18.0.3/16
+```
+
+Note the `/16`: this view includes the prefix length.
+
+All running containers with all their IPs:
+
+```bash
+docker ps -q | xargs docker inspect \
+  -f '{{.Name}}{{range $n, $c := .NetworkSettings.Networks}} {{$n}}={{$c.IPAddress}}{{end}}' \
+  | sed 's#^/##'
+# myapp-web-1 myapp_default=172.18.0.3
+# myapp-db-1 myapp_default=172.18.0.2
+# legacy-cron bridge=172.17.0.2
+```
+
+`.Name` starts with a `/` for historical reasons, and the `sed` strips it.
+
+Find which container owns an IP (e.g. one you saw in a firewall or app log):
+
+```bash
+docker ps -q | xargs docker inspect \
+  -f '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}' \
+  | grep -w "172.18.0.3"
+```
+
+---
+
+## Docker Compose services
+
+Compose names containers `<project>-<service>-<n>`. Resolve the container from the service name instead of guessing:
+
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(docker compose ps -q web)"
+```
+
+With more than one replica, `docker compose ps -q web` returns several IDs. Pass them all and add `{{.Name}}` to the format.
+
+---
+
+## With jq (for scripts)
+
+```bash
+docker inspect web | jq -r '.[0].NetworkSettings.Networks | to_entries[] | "\(.key) \(.value.IPAddress) gw=\(.value.Gateway)"'
+# myapp_default 172.18.0.3 gw=172.18.0.1
+```
+
+`jq` handles any network name without the `index` workaround.
+
+---
+
+## From inside the container
+
+Many slim images have no `ip`, `ifconfig`, or `hostname -I`. One method that works almost everywhere: Docker writes the container's own IP into its `/etc/hosts` (except with host networking):
+
+```bash
+docker exec web cat /etc/hosts
+# ...
+# 172.18.0.3      3f2a9c1b7d4e
+```
+
+If the image has iproute2: `docker exec web ip -4 -brief addr`.
+
+---
+
+## You probably shouldn't hard-code it
+
+Container IPs are assigned from the network's pool at start time and can change every time the container is recreated. For container-to-container traffic, use names. On user-defined networks (including every Compose network), Docker's embedded DNS resolves service and container names:
 
 ```yaml
-# docker-compose: use service names instead of IPs
 services:
   web:
     environment:
-      - DATABASE_URL=postgres://db:5432/mydb  # "db" is the service name
+      DATABASE_URL: postgres://db:5432/app    # "db" = service name, not an IP
+  db:
+    image: postgres:16
 ```
 
----
+The default `bridge` network has no name resolution, which is one reason to avoid it. See [Docker networking explained](/blog/docker-networking-guide).
 
-## Pro Tips
+If you really need a fixed address, assign one on a user-defined network with an explicit subnet:
 
 ```bash
-# One-liner: name + IP for all containers
-docker ps --format '{{.Names}}' | \
-  xargs -I{} sh -c 'echo -n "{}: "; docker inspect -f "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}" {}'
-
-# Get gateway (useful when debugging container-to-host connectivity)
-docker inspect -f '{{range.NetworkSettings.Networks}}{{.Gateway}}{{end}}' mycontainer
-
-# Get full network config in readable format
-docker inspect mycontainer | jq '.[0].NetworkSettings.Networks'
-
-# Check if container is on a specific network
-docker inspect mycontainer | jq '.[0].NetworkSettings.Networks | has("myapp_network")'
+docker network create --subnet 172.30.0.0/24 fixednet
+docker run -d --network fixednet --ip 172.30.0.10 --name web nginx
 ```
 
----
-
-## Conclusion
-
-For a quick IP: `docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <name>`. For scripting with multiple networks: `jq`. For inside-container inspection: `docker exec <name> hostname -I`.
-
-Don't rely on container IPs for service-to-service communication in docker-compose — use service names. IPs change on restart; DNS-based service discovery doesn't.
+**Can't reach the IP from your laptop?** On Docker Desktop (macOS, Windows), containers run inside a VM, and their IPs aren't routable from the host. Use published ports (`-p 8080:80`) and `localhost:8080`. On a Linux host, the container IP is reachable from the host itself, but not from other machines unless you route to it.
 
 ---
 
-*Related: [Docker Networking Demystified: bridge, host, and overlay](/blog/docker-networking-guide) — understand why containers get the IPs they do. [Check Open Ports in Linux](/blog/check-open-ports-linux-ss-netstat-guide) — verify which ports are accessible from the host.*
+## FAQ
+
+**Why does docker inspect return an empty IP address?**
+Usually you're reading the legacy `.NetworkSettings.IPAddress` for a container on a user-defined network, or the container uses `--network host` or isn't running. Read `.NetworkSettings.Networks` instead, and check `.State.Status`.
+
+**How do I get the IP of a stopped container?**
+You can't. The IP is released when the container stops and may differ on the next start. Start it, or use names instead of IPs.
+
+**How do I find the host's IP from inside a container?**
+On a Linux bridge network, the host is reachable at the network's gateway (`.Gateway` in the output above). Portable alternative: run with `--add-host=host.docker.internal:host-gateway` and connect to `host.docker.internal`.
+
+---
+
+*Related: [Check open ports on Linux](/blog/check-open-ports-linux) to see which published ports the host is listening on. [Docker container not starting](/blog/docker-container-not-starting-fix) when the container never gets an IP because it exits.*

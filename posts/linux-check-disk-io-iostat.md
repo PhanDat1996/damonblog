@@ -1,240 +1,167 @@
 ---
-title: "Linux Check Disk I/O Usage: iostat Examples"
+title: "Check Disk I/O on Linux with iostat: What the Columns Mean"
 date: "2026-04-22"
-excerpt: "Check disk I/O usage in Linux using iostat — read utilization, throughput, and latency metrics, identify saturated disks, and correlate I/O with application slowdowns."
+updated: "2026-10-28"
+excerpt: "High load but idle CPU? Use iostat -x to check disk I/O latency and saturation, read r_await, aqu-sz and %util right, then find the process with pidstat."
 tags: ["linux", "monitoring", "troubleshooting", "infrastructure"]
 featured: false
-slug: "linux-check-disk-io-iostat-examples"
 category: "linux"
 ---
 
-High load average, slow application, CPU mostly idle — the culprit is often disk I/O. `iostat` tells you which disk, how saturated it is, and how fast data is moving.
+Load average is 12 on an 8-core box, the app is slow, but `top` shows the CPUs mostly idle. Look at the `wa` (iowait) value in `top`'s CPU line: if it's high, processes are stuck waiting for the disk. `iostat` tells you which disk, how slow each request is, and whether it's simply overloaded.
+
+```bash
+sudo apt install sysstat      # Debian/Ubuntu
+sudo dnf install sysstat      # Fedora/RHEL
+
+iostat -dxy 2                 # extended per-device stats every 2 s, skip the since-boot report
+```
+
+Read three numbers per device: **`r_await` / `w_await`** (latency in ms), **`aqu-sz`** (requests in flight), and **`%util`**, which is only meaningful on single spinning disks. Details below.
 
 ---
 
-## TL;DR
+## Reading `iostat -x` output
 
-```bash
-# Install (part of sysstat)
-apt install sysstat    # Ubuntu
-dnf install sysstat    # RHEL
-
-# Basic: 1-second updates
-iostat -x 1
-
-# Specific disk
-iostat -x /dev/sda 1
-
-# Human-readable with device names
-iostat -xh 1
-```
-
----
-
-## Basic iostat Output
-
-```bash
-iostat -x 1
-```
+Current sysstat (version 12 and later, shipped in Ubuntu 20.04+, RHEL 8+, Debian 11+) prints this, trimmed here to the columns you'll use most:
 
 ```
-Device   r/s    w/s   rkB/s   wkB/s  await  r_await  w_await  %util
-sda      0.50  45.20    8.00  1820.40  12.50    5.00    12.70  87.30
-sdb      0.10   0.20    1.60     4.00   1.20    1.10     1.30   0.50
-```
-
-**The columns that matter:**
-
-| Column | Meaning | Threshold to investigate |
-|---|---|---|
-| `r/s` | Reads per second | Workload-dependent |
-| `w/s` | Writes per second | Workload-dependent |
-| `rkB/s` | Read throughput (KB/s) | Compare to disk spec |
-| `wkB/s` | Write throughput (KB/s) | Compare to disk spec |
-| `await` | Average I/O latency (ms) | HDD > 20ms, SSD > 5ms = problem |
-| `%util` | Disk utilization | **> 80% = saturated** |
-
-`%util` at 100% means the disk is handling I/O 100% of the time — a queue is forming. Applications waiting on that disk will slow down or hang.
-
----
-
-## Real Examples
-
-### Watch all disks with 1-second updates
-
-```bash
-iostat -xh 1
-```
-
-The `-h` flag adds human-readable throughput (MB/s instead of kB/s).
-
-### Monitor a specific disk
-
-```bash
-iostat -x /dev/sda 1 10    # 10 readings of sda
-```
-
-### Check NVMe drives (different naming)
-
-```bash
-iostat -x /dev/nvme0n1 1
-```
-
-### See only the columns you care about
-
-```bash
-# Just device, util, and latency
-iostat -x 1 | awk 'NR>3 {printf "%-10s util:%5.1f%%  await:%6.2fms\n", $1, $NF, $10}'
-```
-
-### Find which disk is causing high load
-
-```bash
-# Run for 5 seconds and show average
-iostat -x 5 1 | grep -v "^$\|Linux\|Device" | sort -k14 -rn
-# Column 14 = %util — sorts by most utilized disk first
-```
-
----
-
-## Output Explanation: Full Column Reference
-
-```bash
-iostat -x 1
-```
-
-```
-Device: rrqm/s wrqm/s  r/s  w/s  rkB/s  wkB/s  avgrq-sz  avgqu-sz  await  r_await  w_await  svctm  %util
-sda       0.00  12.40 0.50 45.20  8.00 1820.40    78.40     0.57  12.50    5.00    12.70   1.10  87.30
+Device     r/s     rkB/s  r_await rareq-sz     w/s     wkB/s  w_await wareq-sz  aqu-sz  %util
+nvme0n1  412.00  26368.00    0.21    64.00  1830.50  58576.00    0.88    32.00    1.70  64.20
+sda        3.50     56.00    9.14    16.00   182.00   5824.00   46.37    32.00    8.47  99.60
 ```
 
 | Column | Meaning |
 |---|---|
-| `rrqm/s` | Read requests merged per second (kernel merges adjacent reads) |
-| `wrqm/s` | Write requests merged per second |
-| `r/s` / `w/s` | Completed reads/writes per second |
-| `rkB/s` / `wkB/s` | Throughput in KB/s |
-| `avgrq-sz` | Average request size in sectors (512B each) |
-| `avgqu-sz` | **Average queue depth** — > 1 means requests are queuing |
-| `await` | Average total I/O latency (queue + service time) |
-| `r_await` / `w_await` | Separate read/write latency |
-| `svctm` | Service time (deprecated, ignore) |
-| `%util` | **Disk utilization — 100% = fully saturated** |
+| `r/s`, `w/s` | Read and write requests completed per second (IOPS) |
+| `rkB/s`, `wkB/s` | Throughput in kB/s (`-h` or `-m` for friendlier units) |
+| `r_await`, `w_await` | Average time per request in ms, **including time spent queued**. This is what your application feels. |
+| `rareq-sz`, `wareq-sz` | Average request size in kB. Small (4–16) means random I/O; large (256+) means sequential. |
+| `rrqm/s`, `wrqm/s` | Requests merged by the kernel before reaching the device |
+| `aqu-sz` | Average number of requests queued or in flight |
+| `%util` | Percentage of time the device had at least one request in progress |
 
-**`avgqu-sz > 1`** means the disk is receiving requests faster than it can serve them. This is often more revealing than `%util` — a fast SSD at 90% util with avgqu-sz of 0.1 is fine; an HDD at 70% util with avgqu-sz of 8 is a problem.
+Older sysstat (version 11 and earlier, e.g. CentOS 7) uses different names: `avgrq-sz` (in 512-byte sectors), `avgqu-sz`, a combined `await`, and `svctm`. `svctm` was never accurate and was removed; ignore it if you see it.
 
----
-
-## Correlate I/O with Processes
-
-`iostat` tells you the disk is busy — `iotop` tells you which process is responsible:
-
-```bash
-# Install
-apt install iotop
-
-# Show only processes doing I/O
-iotop -o
-
-# Non-interactive, 3 snapshots
-iotop -b -n 3 -o
-```
-
-Combined workflow:
-
-```bash
-# Step 1: confirm which disk
-iostat -x 1
-
-# Step 2: find which process
-iotop -o
-
-# Step 3: confirm (lsof shows what files)
-lsof -p <pid> | grep -E "REG|DIR"
-```
+**Always skip the first report.** Without `-y`, the first block iostat prints is the average **since boot**, which hides any current problem. Either use `-y` or ignore the first block.
 
 ---
 
-## Real-World Use Case: Database Slowdown Investigation
+## How to tell if a disk is the bottleneck
 
-Application response times spiked at 2am. CPU was idle. Memory was fine.
+### Latency first
 
-```bash
-# Check disk I/O at the time (sar stores historical data)
-sar -d --starttime=02:00:00 --endtime=02:30:00 -f /var/log/sysstat/sa22
+`r_await` and `w_await` are the most direct signal. Rough expectations for a healthy device under normal load:
 
-# Or check current state during a reproduction
-iostat -x 1 10
-```
+| Device | Typical latency |
+|---|---|
+| NVMe SSD | well under 1 ms |
+| SATA SSD | around 1 ms or less |
+| 7200 rpm HDD | 5–15 ms for random I/O |
+| Cloud block storage (EBS, Persistent Disk) | about 0.5–3 ms, rising sharply when you hit the volume's IOPS or throughput limit |
 
-```
-Device  %util  await  avgqu-sz
-sda     98.20  85.40     8.20   ← disk saturated, 85ms latency, deep queue
-```
+These are rules of thumb, not specs. What matters is the change: if `w_await` was 1 ms yesterday and is 40 ms now, something is wrong even if 40 ms sounds acceptable for an HDD.
 
-Then:
+In the sample above, `sda` is the problem: 46 ms writes, 8+ requests waiting, 99.6% busy.
 
-```bash
-iotop -o
-# postgres  pid=3012  DISK WRITE: 45.2M/s  Total: 47.1M/s
-```
+### Why %util lies on SSDs and RAID
 
-PostgreSQL was doing a checkpoint (bulk write to disk). The disk couldn't keep up. Fix: tune `checkpoint_completion_target` in PostgreSQL, or upgrade to SSD/NVMe.
+`%util` only measures whether the device had *any* request in flight. A single HDD serves one request at a time, so 100% really means saturated. An NVMe drive or a RAID array serves many requests in parallel; it can show 100% `%util` while having plenty of capacity left. On those devices judge by latency and by whether IOPS/throughput are near the device's or cloud volume's limit.
 
----
+### aqu-sz
 
-## Common Mistakes
+`aqu-sz` around 8 on a single HDD means requests are waiting in line, and each one waits for all the ones ahead. On an NVMe drive, an `aqu-sz` of 8 can be completely normal because the device works on them in parallel. Read it together with `await`: a high queue **and** rising latency means the device can't keep up.
 
-**Mistake 1: Only looking at `%util` on SSDs**
-An SSD can handle parallel I/O efficiently. `%util=90%` on an SSD might be fine if `await` is 0.5ms. `%util=50%` on an HDD with `await=100ms` is a problem. Always check `await` together.
+### Cloud volumes
 
-**Mistake 2: Reading the first iostat line**
-The first line after `iostat -x 1` is the average since boot, not the current rate. The second and subsequent lines are real-time. Ignore line 1.
-
-**Mistake 3: Not enabling sysstat for historical data**
-```bash
-# Enable sysstat data collection
-systemctl enable --now sysstat
-# Or on Ubuntu: edit /etc/default/sysstat
-# ENABLED="true"
-```
-Without this enabled, `sar -d` has no historical data.
-
-**Mistake 4: Ignoring the write merge rate**
-High `wrqm/s` means the kernel is efficiently merging write requests — that's good. Low `wrqm/s` with high `w/s` means lots of small random writes, which destroys HDD performance.
+On cloud block storage you can hit the **provisioned limit** long before the hardware is busy. If `r/s + w/s` sits flat at a round number (3000, 16000) or throughput flat at the volume's MB/s cap while latency climbs, you're being throttled. The fix is a bigger or faster volume tier, not tuning.
 
 ---
 
-## Pro Tips
+## Which process is causing the I/O?
+
+`iostat` is per device. To get per process, `pidstat` comes in the same `sysstat` package:
 
 ```bash
-# Historical disk I/O with sar
-sar -d 1 10                    # current, 10 readings
-sar -d -f /var/log/sysstat/sa$(date +%d)   # today's data
-
-# I/O statistics per partition
-iostat -xp sda 1
-
-# Monitor NVMe with extended metrics
-iostat -x /dev/nvme0n1 1
-
-# Alert when disk utilization exceeds threshold
-while true; do
-  util=$(iostat -d /dev/sda 1 1 | awk 'NR==4{print $NF+0}')
-  [ "$util" -gt 80 ] && echo "$(date): sda util=${util}% — ALERT"
-  sleep 5
-done
-
-# Disk I/O by process, sorted by total I/O
-iotop -b -n 1 | sort -k4 -rn | head -10
+pidstat -d 2
 ```
 
+```
+10:42:01 AM   UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command
+10:42:03 AM   999      3012      0.00  44180.00      0.00      87  postgres
+10:42:03 AM     0       412      0.00    186.00      0.00       0  jbd2/sda1-8
+10:42:03 AM  1000     18233   5120.00      0.00      0.00      12  rsync
+```
+
+`iotop -o` shows the same information interactively (needs root). On kernel 5.14 and later, its `IO>` percentage column stays empty unless delay accounting is enabled (`sysctl kernel.task_delayacct=1`); the read/write rates work regardless.
+
+Then see what files that process is working on:
+
+```bash
+sudo ls -l /proc/3012/fd | grep -v -e socket -e pipe
+```
+
+Common culprits: database checkpoints or vacuum, backup jobs (`rsync`, `tar`), log shipping, `updatedb`/`mlocate` cron runs, swapping (check `si`/`so` in `vmstat 1`), and a log being written at debug level.
+
+If the I/O is from deleting or cleaning up a huge number of files, see [Delete Large Files Safely](/blog/how-to-delete-large-files-linux-safely) for ways to throttle it.
+
 ---
 
-## Conclusion
+## Is anything actually waiting? (PSI)
 
-`iostat -x 1` is the starting point for any I/O performance investigation. `%util > 80%` and `await > 20ms (HDD) / 5ms (SSD)` are the thresholds that indicate a disk problem. The first iostat output line is since-boot average — skip it and read from line 2 onward. For process-level attribution, `iotop -o` shows exactly which process is generating the I/O.
+On kernel 4.20 and later, pressure stall information tells you how much time tasks spent stalled on I/O, which is closer to "is this hurting the application" than any iostat column:
+
+```bash
+cat /proc/pressure/io
+# some avg10=34.12 avg60=28.40 avg300=12.05 total=918273645
+# full avg10=21.77 avg60=17.90 avg300=7.31 total=601928374
+```
+
+`some` = percentage of time at least one task was waiting on I/O; `full` = all non-idle tasks were. A `full avg10` in double digits means real stalls.
 
 ---
 
-*Related: [Linux High CPU Usage: Step-by-Step Troubleshooting Guide](/blog/linux-high-cpu-usage-troubleshooting) — when high I/O leads to high load average, distinguish the two. [How to Find Large Files in Linux](/blog/find-large-files-linux-guide) — if high write I/O is filling disk, find the file responsible.*
+## Looking at the past with sar
+
+The slowdown happened at 2 a.m. and it's 9 a.m. now. If sysstat's collector is enabled, `sar` has the history:
+
+```bash
+sudo systemctl enable --now sysstat     # start collecting (Debian/Ubuntu also: ENABLED="true" in /etc/default/sysstat)
+
+sar -d -p -s 02:00:00 -e 02:30:00 -f /var/log/sysstat/sa28    # Debian/Ubuntu
+sar -d -p -s 02:00:00 -e 02:30:00 -f /var/log/sa/sa28          # RHEL/Fedora
+```
+
+`-p` prints real device names instead of `dev8-0`, `sa28` is the file for the 28th of the month, and `-s`/`-e` limit the time window. Default collection is every 10 minutes, so short spikes get averaged out.
+
+---
+
+## Useful variations
+
+```bash
+iostat -dxy sda nvme0n1 2       # only these devices
+iostat -dxyp sda 2              # sda and its partitions
+iostat -dxym 2                  # throughput in MB/s
+iostat -dxy 5 3                 # three 5-second reports, then exit
+```
+
+For a simple watch in a script, use `-y` and a single report so you never read the since-boot numbers:
+
+```bash
+iostat -dxy sda 5 1 | awk '$1=="Device" {for (i=1; i<=NF; i++) col[$i]=i}
+                           $1=="sda"    {print "w_await=" $col["w_await"], "%util=" $col["%util"]}'
+```
+
+Column positions differ between sysstat versions (newer ones add discard and flush columns), so the script looks fields up by header name instead of hardcoding numbers.
+
+---
+
+## Quick checklist
+
+1. `top`: high `wa` and load with idle CPU? Suspect disk.
+2. `iostat -dxy 2`: which device has high `r_await`/`w_await`?
+3. HDD at ~100% `%util`, or cloud volume flat at its IOPS cap? It's saturated.
+4. `pidstat -d 2`: which process is doing the I/O?
+5. Need the past? `sar -d -p` with the right `saDD` file.
+
+*Related: [Linux Performance Troubleshooting Guide](/blog/linux-performance-troubleshooting-guide) for the full CPU, memory, disk and network triage. [Linux High CPU Usage](/blog/linux-high-cpu-usage-guide) to rule out CPU when load is high. [Disk Full on Linux](/blog/disk-full-linux-cleanup) if the disk is full rather than slow.*

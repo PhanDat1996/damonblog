@@ -1,245 +1,223 @@
 ---
-title: "Linux sort Command: Real Usage Examples"
+title: "Linux sort Command: Examples for Columns, Sizes and Logs"
 date: "2026-04-22"
-excerpt: "Use the Linux sort command effectively — sort by column, numerically, by size, reverse order, deduplicate, and combine with other commands for real log and data analysis."
+updated: "2026-10-28"
+excerpt: "Practical Linux sort examples: one column, numbers, du sizes, dates and frequency counts, plus why -k2 sorts past column 2 and how locale changes order."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
-slug: "linux-sort-command-real-usage-examples"
 category: "linux"
 ---
 
-`sort` by itself isn't particularly useful. Combined with `grep`, `awk`, `uniq`, and pipes — it's one of the most powerful tools in a sysadmin's toolkit for log analysis, reporting, and finding patterns in data.
-
----
-
-## TL;DR
+You pipe `du -sh *` into `sort -rn` and 900K lands above 2G. Or you sort a CSV by its second column and the rows come out in an order that makes no sense. `sort` has a few defaults that surprise almost everyone at least once. Here are the examples you'll actually use, with the traps explained.
 
 ```bash
-sort file.txt                   # alphabetical sort
-sort -n file.txt                # numeric sort
-sort -rn file.txt               # reverse numeric (largest first)
-sort -k2 file.txt               # sort by column 2
-sort -u file.txt                # sort and deduplicate
-sort -h file.txt                # human-readable sizes (1K, 5M, 2G)
+sort -n nums.txt                          # numeric, smallest first
+sort -rn nums.txt                         # numeric, largest first
+du -sh /var/* | sort -rh                  # human sizes (K, M, G), largest first
+sort -t, -k2,2n data.csv                  # CSV, by column 2 only, numerically
+sort | uniq -c | sort -rn                 # frequency count, most common first
+sort -u ips.txt                           # unique lines
 ```
 
 ---
 
-## Basic Sorting
+## Numbers: `-n`, `-g`, `-h`, `-V`
+
+By default `sort` compares text character by character, so `10` comes before `2`:
 
 ```bash
-# Alphabetical (default)
-sort /etc/hosts
+printf '10\n2\n100\n5\n' | sort       # 10 100 2 5
+printf '10\n2\n100\n5\n' | sort -n    # 2 5 10 100
+```
 
-# Reverse alphabetical
-sort -r /etc/hosts
+| Flag | Compares as | Use for |
+|---|---|---|
+| `-n` | Integers and decimals | Counts, PIDs, percentages |
+| `-g` | General numbers, including `1e3` | Scientific notation (slower) |
+| `-h` | Numbers with K/M/G/T suffixes | `du -h`, `df -h`, `ls -lh` output |
+| `-V` | Version strings | `1.9.2` vs `1.10.0`, kernel versions |
+| `-M` | Month names (`Jan`..`Dec`) | Syslog-style dates |
 
-# Numeric sort (-n matters for numbers)
-echo -e "10\n2\n100\n5" | sort     # wrong: 10, 100, 2, 5
-echo -e "10\n2\n100\n5" | sort -n  # correct: 2, 5, 10, 100
+The `du` trap:
 
-# Reverse numeric (largest first)
-echo -e "10\n2\n100\n5" | sort -rn  # 100, 10, 5, 2
+```bash
+du -sh /var/* 2>/dev/null | sort -rn   # wrong: compares 900 vs 2, ignores K/G
+du -sh /var/* 2>/dev/null | sort -rh   # right
+```
+
+```
+4.1G	/var/log
+1.2G	/var/lib
+312M	/var/cache
+900K	/var/backups
+```
+
+See [Check Disk Usage with du and df](/blog/check-disk-usage-linux-du-df) and [Find Large Files in Linux](/blog/find-large-files-linux) for more of this.
+
+---
+
+## Columns: why `-k2` isn't "column 2"
+
+`-k2` means "the key starts at field 2 **and runs to the end of the line**." When field 2 is equal, the rest of the line decides the order, which is rarely what you meant. Always give an end field:
+
+```bash
+sort -k2,2 file          # field 2 only
+sort -k2,2n file         # field 2 only, numeric
+sort -k3,3nr -k1,1 file  # field 3 numeric descending, then field 1 as tie-breaker
+```
+
+Putting the type letter on the key (`-k2,2n`) applies it to that key alone. A global `-n` or `-r` applies to every key without its own letters.
+
+### Field separators
+
+By default fields are separated by the transition from non-blank to blank, and **leading blanks belong to the field**. With aligned output like `ps` or `ls -l`, that can shift comparisons. Add `-b` to ignore leading blanks, or set a delimiter:
+
+```bash
+sort -t: -k3,3n /etc/passwd             # by UID
+sort -t, -k2,2 data.csv                 # by second CSV column
+```
+
+`-t,` splits on every comma, including commas inside quoted CSV fields. For real CSV, use a CSV-aware tool (`mlr`, `csvsort`, Python).
+
+### Part of a field
+
+```bash
+sort -k2.1,2.4 file      # characters 1-4 of field 2
 ```
 
 ---
 
-## Sort by Column
+## Locale changes the order
+
+`sort` follows your locale. In `en_US.UTF-8`, case and punctuation are mostly ignored on the first pass, so `apple`, `Banana`, `cherry` sort together naturally. In the `C` locale, it's plain byte order: uppercase before lowercase, `Banana` before `apple`.
 
 ```bash
-# Sort by the second whitespace-separated column
-sort -k2 file.txt
-
-# Sort by column 3 numerically
-sort -k3 -n file.txt
-
-# Sort by column 2, then by column 1 as tiebreaker
-sort -k2,2 -k1,1 file.txt
-
-# Sort by specific character positions in a column
-sort -k2.3,2.5 file.txt   # characters 3-5 of column 2
+LC_ALL=C sort file      # bytewise: predictable across machines, and much faster
+sort -f file            # fold case: treat upper and lower case alike
 ```
+
+Set `LC_ALL=C` in scripts so output is identical on every server, and for big files, where it's noticeably faster. It also matters for `comm` and `join`, which require their inputs sorted with the same rules.
 
 ---
 
-## Sort Human-Readable Sizes
+## Unique lines: `-u` vs `uniq`
 
 ```bash
-# -h: understands K, M, G (crucial for du output)
-du -sh /var/log/* | sort -rh | head -10
-
-# -h is wrong order without -r? Add -r to get largest first
-du -sh /* 2>/dev/null | sort -rh | head
+sort -u ips.txt                          # unique lines
+sort ips.txt | uniq -c | sort -rn        # unique lines with counts
+sort ips.txt | uniq -d                   # only lines that appear more than once
 ```
+
+`uniq` only collapses **adjacent** duplicates, so it needs sorted input.
+
+With a key, `sort -u` keeps one line per **key**, not per line:
+
+```bash
+sort -t, -k1,1 -u users.csv              # one row per value of column 1
+```
+
+Which row survives for each key isn't something to rely on. If you need "first occurrence wins" without sorting, use `awk '!seen[$0]++'`.
 
 ---
 
-## Deduplicate with -u and uniq
+## Log examples
+
+### Top client IPs in an access log
 
 ```bash
-# Remove duplicate lines
-sort -u file.txt
-
-# Sort then count occurrences (uniq -c)
-sort file.txt | uniq -c | sort -rn
-# Output: count followed by unique value, sorted by frequency
+awk '{print $1}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head
 ```
 
----
+```
+  48211 10.0.1.50
+   9120 203.0.113.17
+    880 198.51.100.4
+```
 
-## Real Examples
+The top address is often your own load balancer or health checker. If so, the client IP is in `X-Forwarded-For`, which needs to be in your log format.
 
-### Top 10 IPs hitting a web server
+### Status codes and top URLs
 
 ```bash
-awk '{print $1}' /var/log/nginx/access.log \
-  | sort | uniq -c | sort -rn | head -10
+awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -rn
+awk '$9 >= 500 {print $7}' /var/log/nginx/access.log | sort | uniq -c | sort -rn | head
 ```
 
-```
-   4521 10.0.1.50      ← load balancer (expected)
-    342 1.2.3.4        ← investigate this
-     89 5.6.7.8
-```
+Field numbers assume NGINX's default `combined` log format. Check one line of your log before trusting `$7` and `$9`.
 
-### Most common error messages
+### Most frequent error messages
 
 ```bash
-grep "ERROR" /var/log/app.log \
-  | awk '{$1=$2=$3=""; print $0}' \
-  | sed 's/^[[:space:]]*//' \
+grep -h ERROR /var/log/myapp/*.log \
+  | sed -E 's/^[0-9T:. -]+//; s/[0-9]+/N/g' \
   | sort | uniq -c | sort -rn | head -20
 ```
 
-### Sort processes by memory usage
+The `sed` strips the leading timestamp and replaces numbers with `N`, so `timeout after 3012ms` and `timeout after 2988ms` count as the same message. Adapt the first expression to your timestamp format.
+
+### SSH logins per user
 
 ```bash
-ps aux --sort=-%mem | head -10
-# Or with awk for cleaner output:
-ps aux | awk 'NR>1 {print $4, $11}' | sort -rn | head -10
-```
-
-### Find most requested URLs
-
-```bash
-awk '{print $7}' /var/log/nginx/access.log \
-  | sort | uniq -c | sort -rn | head -20
-```
-
-### Sort disk usage output
-
-```bash
-du -sh /var/* 2>/dev/null | sort -rh
-# 38G  /var/log
-# 4.2G /var/lib
-# 512M /var/cache
-```
-
-### Find top SSH users by login count
-
-```bash
-grep "Accepted" /var/log/auth.log \
-  | awk '{print $9}' \
+grep 'Accepted ' /var/log/auth.log \
+  | awk '{for (i=1; i<NF; i++) if ($i == "for") {print $(i+1); break}}' \
   | sort | uniq -c | sort -rn
 ```
 
-### Sort log file by timestamp (if not already ordered)
+Finding the word after `for` works whether your syslog uses classic (`Oct 28 09:15:02`) or ISO timestamps, which shift the field numbers. On RHEL the file is `/var/log/secure`; on journald-only systems use `journalctl -u ssh` (Debian/Ubuntu) or `-u sshd` (RHEL). See [Check Last Login Users](/blog/linux-check-last-login-users).
+
+### Sort by timestamp
+
+ISO timestamps (`2026-10-28T09:15:02`) sort correctly as plain text. Classic syslog dates need month-aware sorting:
 
 ```bash
-sort -k1,2 /var/log/app.log   # sort by first 2 columns (date + time)
+sort -k1,1M -k2,2n -k3,3 merged.log
 ```
 
-### Remove duplicate IPs from a blocklist
+Classic syslog lines don't include the year, so this breaks across a year boundary.
+
+---
+
+## Big files and in-place sorting
 
 ```bash
-sort -u /tmp/blocked-ips.txt > /tmp/blocked-ips-clean.txt
+sort -o file.txt file.txt                # safe in-place sort
+sort file.txt > file.txt                 # WRONG: the shell empties the file before sort reads it
+```
+
+> **Warning:** `sort file > file` destroys the file. Use `-o`, or write to a new file and `mv` it over.
+
+For files larger than memory, `sort` writes temporary chunks to `$TMPDIR` (default `/tmp`). A multi-gigabyte sort can fill a small `/tmp`. Point it somewhere with space and give it more buffer:
+
+```bash
+LC_ALL=C sort -S 2G -T /var/tmp --parallel=4 big.log -o big.sorted
+```
+
+Check whether something is already sorted without sorting it:
+
+```bash
+sort -c -k2,2n file && echo sorted
 ```
 
 ---
 
-## Combine sort + uniq Patterns
-
-This combination is extremely powerful for any counted analysis:
-
-```bash
-# Basic pattern: extract field → sort → count → sort by count
-command | awk '{print $FIELD}' | sort | uniq -c | sort -rn | head
-
-# Examples:
-# HTTP status codes
-awk '{print $9}' access.log | sort | uniq -c | sort -rn
-
-# Error types
-grep ERROR app.log | awk '{print $5}' | sort | uniq -c | sort -rn
-
-# Unique values count
-grep pattern file | sort -u | wc -l
-```
-
----
-
-## Sort Options Reference
+## Flag reference
 
 | Flag | Meaning |
 |---|---|
-| `-n` | Numeric sort (needed for any numbers) |
-| `-r` | Reverse (descending) |
-| `-h` | Human-readable numbers (K/M/G) |
-| `-k N` | Sort by column N |
-| `-u` | Unique (remove duplicates) |
-| `-t ','` | Use comma as delimiter (for CSV) |
-| `-f` | Case-insensitive |
-| `-s` | Stable sort (preserve order of equal lines) |
+| `-n` / `-g` / `-h` / `-V` / `-M` | Numeric / general numeric / human sizes / version / month |
+| `-r` | Reverse |
+| `-k F1[,F2]` | Key from field F1 to F2 (always give F2) |
+| `-t X` | Field delimiter |
+| `-b` | Ignore leading blanks |
+| `-f` | Fold lowercase to uppercase |
+| `-u` | One line per key (or per line, with no key) |
+| `-s` | Stable: keep input order for equal keys |
+| `-o FILE` | Write to FILE (safe for in-place) |
+| `-c` | Check whether input is sorted |
+| `-S`, `-T`, `--parallel` | Buffer size, temp directory, threads |
+
+For sorting processes, `ps` has its own `--sort` option (`ps -eo pid,rss,comm --sort=-rss`), which avoids parsing its columns; see [ps Command in Linux](/blog/ps-command-linux-troubleshooting).
 
 ---
 
-## Common Mistakes
-
-**Mistake 1: Not using `-n` for numbers**
-```bash
-echo -e "10\n2\n100" | sort     # "10", "100", "2" (lexicographic wrong)
-echo -e "10\n2\n100" | sort -n  # "2", "10", "100" (correct)
-```
-
-**Mistake 2: Using `sort -n` on human sizes**
-```bash
-du -sh * | sort -rn   # WRONG: 5M > 1G because 5 > 1
-du -sh * | sort -rh   # CORRECT: -h understands K/M/G units
-```
-
-**Mistake 3: Piping `sort | uniq -c` without the sort first**
-`uniq -c` only collapses adjacent duplicates. Without sorting first, non-adjacent duplicates aren't counted together:
-```bash
-# WRONG: only counts consecutive duplicates
-uniq -c file.txt
-
-# CORRECT: sort brings duplicates together
-sort file.txt | uniq -c | sort -rn
-```
-
----
-
-## Quick Reference
-
-```bash
-sort file                     # alphabetical
-sort -n file                  # numeric
-sort -rn file                 # reverse numeric (largest first)
-sort -h file                  # human sizes (K/M/G)
-sort -rh file                 # reverse human sizes
-sort -k2 file                 # by column 2
-sort -k2 -n file              # column 2, numeric
-sort -u file                  # deduplicate
-sort file | uniq -c | sort -rn  # frequency count
-du -sh * | sort -rh            # disk usage sorted
-```
-
----
-
-## Conclusion
-
-`sort` alone is basic. `sort | uniq -c | sort -rn` is the pattern that makes it powerful — it turns any field extraction into a frequency ranking. Use `-n` for numbers, `-h` for human-readable sizes, `-k` to sort by a specific column. Combined with `awk` to extract fields from logs, this trio handles most log analysis needs without a dedicated analytics tool.
-
----
-
-*Related: [How to Search Text in Files Linux: grep Examples](/blog/search-text-in-files-linux-grep-examples) — grep for finding, sort for counting. [Linux Log Analysis: Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — sort in the context of full log workflows.*
+*Related: [Search Text in Files with grep](/blog/search-text-in-files-linux-grep) to find the lines before you count them. [Linux Log Analysis](/blog/linux-log-analysis-guide) for full log workflows.*

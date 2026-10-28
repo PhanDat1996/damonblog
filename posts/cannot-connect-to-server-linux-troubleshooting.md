@@ -1,221 +1,166 @@
 ---
-title: "Cannot Connect to Server Linux: Step-by-Step Troubleshooting"
+title: "Cannot Connect to Server on Linux: Diagnose by Error"
 date: "2026-04-22"
-excerpt: "Troubleshoot 'cannot connect to server' on Linux — diagnose connection refused, timeout, and network unreachable errors with a systematic step-by-step approach."
+updated: "2026-10-28"
+excerpt: "Connection refused, timed out or no route to host? Each error points to a different layer. Work through client, network and server checks in order."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
-slug: "cannot-connect-to-server-linux-troubleshooting"
 category: "linux"
 ---
 
-Connection refused. Connection timed out. Network unreachable. Each error means something different and points to a different fix.
+The service is "up" according to everyone you ask, and the client still can't connect. Before you restart anything, look closely at the exact error. `Connection refused` and `Connection timed out` sound similar but point at completely different parts of the path, and treating one like the other wastes the first hour of most outages.
 
 ---
 
-## TL;DR: Read the Error First
+## Start with the exact error
 
-| Error | Meaning | Start here |
+Reproduce it from the client with a short timeout:
+
+```bash
+nc -zv -w 3 10.0.1.50 8080
+# or for HTTP
+curl -sv --connect-timeout 3 http://10.0.1.50:8080/health
+```
+
+| Error | What it means | Go to |
 |---|---|---|
-| `Connection refused` | Server up, nothing listening on that port | Check if service is running |
-| `Connection timed out` | Packets dropped (firewall, routing, server down) | Check firewall and routing |
-| `Network unreachable` | No route to destination | Check routing table |
-| `Name or service not known` | DNS resolution failed | Check DNS |
-| `No route to host` | ARP failed or host down | Check if host is up |
+| `Name or service not known` / `Could not resolve host` | DNS failed; no packet was sent to the server | Step 1 |
+| `Network is unreachable` | The client has no route to that network | Step 1 |
+| `Connection refused` | The server host (or a firewall) actively rejected with RST/ICMP | Step 3 |
+| `Connection timed out` / hangs | Packets are silently dropped somewhere | Step 4 |
+| `No route to host` | ICMP host-unreachable: firewalld's default reject, or ARP failing | Step 4 |
 
 ---
 
-## Step 1: Confirm the Error Type
+## Step 1: DNS and the local route
 
 ```bash
-# Test connection
-curl -v http://10.0.1.50:8080/health
-nc -zv 10.0.1.50 8080
-telnet 10.0.1.50 8080
+getent hosts api.internal.example.com     # what the system resolver returns
+ip route get 10.0.1.50                    # which interface and gateway the client will use
 ```
 
-The error message is your first diagnostic. Don't skip this — "connection refused" and "connection timed out" have completely different causes.
+`getent` uses the same resolution path as most applications (`/etc/hosts`, then DNS per `/etc/nsswitch.conf`), which `dig` doesn't. If the name resolves to an unexpected IP, or not at all, fix that first; see [DNS not resolving](/blog/dns-not-resolving-linux-fix).
+
+`ip route get` should show a sensible `dev` and `via`. `Network is unreachable` here means the client has no matching route, typically a missing default gateway or a VPN that isn't up. [Check network interfaces](/blog/check-network-interface-linux) if the interface itself looks wrong.
 
 ---
 
-## Step 2: Is the Host Reachable at All?
+## Step 2: is the host reachable?
 
 ```bash
-ping -c 3 10.0.1.50
-
-# If ping fails:
-# - host is down
-# - ICMP is blocked by firewall
-# - wrong IP address
-
-# Check routing
-ip route get 10.0.1.50
-# Shows which interface and gateway will be used
-
-traceroute 10.0.1.50
-# Shows where packets stop
+ping -c 3 -W 2 10.0.1.50
 ```
 
+A reply means the host is up and routing works. **No reply is inconclusive**: ICMP is often filtered while TCP still works. Don't stop here either way; the port test in the first section is what counts. If you need to know where along the path packets stop, use [traceroute or mtr](/blog/traceroute-linux-examples), ideally in TCP mode to the real port.
+
 ---
 
-## Step 3: Fix "Connection Refused"
+## Step 3: on the server, is it listening, and where?
 
-`Connection refused` means the host is reachable but nothing is listening on that port.
+This is the `Connection refused` path. Log in to the server:
 
 ```bash
-# On the SERVER: is the service running?
+sudo ss -tlnp 'sport = :8080'
 systemctl status myapp
-ss -tlnp | grep :8080
-
-# Not running? Start it
-systemctl start myapp
-
-# Running but on wrong interface?
-ss -tlnp | grep :8080
-# 127.0.0.1:8080 — only accessible locally!
-# Fix: change bind address in app config to 0.0.0.0
 ```
 
-**Bound to localhost is the most common cause.** The service is running but only accessible from the server itself.
+Three possible outcomes:
+
+**Nothing listening.** The service isn't running, crashed at start, or listens on a different port. Check `journalctl -u myapp -n 50` and the app's config. If it failed with `address already in use`, see [port already in use](/blog/port-already-in-use-linux-fix).
+
+**Listening on `127.0.0.1:8080`.** The most common cause of "it works on the server but not from outside". Loopback-only listeners reject every remote client. Change the bind address in the app config (`0.0.0.0`, `::`, or the server's specific IP) and restart. Many frameworks default to localhost: Flask's dev server, Rails in development, and anything started with `--host localhost`.
+
+**Listening on `0.0.0.0` or the right IP.** Then the refusal comes from something else:
+
+- a host firewall with a REJECT rule. Many iptables setups reject with `icmp-port-unreachable`, which the client reports as "refused";
+- fail2ban, which by default bans with exactly such a REJECT rule;
+- the client reaching a different host than you think (DNS, stale `/etc/hosts`, a load balancer whose backend is down).
+
+The [open ports guide](/blog/check-open-ports-linux) explains how to read the Local Address column in detail.
 
 ---
 
-## Step 4: Fix "Connection Timed Out"
+## Step 4: timeouts: find where packets disappear
 
-Timeout = packets are being dropped. Usually a firewall.
-
-```bash
-# On the SERVER: check firewall
-# Ubuntu (ufw)
-ufw status
-ufw allow 8080/tcp
-
-# RHEL (firewalld)
-firewall-cmd --list-all
-firewall-cmd --permanent --add-port=8080/tcp
-firewall-cmd --reload
-
-# Raw iptables
-iptables -L INPUT -n | grep 8080
-iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
-```
+A timeout means no answer came back at all. Find out whether the SYN even reaches the server. On the server:
 
 ```bash
-# Is the server's firewall blocking?
-# Test from the server itself:
-curl localhost:8080    # works = firewall is blocking external
-curl 10.0.1.50:8080   # still works = cloud security group issue
+sudo tcpdump -ni any 'tcp port 8080 and tcp[tcpflags] & tcp-syn != 0'
 ```
 
-Cloud servers (AWS/GCP/Azure/Vercel) also have security groups / VPC firewall rules outside the OS. Check those in the cloud console.
+Then connect from the client.
+
+| What tcpdump shows | Meaning |
+|---|---|
+| Nothing | Packets are dropped **before** the server: cloud security group / NACL, network firewall, wrong route, or wrong IP |
+| SYN arrives, no SYN-ACK goes out | Dropped **on** the server: host firewall (DROP), or an accept queue that's overflowing |
+| SYN arrives, SYN-ACK goes out, client still times out | The reply is lost on the way back: asymmetric routing, or a firewall on the return path |
+
+tcpdump sees incoming packets before the host firewall does, so a SYN that shows up in the capture can still be dropped by nftables/iptables afterwards.
+
+### Check the host firewall
+
+```bash
+sudo nft list ruleset | less               # nftables (default backend on current distros)
+sudo iptables -S INPUT                     # iptables / iptables-nft view
+sudo firewall-cmd --list-all               # RHEL family (firewalld)
+sudo ufw status verbose                    # Ubuntu (ufw)
+```
+
+Open the port with the tool that manages the host, so the rule survives a reboot:
+
+```bash
+sudo firewall-cmd --permanent --add-port=8080/tcp && sudo firewall-cmd --reload   # firewalld
+sudo ufw allow 8080/tcp                                                          # ufw
+```
+
+Avoid ad-hoc `iptables -I` rules on a host that runs firewalld or ufw. They aren't persistent and the manager can overwrite them on the next reload. More in [check firewall status](/blog/check-firewall-status-linux).
+
+### Check the cloud layer
+
+AWS security groups and NACLs, Azure NSGs and GCP firewall rules sit outside the VM. `nft list ruleset` can be empty and traffic still never arrives. If tcpdump on the server sees nothing, check these next.
+
+### Testing from the server itself proves less than you think
+
+`curl http://10.0.1.50:8080` run **on** 10.0.1.50 goes over the loopback interface. It skips the cloud firewall and usually most of the host firewall too. It tells you the app works, not that remote clients can reach it.
 
 ---
 
-## Step 5: Fix DNS Issues
+## Intermittent timeouts under load
+
+The service works when quiet and drops connections at peak. Check the accept queue:
 
 ```bash
-# Test DNS resolution
-nslookup api.example.com
-dig api.example.com
-
-# If DNS fails but IP works:
-curl http://api.example.com/health  # fails
-curl http://1.2.3.4/health          # works
-
-# Check DNS config
-cat /etc/resolv.conf
-
-# Flush DNS cache
-systemd-resolve --flush-caches
-# or
-service nscd restart
+ss -tln 'sport = :8080'
+# State   Recv-Q  Send-Q  Local Address:Port ...
+# LISTEN  129     128     0.0.0.0:8080
+nstat -az TcpExtListenOverflows TcpExtListenDrops
 ```
+
+On a listener, `Send-Q` is the backlog limit and `Recv-Q` is how many connections are waiting to be accepted. When Recv-Q reaches Send-Q and the overflow counters keep rising, the kernel is dropping new SYNs. Clients see timeouts, not refusals.
+
+The effective backlog is the **smaller** of the application's `listen()` backlog and `net.core.somaxconn`. Raising only the sysctl changes nothing if the app asks for 128:
+
+```bash
+echo 'net.core.somaxconn = 4096' | sudo tee /etc/sysctl.d/90-backlog.conf
+sudo sysctl --system
+# then raise the app's backlog too (e.g. NGINX: listen 8080 backlog=4096;) and restart it
+```
+
+Usually the real fix is that the app accepts too slowly (blocked workers, CPU saturation). The backlog only absorbs bursts.
+
+If the failures are on the *client* side, on outgoing connections, with `Cannot assign requested address`, that's ephemeral port exhaustion: see [TIME_WAIT explained](/blog/linux-time-wait-explained).
 
 ---
 
-## Step 6: Check from Both Sides
+## Quick checklist
 
-If you have access to the destination server:
-
-```bash
-# ON THE DESTINATION SERVER:
-
-# 1. Is the service listening?
-ss -tlnp | grep :8080
-
-# 2. Is the firewall blocking?
-iptables -L INPUT -n -v | grep :8080
-
-# 3. Are connections arriving?
-tcpdump -i any port 8080 -n
-# (run this, then trigger the connection from the client)
-# If no packets show: network/routing issue
-# If packets show but no response: app issue
-```
-
-`tcpdump` is definitive — if packets arrive at the server, the network is fine. If they don't, the problem is between the client and server.
+1. Reproduce with `nc -zv -w 3` and read the exact error.
+2. Client: `getent hosts` and `ip route get`.
+3. Refused: on the server, `ss -tlnp`, check the bind address, REJECT rules and fail2ban.
+4. Timed out: `tcpdump` on the server to see whether SYNs arrive, then the host firewall, then the cloud firewall.
+5. Only under load: accept queue overflows.
 
 ---
 
-## Real Examples
-
-### App deployed, clients get "connection refused"
-
-```bash
-# Server side
-ss -tlnp | grep :3000
-# LISTEN 0 128 127.0.0.1:3000 ...
-# ^^^^ bound to localhost only
-
-# Fix: in app config (Node.js example)
-# app.listen(3000, '0.0.0.0')  ← was: app.listen(3000)
-```
-
-### Works from server, times out from client
-
-```bash
-# From server: works
-curl localhost:8080
-
-# From client: times out
-# → Firewall blocking external access
-
-# On server (Ubuntu)
-ufw allow from 10.0.0.0/8 to any port 8080
-```
-
-### Intermittent timeouts under load
-
-```bash
-# Check connection states
-ss -s
-# TIME-WAIT: 14000 climbing → port exhaustion
-
-# Check backlog
-ss -tlnp | grep :8080
-# Recv-Q: 128 → accept backlog full, new connections dropped
-
-# Fix: increase backlog and reuse ports
-echo "net.ipv4.tcp_tw_reuse = 1" >> /etc/sysctl.conf
-echo "net.core.somaxconn = 65535" >> /etc/sysctl.conf
-sysctl -p
-```
-
----
-
-## Common Mistakes
-
-**Testing from the server itself and assuming external works the same.** `curl localhost:8080` succeeds but external connections get refused — the service is bound to 127.0.0.1.
-
-**Fixing the OS firewall but forgetting cloud security groups.** AWS security groups, GCP firewall rules, and Azure NSGs are separate from `iptables`/`firewalld`.
-
-**Not checking which interface the service is bound to.** `0.0.0.0` = all interfaces. `127.0.0.1` = localhost only. `10.0.1.50` = specific interface only.
-
----
-
-## Conclusion
-
-Read the error message carefully — it tells you where to start. `Connection refused` = service not running or wrong bind address. `Timed out` = firewall or routing. Use `tcpdump` when you need ground truth about whether packets are actually arriving.
-
----
-
-*Related: [Check Open Ports in Linux: ss vs netstat](/blog/check-open-ports-linux-ss-netstat-guide) — confirm what's actually listening. [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) — socket-level debugging.*
+*Related: [Test a TCP Connection](/blog/test-tcp-connection-linux) for nc, curl and /dev/tcp in detail. [SSH Connection Refused](/blog/ssh-connection-refused-linux-fix) for the SSH-specific version of this problem.*

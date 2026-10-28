@@ -1,254 +1,240 @@
 ---
-title: "Too Many Open Files Linux: Fix Guide"
+title: "Too Many Open Files on Linux: Why ulimit Didn't Fix It"
 date: "2026-04-22"
-excerpt: "Fix 'too many open files' errors on Linux — increase file descriptor limits for processes and system-wide, diagnose FD leaks, and configure permanent limits for production services."
+updated: "2026-10-28"
+excerpt: "Raised ulimit and still getting EMFILE? Find which limit is actually being hit, fix it for systemd, Docker and NGINX, and tell an FD leak from real load."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
-slug: "too-many-open-files-linux-fix"
 category: "linux"
 ---
 
-`Too many open files`. `EMFILE`. `Error 24`. Service starts throwing errors or refuses new connections. Here's how to diagnose and fix it — temporarily and permanently.
+It usually goes like this. An API that has run quietly for months starts returning errors right after a traffic spike. The log says `EMFILE: too many open files`. You SSH in, run `ulimit -n 65535`, restart the service with `systemctl restart`, and the errors stop.
+
+Twenty minutes later they're back. You run `ulimit -n` again and it still says `65535`. So the limit is raised… isn't it?
+
+It isn't. `ulimit` changed the limit for **your shell**, not for the service. On a modern Linux box there are at least three different limits that can produce this error, and the one you raised is usually not the one being hit.
+
+This guide is about finding the right one.
 
 ---
 
 ## TL;DR
 
 ```bash
-# Check current limits for a process
-cat /proc/<pid>/limits | grep "open files"
+PID=$(pgrep -o -x myapp)                       # oldest process named myapp
 
-# Check how many FDs a process has open
-ls /proc/<pid>/fd | wc -l
+grep "open files" /proc/$PID/limits            # the limit THIS process actually has
+ls /proc/$PID/fd | wc -l                       # how many FDs it has open right now
 
-# Increase system-wide soft limit temporarily
-ulimit -n 65535
+# systemd service? Raise it in the unit, not in limits.conf:
+systemctl edit myapp                           # add: [Service] LimitNOFILE=65535
+systemctl daemon-reload && systemctl restart myapp
 
-# Permanent fix in /etc/security/limits.conf
-echo "* soft nofile 65535" >> /etc/security/limits.conf
-echo "* hard nofile 65535" >> /etc/security/limits.conf
+# Can't restart yet? Raise it on the running process:
+prlimit --pid $PID --nofile=65535:65535
 ```
+
+If the FD count keeps climbing no matter how high the limit is, you have a **leak**. Raising the limit only moves the outage to later.
 
 ---
 
-## Understand the Limits
+## First: which limit did you hit?
 
-There are two layers of file descriptor limits:
+Read the exact error message. It tells you the layer.
 
-**1. Per-process limit** — how many FDs one process can have open
-```bash
-# Soft limit (enforced, can be raised up to hard limit by the process)
-# Hard limit (ceiling, only root can raise)
-ulimit -Sn   # soft limit for current shell
-ulimit -Hn   # hard limit for current shell
-cat /proc/<pid>/limits | grep "open files"
-```
+| Error | errno | Layer | Where the limit lives |
+|---|---|---|---|
+| `Too many open files` | `EMFILE` (24) | One process hit its own limit | `RLIMIT_NOFILE`, visible in `/proc/<pid>/limits` |
+| `Too many open files in system` | `ENFILE` (23) | The whole kernel ran out | `fs.file-max` |
+| `ulimit: open files: cannot modify limit: Operation not permitted` | `EPERM` | You tried to go above the hard limit | hard limit, capped by `fs.nr_open` |
 
-**2. System-wide limit** — total FDs across all processes
-```bash
-cat /proc/sys/fs/file-max          # total system limit
-cat /proc/sys/fs/file-nr           # current open / available / max
-```
+How it shows up in common software:
 
-The error almost always comes from the per-process limit (default 1024), not the system-wide limit.
+- NGINX: `accept4() failed (24: Too many open files)`
+- Java: `java.io.IOException: Too many open files`
+- Node.js: `Error: EMFILE: too many open files`
+- Python: `OSError: [Errno 24] Too many open files`
+
+All of these are **errno 24, a per-process limit**. In practice `ENFILE` is rare on modern kernels because `fs.file-max` is sized from RAM and is usually very large. If you see the number 24, stop looking at `sysctl`.
 
 ---
 
-## Diagnose: Is it a Leak or Just High Load?
+## Diagnose in 60 seconds
+
+Never trust `ulimit -n` in your own shell. Ask the process:
 
 ```bash
-# Count FDs for a specific process
-ls /proc/<pid>/fd | wc -l
+PID=$(pgrep -o -x myapp)
 
-# Watch if it grows over time
-watch -n 5 'ls /proc/<pid>/fd | wc -l'
+grep "open files" /proc/$PID/limits
+# Limit                     Soft Limit           Hard Limit           Units
+# Max open files            1024                 524288               files
+
+ls /proc/$PID/fd | wc -l
+# 1021
 ```
 
-- **Stable high count** — the application has many legitimate connections (websocket server, database with many connections). Increase the limit.
-- **Growing count** — file descriptor leak. The app opens files/sockets but never closes them. Increasing the limit only delays the problem.
+Soft limit 1024, 1021 in use: that's your problem, confirmed.
+
+> **Don't count with `lsof -p`.** It also lists memory-mapped libraries, the current directory and the binary itself, none of which count toward the limit. `/proc/<pid>/fd` is the real number.
+
+For the system-wide picture:
 
 ```bash
-# See what types of FDs are leaking
-ls -la /proc/<pid>/fd | awk '{print $NF}' | grep -oE '\w+$' | sort | uniq -c | sort -rn
-
-# Most common types:
-# socket:[12345]  = network connections
-# /var/log/...    = log files being opened but not closed
-# pipe:[12345]    = pipes
+cat /proc/sys/fs/file-nr
+# 9824    0    9223372036854775807
+# allocated  free  max
 ```
+
+If the first number is nowhere near the third, the system limit is not your problem.
 
 ---
 
-## Fix: Temporary (Current Session)
+## Why `ulimit` and `limits.conf` didn't work
 
-```bash
-ulimit -n 65535
-# Takes effect immediately for the current shell and its children
-# Lost on logout/reboot
-```
+This is where most people lose an hour.
 
----
+A process gets its limits **from whoever started it**, at the moment it starts.
 
-## Fix: Permanent — System-wide (limits.conf)
+- `ulimit -n` changes the current shell and anything you start *from that shell*. A service started by systemd never sees it.
+- `/etc/security/limits.conf` is applied by `pam_limits` when a user **logs in** (SSH, `su`, console). systemd services don't log in, so this file is **ignored for them**.
+- A `*` line in `limits.conf` does **not** match root. Root needs its own line.
 
-```bash
-# /etc/security/limits.conf
-# Format: <domain> <type> <item> <value>
-
-# For a specific user
-echo "appuser soft nofile 65535" >> /etc/security/limits.conf
-echo "appuser hard nofile 65535" >> /etc/security/limits.conf
-
-# For all users (wildcard)
-echo "* soft nofile 65535" >> /etc/security/limits.conf
-echo "* hard nofile 65535" >> /etc/security/limits.conf
-
-# For root specifically (wildcard * doesn't always cover root)
-echo "root soft nofile 65535" >> /etc/security/limits.conf
-echo "root hard nofile 65535" >> /etc/security/limits.conf
-```
-
-**Requires logout and re-login** to take effect for existing sessions. Services need a restart.
+So the fix depends entirely on **how the process is started**.
 
 ---
 
-## Fix: systemd Services
+## Fix it where the process is started
 
-For services managed by systemd, `limits.conf` often doesn't apply. Use the unit file instead:
+### systemd service (most cases)
 
 ```bash
-# Option 1: edit the unit file directly
-systemctl edit myapp    # creates override file
+systemctl edit myapp
+```
 
-# Add to [Service] section:
+```ini
 [Service]
 LimitNOFILE=65535
 ```
 
-Or create the override file manually:
-
 ```bash
-mkdir -p /etc/systemd/system/myapp.service.d/
-cat > /etc/systemd/system/myapp.service.d/limits.conf << EOF
-[Service]
-LimitNOFILE=65535
-EOF
-
 systemctl daemon-reload
 systemctl restart myapp
 
-# Verify it applied
-cat /proc/$(pgrep -x myapp | head -1)/limits | grep "open files"
+grep "open files" /proc/$(pgrep -o -x myapp)/limits    # verify, don't assume
 ```
 
----
+`daemon-reload` without `restart` does nothing for a running process. Limits are applied only when the process starts.
 
-## Fix: Nginx
+On systemd 240 and later the default is soft `1024`, hard `524288`. Many applications raise their own soft limit up to the hard limit at startup, which is why some services never hit this problem and others do.
+
+### Docker container
+
+A container inherits its limit from the Docker daemon unless you set it:
+
+```bash
+docker run --ulimit nofile=65535:65535 myimage
+```
+
+```yaml
+# docker-compose.yml
+services:
+  app:
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+```
+
+Check from inside: `docker exec <container> sh -c 'ulimit -n'`.
+
+### NGINX
+
+NGINX can raise the limit for its workers itself, because the master process runs as root:
 
 ```nginx
-# /etc/nginx/nginx.conf
-worker_processes auto;
-worker_rlimit_nofile 65535;   # ← add this
+worker_rlimit_nofile 65535;
 
 events {
-    worker_connections 4096;
+    worker_connections 16384;
 }
 ```
+
+Each proxied request uses **two** FDs, one for the client and one for the upstream. So `worker_connections` × 2 must fit under `worker_rlimit_nofile`.
 
 ```bash
 nginx -t && systemctl reload nginx
 ```
 
----
+### Interactive / cron / legacy init scripts
 
-## Fix: System-Wide fs.file-max
-
-If the system-wide limit is the problem (rare on modern systems):
+This is the only case where `/etc/security/limits.conf`, or a file in `limits.d/`, is the right place:
 
 ```bash
-# Temporary
-echo 2097152 > /proc/sys/fs/file-max
-
-# Permanent
-echo "fs.file-max = 2097152" >> /etc/sysctl.conf
-sysctl -p
+# /etc/security/limits.d/90-appuser.conf
+appuser  soft  nofile  65535
+appuser  hard  nofile  65535
 ```
+
+The user must log out and back in. An existing SSH session keeps the old limit.
 
 ---
 
-## Real Examples
+## Emergency fix without a restart
 
-### Node.js app: EMFILE on heavy load
+Production is down and you can't restart right now? `prlimit` (from util-linux) changes the limit of a **running** process:
 
 ```bash
-# Check current limit
-cat /proc/$(pgrep -x node)/limits | grep "open files"
-# Max open files            1024                 1024
-
-# Check current usage
-ls /proc/$(pgrep -x node)/fd | wc -l
-# 1019  ← approaching limit!
-
-# Fix for systemd service
-systemctl edit myapp
-# Add:
-# [Service]
-# LimitNOFILE=65535
-
-systemctl daemon-reload && systemctl restart myapp
+prlimit --pid $PID --nofile=65535:65535
+grep "open files" /proc/$PID/limits
 ```
 
-### PostgreSQL: "could not open file"
+This lasts only until the process restarts. Put the permanent fix in the unit file right after.
+
+---
+
+## Leak or real load?
+
+Raising the limit is the right fix only if the FD count **levels off**. Watch it:
 
 ```bash
-# Default PostgreSQL limit is too low for max_connections > 200
-# Each connection uses ~3 FDs
-
-# Calculate needed limit
-# max_connections * 3 + overhead (200 * 3 + 500 = 1100 minimum)
-# Set to 65535 to be safe
-
-# /etc/systemd/system/postgresql.service.d/limits.conf
-[Service]
-LimitNOFILE=65535
+watch -n 10 "ls /proc/$PID/fd | wc -l"
 ```
 
-### File descriptor leak investigation
+- **Goes up with traffic, comes back down when traffic drops:** real load. Raise the limit.
+- **Only ever goes up:** leak. The new limit just sets the time of the next outage.
+
+To find what is leaking, group open FDs by type:
 
 ```bash
-# App has been running 2 hours, FD count keeps growing
-PID=4521
-
-# Snapshot of open FDs
-ls -la /proc/$PID/fd > /tmp/fds_before.txt
-sleep 300
-ls -la /proc/$PID/fd > /tmp/fds_after.txt
-
-# What new FDs appeared?
-diff /tmp/fds_before.txt /tmp/fds_after.txt | grep "^>"
-# > lrwxrwxrwx ... /var/log/app/request.log
-# > socket:[12345]
-# → log files are being opened but never closed
+ls -l /proc/$PID/fd | awk 'NR>1 {print $NF}' | sed -E 's/\[[0-9]+\]//' \
+  | sort | uniq -c | sort -rn | head
+#  14200 socket:
+#     38 /var/log/myapp/app.log
+#     12 pipe:
+#      6 anon_inode:[eventpoll]
 ```
 
----
+Mostly `socket:`? Check where the connections go and what state they are in:
 
-## Common Mistakes
+```bash
+ss -tanp | grep "pid=$PID," | awk '{print $1, $5}' | sort | uniq -c | sort -rn | head
+```
 
-**Setting `ulimit` in the shell and wondering why the service isn't affected.** The service doesn't inherit the shell's ulimit — it has its own limit set at start time. Use the systemd unit file or `/etc/security/limits.conf` and restart.
+Thousands of `CLOSE-WAIT` to the same destination is the classic pattern. The remote side closed the connection, and your application never called `close()`. That is a bug in the code (often an HTTP client or DB connection that isn't returned to the pool), not a tuning problem.
 
-**Only setting the soft limit.** The process can only raise its own FD limit up to the hard limit. If the hard limit is still 1024, the soft limit increase is useless once the app tries to raise it dynamically.
-
-**Increasing limits instead of fixing a FD leak.** If the FD count grows without bound, increasing the limit buys time but the service will eventually hit the new limit too. Fix the leak.
-
-**Not running `daemon-reload` after changing a systemd override.** New limits don't apply without reload + restart.
+The same log file showing up many times means the app opens it again and again without closing it. That is also a bug.
 
 ---
 
-## Conclusion
+## Quick checklist
 
-Check the per-process limit first (`/proc/<pid>/limits`), then current usage (`ls /proc/<pid>/fd | wc -l`). For systemd services: add `LimitNOFILE=65535` to the unit override. For non-systemd: use `/etc/security/limits.conf`. If the count is growing, fix the FD leak — don't just raise the ceiling.
+1. Read the error: errno 24 (per-process) or 23 (system).
+2. Check `/proc/<pid>/limits` and `/proc/<pid>/fd`, not your shell.
+3. Fix it where the process starts: systemd unit, Docker, NGINX config, or `limits.conf` only for login sessions.
+4. Restart, then verify in `/proc` again.
+5. Watch the FD count for a while. If it keeps growing, find the leak.
 
 ---
 
-*Related: [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) — `lsof -p <pid>` shows exactly which files are open. [Linux Check Running Services with systemctl](/blog/linux-check-running-services-systemctl) — check service health after applying limits.*
+*Related: [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) for digging into what a process has open. [Linux TIME_WAIT Explained](/blog/linux-time-wait-explained) if the sockets you're seeing are on the other side of the connection.*

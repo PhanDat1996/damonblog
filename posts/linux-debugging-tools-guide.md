@@ -1,418 +1,283 @@
 ---
-title: "Top Linux Debugging Tools Every Engineer Should Know"
+title: "Linux Debugging Tools: Which One to Use for Each Symptom"
 date: "2026-04-21"
-excerpt: "The essential Linux debugging tools for production troubleshooting — ps, top, htop, lsof, strace, iotop, vmstat, dmesg, and more — with real use cases and a comparison table."
+updated: "2026-10-28"
+excerpt: "Slow, hung, crashing or dropping connections? Map each Linux symptom to the right tool: top, vmstat, iostat, dmesg, lsof, ss, strace, perf and tcpdump."
 tags: ["linux", "debugging", "troubleshooting", "monitoring", "infrastructure"]
 featured: false
-slug: "linux-debugging-tools-guide"
 category: "linux"
 ---
 
-## TL;DR
+Knowing that `strace`, `perf` and `tcpdump` exist doesn't help much at 03:00. What helps is knowing which one answers the question in front of you, and which ones will waste ten minutes or make things worse. A high load average with an idle CPU needs different tools than a process that dies silently, and both differ from "the app says it sent the request, the server says it never arrived".
 
-- **`ps` / `top` / `htop`** — process monitoring (start here for any incident)
-- **`lsof`** — what files and sockets does a process have open?
-- **`strace`** — what system calls is a process making?
-- **`ss` / `netstat`** — what ports are open? what connections exist?
-- **`iotop`** — which process is hammering disk I/O?
-- **`vmstat`** — CPU, memory, swap, and I/O at a system level
-- **`dmesg`** — kernel messages: disk errors, OOM kills, driver issues
-- **`tcpdump`** — capture network traffic at the packet level
-- **`perf`** — CPU profiling and performance analysis
-- Master these 10 tools and you can diagnose the vast majority of Linux production issues
+This guide is organized by **symptom**. Each section gives the first command to run, what the output means, and where to go next.
 
 ---
 
-## Introduction: The Right Tool for the Right Problem
+## The map
 
-A production incident is not the time to learn a new tool. **Linux debugging tools** work as a layered system — you start broad with `top` or `ps`, narrow down to a process with `lsof` and `strace`, verify network state with `ss`, and check the kernel with `dmesg`.
+| Symptom | Start with | Then |
+|---|---|---|
+| Server slow, unclear why | `uptime`, `top`, `vmstat 1` | `iostat -xz 1`, `pidstat` |
+| High CPU | `top` (then `H` for threads) | `perf top -p PID`, `strace -c -w` |
+| High load, CPU mostly idle | `vmstat 1` (`b`, `wa`), `ps` for D state | `iostat -xz 1`, `dmesg`, `/proc/PID/stack` |
+| Memory pressure, OOM kills | `free -h`, `vmstat 1` (`si`/`so`) | `journalctl -k`, `ps --sort=-rss` |
+| Process died with no log | `journalctl -u`, `journalctl -k` | `coredumpctl`, `dmesg` |
+| Process hung | `ps -o stat`, `strace -p` | `lsof`, `ss`, `gdb`/runtime stack dump |
+| Can't connect / connection errors | `ss -ltnp`, `ss -tanp` | `tcpdump`, `strace -e trace=%network` |
+| Disk full / I/O errors | `df -h`, `df -i`, `dmesg` | `lsof +L1`, `du`, `smartctl` |
 
-This guide covers the tools that matter most in real incidents, what each one is for, and how to use them together.
+Rule of thumb: **snapshot tools first** (`top`, `vmstat`, `ss`, `lsof`, `dmesg` cost almost nothing), **tracing tools second** (`strace`, `tcpdump`, `perf`), and only once you know what to look for.
 
 ---
 
-## Tool 1: ps — Process Snapshot
-
-**What it does:** Takes a snapshot of the process table. Shows all running processes with CPU, memory, state, and parent PID.
-
-**When to use:** First tool in any incident. Is the process running? What state is it in? Who owns it?
+## "The server is slow": the first 60 seconds
 
 ```bash
-# All processes sorted by CPU
-ps aux --sort=-%cpu | head -10
-
-# Full command with parent PID
-ps -ef | grep myapp
-
-# Custom columns
-ps -eo pid,ppid,user,%cpu,%mem,stat,comm --sort=-%cpu
+uptime              # load averages: 1, 5, 15 minutes
+vmstat 1 5          # CPU, run queue, blocked tasks, swap, I/O
+top -bn1 | head -20 # who's using CPU and memory
+dmesg -T | tail -20 # anything alarming from the kernel recently
 ```
 
-**Key insight:** The `STAT` column tells you more than just whether the process is alive. `D` state means I/O blocked (cannot be killed). `Z` means zombie (already dead, parent not reaping).
+### `vmstat`: one screen, most of the picture
 
-> *See also: [ps Command Linux: The Engineer's Troubleshooting Guide](/blog/ps-command-linux-troubleshooting-guide)*
+```bash
+vmstat 1 5
+```
+
+```
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0      0 812456  98196 4123456    0    0     5    48  234  456 12  3 84  1  0
+ 2  6      0 790112  98200 4120012    0    0  8412   920 1840 2210  4  3 21 72  0
+ 1  7      0 788004  98200 4119980    0    0  9120  1004 1902 2304  3  2 20 75  0
+```
+
+**Ignore the first line.** It's the average since boot. The following lines are per interval.
+
+| Column | Meaning | Worry when |
+|---|---|---|
+| `r` | Tasks running or waiting for a CPU | Consistently above the CPU count |
+| `b` | Tasks blocked in uninterruptible sleep (D state, usually I/O) | Non-zero for more than a moment |
+| `si` / `so` | Memory swapped in / out per second | `so` non-zero and sustained = memory pressure |
+| `bi` / `bo` | Blocks read / written per second | Compare with what the disk can do |
+| `us` / `sy` | CPU in user code / in the kernel | `sy` high = syscall-heavy or kernel work |
+| `wa` | CPU idle while waiting for I/O | High together with `b` |
+| `st` | CPU stolen by the hypervisor | Non-zero on VMs = noisy neighbors or undersized instance |
+
+The sample above is a disk problem: 6 to 7 tasks blocked, `wa` above 70%, CPU otherwise idle.
+
+### Load average is not CPU usage
+
+On Linux, the load average counts tasks **running, runnable, and in uninterruptible sleep (D state)**. A load of 30 on an 8-core machine with 80% idle CPU means many tasks are stuck waiting on I/O (or a hung NFS mount), not that the CPU is overloaded. `vmstat`'s `b` column and `ps` for D-state processes confirm it:
+
+```bash
+ps -eo pid,stat,wchan:32,comm | awk '$2 ~ /^D/'
+```
+
+The [process states guide](/blog/linux-process-states-guide) explains D state, and the [performance troubleshooting guide](/blog/linux-performance-troubleshooting-guide) goes through the full method.
 
 ---
 
-## Tool 2: top — Live Process Monitor
-
-**What it does:** Auto-refreshing view of CPU, memory, load average, and processes sorted by resource usage.
-
-**When to use:** When you need to watch what is happening over time, not just at a single moment.
+## Processes: `ps`, `top`, `htop`, `pidstat`
 
 ```bash
-top           # launch
-# Inside top:
-# 1 = per-core CPU
-# M = sort by memory
-# P = sort by CPU
-# k = kill process
-# o = filter (%CPU>5.0)
+ps -eo pid,ppid,user,stat,%cpu,%mem,rss,etime,cmd --sort=-%cpu | head
+ps -eo pid,stat,rss,cmd --sort=-rss | head        # biggest memory users (RSS in KiB)
 ```
 
-**Key insight:** Load average in the top-right. If load > number of CPU cores, the system is overloaded. High load + low `%cpu us` + high `%wa` = I/O bottleneck, not a CPU problem.
+The `STAT` column: `R` running, `S` sleeping (normal), `D` uninterruptible sleep (usually I/O, can't be killed until it returns), `Z` zombie (exited, parent hasn't collected it; uses no memory), `T` stopped. See [ps for troubleshooting](/blog/ps-command-linux-troubleshooting).
 
-> *See also: [top Command Linux: Real-World Guide](/blog/top-command-linux-guide)*
+In `top`:
 
----
+| Key | Does |
+|---|---|
+| `1` | Per-CPU rows (spot one core pinned at 100%) |
+| `P` / `M` | Sort by CPU / memory |
+| `H` | Show threads instead of processes |
+| `c` | Full command line |
+| `o` | Add a filter, e.g. `%CPU>5.0` or `COMMAND=java` |
 
-## Tool 3: htop — Better top
+`top -H -p PID` shows the threads of one process, which is how you find the single hot thread in a Java or Go service. The [top guide](/blog/top-command-linux-guide) covers the header fields; [htop vs top](/blog/htop-vs-top-linux) covers when htop is nicer (tree view `F5`, filter `F4`, search `/`).
 
-**What it does:** Same as `top` but with visual CPU bars, mouse support, search, and a better kill UI.
-
-**When to use:** On managed servers where you have installed it. Faster to navigate than `top` in complex situations.
-
-```bash
-apt install htop
-htop
-# / = search, F4 = filter, F5 = tree view, F9 = kill menu
-```
-
-> *See also: [htop vs top: Which Should You Use?](/blog/htop-vs-top-linux-comparison)*
-
----
-
-## Tool 4: lsof — Open Files and Sockets
-
-**What it does:** Lists every file, socket, pipe, and device a process has open. "Everything is a file" — this tool makes it literal.
-
-**When to use:**
-- What network connections does this process have?
-- What files is it reading or writing?
-- Which process has a specific port open?
-- Who has a file locked?
+`pidstat` (package `sysstat`) records per-process numbers over time, which `top` can't:
 
 ```bash
-# All open files for a process
-lsof -p 1234
-
-# Network connections for a process
-lsof -p 1234 -i
-
-# Who is using port 8080?
-lsof -i :8080
-
-# What files does nginx have open?
-lsof -c nginx
-
-# Who has a specific file open?
-lsof /var/log/app.log
-
-# Count open FDs for a process (leak detection)
-ls /proc/1234/fd | wc -l
-```
-
-**Key insight:** FD (file descriptor) count climbing over time = file descriptor leak. Default limit is 1024. Check with `cat /proc/<pid>/limits | grep "open files"`.
-
----
-
-## Tool 5: strace — System Call Tracer
-
-**What it does:** Intercepts every system call a process makes and logs it. Shows exactly what a process is doing at the kernel boundary.
-
-**When to use:**
-- Process is hung and logs say nothing
-- Application fails to start with a cryptic error
-- Need to find what files an app is trying to open
-- Need to verify what network connections are being attempted
-
-```bash
-# Attach to running process
-strace -p 1234
-
-# Filter to file operations only
-strace -e trace=file -p 1234
-
-# Summary mode (low overhead)
-strace -c -p 1234   # Ctrl+C after 10-30 seconds
-
-# Find permission errors
-strace -e trace=file -p 1234 2>&1 | grep "= -1"
-```
-
-**Key insight:** Always use `-e trace=` to filter in production. Unfiltered strace on a busy process can slow it by 50%.
-
-> *See also: [strace Tutorial: Debug Linux Processes Like a Pro](/blog/strace-tutorial-linux-debugging)*
-
----
-
-## Tool 6: ss — Socket Statistics
-
-**What it does:** Shows all network sockets — listening ports, active connections, connection state. Modern replacement for `netstat`.
-
-**When to use:**
-- Is the service actually listening on the expected port?
-- What is bound to all interfaces vs localhost?
-- How many connections does this service have?
-
-```bash
-# Listening TCP ports with process
-ss -tlnp
-
-# All established connections
-ss -tnp state established
-
-# Specific port
-ss -tlnp | grep :8080
-
-# Connection count to a service
-ss -tnp state established dport :443 | wc -l
-
-# Socket summary
-ss -s
-```
-
-> *See also: [Check Open Ports in Linux: ss vs netstat Explained](/blog/check-open-ports-linux-ss-netstat)*
-
----
-
-## Tool 7: iotop — I/O Monitor per Process
-
-**What it does:** Shows disk I/O usage per process in real time. Like `top` but for disk instead of CPU.
-
-**When to use:**
-- Disk utilization is high but you do not know which process
-- Application is slow and you suspect I/O
-- After seeing high `%wa` in `top`
-
-```bash
-# Install
-apt install iotop
-dnf install iotop
-
-# Show only processes doing I/O
-iotop -o
-
-# Non-interactive, one snapshot
-iotop -b -n 1 -o
-
-# Monitor a specific PID
-iotop -p 1234
-```
-
-**Key insight:** High `%wa` in `top` means I/O wait. `iotop -o` immediately shows which process is responsible.
-
----
-
-## Tool 8: vmstat — Virtual Memory Statistics
-
-**What it does:** Reports system-level CPU, memory, swap, and I/O statistics on a per-interval basis.
-
-**When to use:**
-- Is the system swapping? (check `si`/`so` columns)
-- How many context switches per second? (check `cs`)
-- Overall CPU breakdown without opening top
-
-```bash
-# Update every 2 seconds
-vmstat 2
-
-# With timestamps
-vmstat 2 -t
-
-# Output:
-# procs  --------memory--------  ---swap--  ---io---  --system--  ------cpu-----
-#  r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs  us sy id wa
-#  2  0      0 8142456 234196 4123456   0    0     0    48  234  456  12  3 84  1
-```
-
-Key columns:
-- **`r`** — processes waiting for CPU (runqueue)
-- **`b`** — processes in uninterruptible sleep (D state count)
-- **`si`/`so`** — swap in/out (non-zero = memory pressure)
-- **`wa`** — CPU wait for I/O (%)
-- **`cs`** — context switches per second
-
-**Key insight:** `si`/`so` both non-zero = system is actively swapping. This is a memory problem that will degrade performance significantly.
-
----
-
-## Tool 9: dmesg — Kernel Ring Buffer
-
-**What it does:** Shows messages from the kernel — hardware errors, OOM kills, driver issues, filesystem errors.
-
-**When to use:**
-- A process was killed unexpectedly (check for OOM killer)
-- Disk errors or filesystem corruption
-- Hardware problems (NIC errors, disk controller issues)
-- System rebooted unexpectedly
-
-```bash
-# Recent kernel messages
-dmesg | tail -50
-
-# With human-readable timestamps
-dmesg -T | tail -50
-
-# Filter to errors
-dmesg -l err,crit,alert,emerg
-
-# Watch live
-dmesg -w
-
-# Check for OOM kills
-dmesg | grep -i "oom\|killed process\|out of memory"
-
-# Check for disk errors
-dmesg | grep -iE "error|fail|I/O error|ata[0-9]"
-
-# Check for filesystem errors
-dmesg | grep -iE "ext4|xfs|btrfs|corrupt"
-```
-
-**Key insight:** If a process disappeared without a log entry, check `dmesg` for OOM killer activity. The kernel logs exactly which process it killed and why.
-
-```bash
-# Find OOM kills
-dmesg | grep -A5 "oom_kill_process\|Killed process"
-# Shows: which process, how much memory it had, why the kernel killed it
+pidstat -u -r -d 1 10       # CPU, memory, disk I/O per process, every second for 10s
+pidstat -t -p 4521 1        # per-thread CPU for one process
 ```
 
 ---
 
-## Tool 10: tcpdump — Packet Capture
-
-**What it does:** Captures network packets at the interface level. The ground truth of what is actually on the wire.
-
-**When to use:**
-- Application says it sent a request but the server denies receiving it
-- Debugging protocol-level issues
-- Verifying that firewall rules are working correctly
-- Diagnosing TLS/SSL handshake failures
+## Disk and I/O: `iostat`, `iotop`, `dmesg`
 
 ```bash
-# Capture traffic on port 8080
-tcpdump -i any -n port 8080
-
-# Capture and write to file (analyze later with Wireshark)
-tcpdump -i eth0 -w /tmp/capture.pcap port 8080
-
-# Capture traffic to/from a specific host
-tcpdump -i any host 10.0.1.50
-
-# Capture HTTP traffic (show content)
-tcpdump -i any -A port 80 | head -100
-
-# Just connection attempts (SYN packets)
-tcpdump -i any 'tcp[tcpflags] & tcp-syn != 0'
+iostat -xz 1
 ```
 
-**Key insight:** If `ss` shows established connections but the application is not receiving data, `tcpdump` shows whether packets are actually arriving at the interface.
+```
+Device   r/s     w/s    rkB/s    wkB/s  r_await  w_await  aqu-sz  %util
+nvme0n1  12.0   410.0   96.0   18420.0    0.35    48.20    19.8   99.6
+(columns trimmed; sysstat prints more)
+```
+
+Focus on `r_await`/`w_await` (average milliseconds per I/O, including queueing) and `aqu-sz` (average queue depth). `%util` near 100% on a single HDD means saturated, but on SSDs and NVMe, which serve many requests in parallel, `%util` alone can't tell you that. Latency (`await`) going up is the real signal. More in [disk I/O with iostat](/blog/linux-check-disk-io-iostat).
+
+Which process is doing it:
+
+```bash
+sudo iotop -o          # only processes currently doing I/O
+pidstat -d 1           # same idea, from sysstat
+```
+
+On kernels 5.14 and later, task delay accounting is off by default, and iotop warns that it can't show the `IO%`/`SWAPIN` columns. Enable it with `sudo sysctl kernel.task_delayacct=1` while you investigate, or use `pidstat -d`, which doesn't need it.
+
+Storage errors show up in the kernel log, not in iostat:
+
+```bash
+sudo dmesg -T --level=err,warn | tail -30
+journalctl -k -b --no-pager | grep -iE "i/o error|blk_update_request|EXT4-fs error|XFS .*error|Remounting filesystem read-only"
+```
+
+`dmesg` may need `sudo` (`kernel.dmesg_restrict=1` on many distributions). `dmesg -T` timestamps can drift after suspend/resume; `journalctl -k` gives exact times.
 
 ---
 
-## Tool Comparison Table
+## Memory and the OOM killer
 
-| Tool | Primary Use | Overhead | Requires Install |
+```bash
+free -h
+journalctl -k --since "1 hour ago" | grep -iE "out of memory|oom-kill|killed process"
+```
+
+```
+Out of memory: Killed process 4521 (java) total-vm:8123456kB, anon-rss:6234112kB, file-rss:0kB, shmem-rss:0kB, UID:1001 pgtables:12800kB oom_score_adj:0
+```
+
+`Memory cgroup out of memory` instead means a container or a systemd unit hit **its own** limit, even if the host has free RAM. In `free`, look at `available`, not `free`: page cache is reclaimable and counts as available. Leak vs. legitimate growth is covered in [memory leak troubleshooting](/blog/linux-memory-leak-troubleshooting).
+
+---
+
+## A process that dies or hangs
+
+**It died.** Check the service log and the kernel log at the same second:
+
+```bash
+journalctl -u myapp -b -n 50 --no-pager
+journalctl -k -b | grep -E "segfault|Killed process"
+coredumpctl list myapp          # if systemd-coredump is installed and the crash dumped core
+```
+
+`segfault at 0 ... error 4` is a null-pointer read in the program; `Killed process` is the OOM killer. `coredumpctl info` / `coredumpctl gdb` opens the dump.
+
+**It hangs.** First its state, then what it's waiting on:
+
+```bash
+ps -o pid,stat,wchan:32,cmd -p 4521
+sudo strace -f -tt -T -yy -p 4521       # which syscall doesn't return, on which FD
+sudo cat /proc/4521/stack               # kernel stack, for D-state processes
+```
+
+For an application-level stack: `jstack 4521` (Java), `py-spy dump --pid 4521` (Python), or for native code:
+
+```bash
+sudo gdb -p 4521 -batch -ex "thread apply all bt"
+```
+
+`gdb` **pauses** the process while it's attached. In batch mode that's a moment, but don't leave an interactive gdb session sitting on a production process. `gcore 4521` writes a core file you can examine elsewhere.
+
+---
+
+## Files and sockets: `lsof` and `ss`
+
+```bash
+sudo lsof -nP -p 4521                 # everything the process has open
+sudo lsof -nP -a -p 4521 -i           # its network sockets (-a = AND; without it lsof ORs)
+sudo lsof -nP +L1                     # deleted files still open (disk full, du disagrees)
+ls /proc/4521/fd | wc -l              # real FD count, for leak hunting
+
+ss -ltnp                              # listening TCP sockets with process
+ss -tanp | grep "pid=4521,"           # all its connections with state
+ss -tn state close-wait               # connections the app never closed
+ss -s                                 # totals per state
+```
+
+`strace`, `lsof` and `ss` work best together. The [strace, lsof and ss guide](/blog/strace-lsof-ss-debugging) walks through connection leaks, deleted-but-open files and hung requests with all three. For ports specifically, see [check open ports](/blog/check-open-ports-linux).
+
+---
+
+## System calls: `strace`
+
+```bash
+sudo strace -f -tt -T -yy -p 4521 -o /tmp/trace.txt      # short traces, to a file
+sudo strace -c -w -f -p 4521                             # wall-clock time per syscall; Ctrl+C
+strace -f -e trace=%file ./myapp 2>&1 | grep -E "= -1 E" # why won't it start?
+```
+
+The cost: strace stops the process on **every** syscall, and that stays true with `-c` or `-e trace=` filters when you attach with `-p`. On a busy service, keep it short. The [strace tutorial](/blog/strace-tutorial-linux) covers reading the output and the overhead in detail.
+
+---
+
+## CPU profiling: `perf`
+
+When CPU is high and strace shows few syscalls, the time is in user-space code. `perf` samples where:
+
+```bash
+sudo perf top -p 4521                                 # live hottest functions
+sudo perf record -F 99 -g -p 4521 -- sleep 30         # 30s sample with call graphs
+sudo perf report --stdio | head -50
+```
+
+Sampling at 99 Hz has low overhead, unlike tracing. Without debug symbols you'll see addresses instead of function names, and JIT runtimes (Java, Node) need extra setup to map their code. `perf trace` is also a much lower-overhead alternative to strace for syscall tracing.
+
+---
+
+## Network packets: `tcpdump`
+
+Use it when two sides disagree about what was sent, or to see whether packets arrive at all.
+
+```bash
+sudo tcpdump -i any -nn port 5432 -c 50                       # 50 packets to/from 5432
+sudo tcpdump -i any -nn 'tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn'   # new connection attempts only
+sudo tcpdump -i eth0 -nn -w /tmp/cap.pcap host 10.0.2.15 and port 443    # save for Wireshark
+```
+
+- `-nn` skips DNS and port-name lookups (faster, and avoids generating DNS traffic of its own).
+- `tcp[tcpflags] & tcp-syn != 0` matches SYN **and** SYN-ACK. The filter above matches only the initial SYN.
+- SYNs leaving with no SYN-ACK back = filtered or unreachable. A reset (`Flags [R.]`) back = nothing listening.
+- HTTPS payloads are encrypted, so `-A` won't show you content on port 443. Capture to a file and look at the TLS handshake in Wireshark instead.
+- Always filter on busy interfaces and use `-c` or a time limit. An unfiltered capture can fill a disk quickly.
+
+---
+
+## Quick reference
+
+| Tool | Answers | Overhead | Package |
 |---|---|---|---|
-| `ps` | Process snapshot | None | No |
-| `top` | Live process monitor | Negligible | No |
-| `htop` | Better top | Negligible | Yes |
-| `lsof` | Open files/sockets | Low | Usually no |
-| `strace` | System call trace | **High** | Usually no |
-| `ss` | Network sockets | None | No |
-| `iotop` | Disk I/O per process | Low | Yes |
-| `vmstat` | System-level stats | None | No |
-| `dmesg` | Kernel messages | None | No |
-| `tcpdump` | Packet capture | Low-Medium | Usually no |
+| `uptime`, `top`, `ps` | Load, top processes, states | Negligible | procps (installed) |
+| `htop` | Interactive process view | Negligible | htop |
+| `vmstat` | CPU, run queue, blocked, swap, I/O | Negligible | procps |
+| `iostat`, `pidstat` | Per-disk latency; per-process CPU/mem/I/O | Negligible | sysstat |
+| `iotop` | Per-process disk I/O | Low | iotop |
+| `dmesg`, `journalctl -k` | Kernel: OOM, disk, driver errors | None | util-linux, systemd |
+| `lsof` | Open files and sockets | Low | lsof |
+| `ss` | Sockets, states, queues | Negligible | iproute2 |
+| `strace` | Syscalls of one process | **High** on busy processes | strace |
+| `perf` | Where CPU time goes | Low (sampling) | linux-tools / perf |
+| `tcpdump` | Packets on the wire | Low to medium; filter it | tcpdump |
+| `gdb` | Stack of a native process | Pauses the process while attached | gdb |
 
 ---
 
-## Debugging Workflow: Which Tool When
+## Checklist when you don't know where to start
 
-```
-Service is slow or down
-│
-├─ Is the process running?
-│   ps aux | grep service
-│   → Not running: check systemctl status, journalctl
-│   → Running: continue
-│
-├─ What state is the process in? (STAT column)
-│   ps -p <pid> -o stat
-│   → D state: I/O problem → check iotop, dmesg
-│   → Z state: zombie → check parent process
-│   → R state: high CPU → use top, strace -c
-│
-├─ Is it consuming resources?
-│   top (CPU), ps aux --sort=-%mem (memory)
-│   → High CPU: strace -c to find syscall, then top -H for threads
-│   → High memory: track RSS over time, check for leak
-│
-├─ Network problem?
-│   ss -tlnp (is it listening?)
-│   lsof -p <pid> -i (what connections?)
-│   tcpdump port <N> (are packets arriving?)
-│
-├─ File/permission problem?
-│   strace -e trace=file -p <pid> 2>&1 | grep "= -1"
-│   lsof -p <pid>
-│
-└─ Kernel/hardware problem?
-    dmesg -T | tail -50
-```
+1. `uptime`, `vmstat 1 5`: CPU, blocked tasks, swap, steal. Skip vmstat's first line.
+2. `top`: which process; `H` for threads.
+3. `dmesg -T | tail` / `journalctl -k -b`: OOM, disk errors, hung tasks.
+4. Process-level: `ps -o stat`, then `lsof` and `ss` (cheap), then `strace` (short).
+5. CPU in user space: `perf top`. Packets in question: `tcpdump` with a filter.
 
 ---
 
-## Quick Reference Card
-
-```bash
-# PROCESS
-ps aux --sort=-%cpu | head -10  # top CPU
-ps -eo pid,stat,comm | grep ' D' # D-state processes
-top / htop                       # live view
-
-# FILES AND SOCKETS
-lsof -p <pid>                    # all open files
-lsof -i :8080                    # who uses port 8080
-ss -tlnp                         # listening ports
-
-# SYSTEM CALLS
-strace -c -p <pid>               # summary (safe)
-strace -e trace=file -p <pid>    # file ops
-strace -p <pid> 2>&1 | grep -1   # failures
-
-# DISK I/O
-iotop -o                         # processes doing I/O
-vmstat 2                         # system I/O stats
-
-# KERNEL
-dmesg | grep -i oom              # OOM kills
-dmesg | grep -iE "error|fail"    # hardware errors
-
-# NETWORK
-tcpdump port 8080                # packet capture
-ss -tnp state established        # active connections
-```
-
----
-
-## Conclusion
-
-These 10 tools cover the diagnostic space for the vast majority of Linux production incidents. The skill is not memorizing every flag — it is knowing which tool answers which question, and using them in the right order.
-
-**Start broad with `ps` and `top`. Narrow to a process with `lsof` and `strace`. Verify network state with `ss`. Check the kernel with `dmesg`.** Each tool is a layer of the onion — peel until you find the root cause.
-
----
-
-*Related reading: [ps Command Linux: The Engineer's Troubleshooting Guide](/blog/ps-command-linux-troubleshooting-guide) — deep dive on ps. [strace Tutorial: Debug Linux Processes Like a Pro](/blog/strace-tutorial-linux-debugging) — full strace guide. [Linux Log Analysis](/blog/linux-log-analysis-debugging-guide) — correlating tool output with logs.*
+*Related: the [Linux log analysis guide](/blog/linux-log-analysis-guide) for reading what these tools point you to in the logs, and [high CPU usage](/blog/linux-high-cpu-usage-guide) for that symptom in depth.*

@@ -1,222 +1,179 @@
 ---
-title: "Port Already in Use Linux: How to Find and Fix It"
+title: "Port Already in Use on Linux: Find What Holds It"
 date: "2026-04-22"
-excerpt: "Fix 'port already in use' errors on Linux — find what process owns the port, kill it safely, handle TIME-WAIT sockets, and prevent the issue from recurring."
+updated: "2026-10-28"
+excerpt: "Got EADDRINUSE on start? Find the process, socket unit or container holding the port, stop it the right way, and handle TIME-WAIT and IPv6 binds."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
-slug: "port-already-in-use-linux-fix"
 category: "linux"
 ---
 
-`bind: address already in use`. Service won't start. Something is holding the port. Here's every way to find it and fix it.
+You restart a service after a deploy and it dies immediately:
+
+```
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+```
+
+Something already owns the port. Usually it's an old copy of the same app, but it can also be systemd, Docker, or the app tripping over itself. The fix depends on which, so find out first.
 
 ---
 
-## TL;DR
+## The error in different software
 
-```bash
-# Find what's using port 8080
-ss -tlnp | grep :8080
+All of these are `EADDRINUSE` (errno 98):
 
-# Kill it
-fuser -k -TERM 8080/tcp
+| Where | What you see |
+|---|---|
+| NGINX | `bind() to 0.0.0.0:80 failed (98: Address already in use)` |
+| Node.js | `Error: listen EADDRINUSE: address already in use :::3000` |
+| Python | `OSError: [Errno 98] Address already in use` |
+| Java | `java.net.BindException: Address already in use` |
+| Docker | `Bind for 0.0.0.0:8080 failed: port is already allocated` |
 
-# Or explicitly
-kill -15 <pid>
-```
-
----
-
-## Find What's Using the Port
-
-### Method 1: ss (fastest)
-
-```bash
-ss -tlnp | grep :8080
-# LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:(("node",pid=4521,fd=12))
-```
-
-The `pid=4521` is what you need.
-
-### Method 2: lsof
-
-```bash
-lsof -i :8080
-# COMMAND  PID     USER   FD   TYPE NODE NAME
-# node    4521  appuser  12u  IPv4  TCP *:http-alt (LISTEN)
-```
-
-### Method 3: fuser
-
-```bash
-fuser 8080/tcp
-# 4521   ← PID only
-```
+If you see `Permission denied` (`EACCES`) instead, that's a different problem: a non-root process trying to bind a port below 1024.
 
 ---
 
-## Kill the Process
+## Step 1: who has the port?
 
 ```bash
-# Graceful (always try this first)
-kill -15 4521
-
-# Confirm it's gone
-sleep 3 && ss -tlnp | grep :8080
-
-# Force kill only if graceful didn't work
-kill -9 4521
+sudo ss -tlnp 'sport = :8080'
 ```
 
-**One-liner with fuser:**
+```
+State   Recv-Q  Send-Q  Local Address:Port  Peer Address:Port  Process
+LISTEN  0       511           0.0.0.0:8080       0.0.0.0:*      users:(("node",pid=4521,fd=19))
+```
+
+Use `sudo`: without it the Process column is empty for sockets owned by other users. For UDP, use `-ulnp`. The [open ports guide](/blog/check-open-ports-linux) explains the rest of this output.
+
+Then find out what that PID belongs to:
 
 ```bash
-fuser -k -TERM 8080/tcp   # SIGTERM
-fuser -k 8080/tcp         # SIGKILL (if still alive)
+ps -o pid,ppid,user,etime,cmd -p 4521
+systemctl status 4521        # systemctl accepts a PID and shows its unit
 ```
+
+The second command is the important one. It tells you whether you're dealing with a managed service, a container, or a stray process someone started by hand.
 
 ---
 
-## If It's a systemd Service
+## Step 2: stop it the right way for what it is
 
-Don't kill the PID — stop the service:
+### An old instance under systemd
+
+If `systemctl status <PID>` names a unit, stop the unit:
 
 ```bash
-# Find which service owns the process
-systemctl status $(ss -tlnp | grep ':8080' | grep -oP 'pid=\K[0-9]+' | head -1)
-
-# Stop the service properly
-systemctl stop myapp
-
-# Now start your service
-systemctl start newapp
+sudo systemctl stop oldapp.service
 ```
 
-Killing a PID when systemd manages it will cause an immediate restart.
+Killing the PID directly is a trap. If the unit has `Restart=always`, systemd starts it again within a second and you're back where you started. With `Restart=on-failure`, a `kill -9` counts as a failure and also triggers a restart.
+
+### A stray process
+
+Nobody manages it, so signal it yourself. SIGTERM first, so it can close connections and remove lock files:
+
+```bash
+kill 4521                    # SIGTERM
+sleep 5; ss -tlnp 'sport = :8080'
+```
+
+Only if it's still there:
+
+```bash
+kill -9 4521                 # SIGKILL: no cleanup, last resort
+```
+
+More options, including `fuser`, are in [kill a process by port](/blog/linux-kill-process-by-port).
+
+### A child process that inherited the socket
+
+You stopped the app, but `ss` still shows the port with a *different* PID. Some apps spawn helpers (a worker, a shell-out, a reload script) that inherit the listening socket. The socket stays bound until **every** process holding it exits:
+
+```bash
+sudo ss -tlnp 'sport = :8080'
+# users:(("myapp",pid=5102,fd=7),("sh",pid=5230,fd=7))
+```
+
+Stop the leftovers too. For a systemd service, `systemctl stop` kills the whole cgroup by default, which is one more reason to use it.
+
+### A systemd socket unit
+
+If the process shows as `systemd` with `pid=1`, a `.socket` unit is holding the port on behalf of a service:
+
+```bash
+systemctl list-sockets | grep 8080
+sudo systemctl stop myapp.socket myapp.service
+```
+
+Stopping only the service doesn't help: the socket unit keeps listening and will start the service again on the next connection. `systemctl disable` the socket too if it shouldn't come back after reboot.
+
+### A Docker container
+
+```bash
+docker ps --filter "publish=8080"
+docker stop <container>
+```
+
+On the host, `ss` usually shows the port owned by `docker-proxy`, not by your application. Don't kill `docker-proxy` by hand; stop or reconfigure the container. If you need both, map a different host port: `-p 8081:8080`.
 
 ---
 
-## The TIME-WAIT Case
+## Step 3: nothing is listening, but bind still fails
 
-Sometimes nothing is listening on the port but you still get "address already in use":
+### Your app is conflicting with itself
+
+Common with IPv6. On Linux, a socket bound to `[::]:8080` accepts IPv4 too (unless `net.ipv6.bindv6only=1` or the app sets `IPV6_V6ONLY`). If the app then also binds `0.0.0.0:8080`, the second bind fails with `EADDRINUSE`, and the error looks exactly like an outside conflict.
+
+Check the config for the same port listed twice, or an IPv4 and an IPv6 listener on the same port where the framework doesn't set `IPV6_V6ONLY`. NGINX's `listen 80;` plus `listen [::]:80;` is fine, because NGINX sets `ipv6only=on` by default.
+
+### TIME-WAIT on the server port
+
+After a server restarts, connections it closed can linger in TIME-WAIT with the server's own port:
 
 ```bash
-ss -tlnp | grep :8080
-# Empty — nothing listening
-
-ss -tn state time-wait | grep :8080
-# TIME-WAIT socket still exists
+ss -tan state time-wait '( sport = :8080 )' | head
 ```
 
-TIME-WAIT sockets linger for ~60 seconds after a connection closes. Most servers set `SO_REUSEADDR` so this shouldn't block binding — but if your app doesn't, you have two options:
+Linux keeps TIME-WAIT for a fixed 60 seconds. Almost every server framework sets `SO_REUSEADDR`, which lets a new listener bind despite these sockets. If yours doesn't, the real fix is to set `SO_REUSEADDR` in the app. Otherwise, wait a minute.
+
+Changing `net.ipv4.tcp_fin_timeout` does **not** help: it controls the FIN-WAIT-2 timeout, not TIME-WAIT. [TIME_WAIT explained](/blog/linux-time-wait-explained) has the details.
+
+### Port taken by an outgoing connection
+
+Rare, but possible if your service port falls inside the ephemeral range (`cat /proc/sys/net/ipv4/ip_local_port_range`, by default `32768 60999`). An outgoing connection can grab it as a source port. Reserve the port so the kernel never hands it out:
 
 ```bash
-# Option 1: wait 60 seconds and retry
-
-# Option 2: enable SO_REUSEADDR in your app (app-level fix)
-
-# Option 3: shrink TIME-WAIT duration (sysctl — use carefully)
-sysctl net.ipv4.tcp_fin_timeout
-# Default: 60
-sudo sysctl -w net.ipv4.tcp_fin_timeout=30
-```
-
----
-
-## Real Examples
-
-### New app won't start after deploy
-
-```bash
-ss -tlnp | grep :3000
-# node  9901  ...  (old process still running)
-
-# Kill old process
-kill -15 9901
-sleep 2
-
-# Start new version
-systemctl start myapp
-```
-
-### Two services configured to the same port
-
-```bash
-ss -tlnp | grep :80
-# nginx: 1234
-# apache2: 5678  ← both trying port 80
-
-# Fix: change one to a different port, or remove one
-systemctl stop apache2
-systemctl disable apache2
-```
-
-### Docker container port conflict
-
-```bash
-docker run -p 8080:8080 myimage
-# Error: Bind for 0.0.0.0:8080 failed: port is already allocated
-
-# Find what Docker container has the port
-docker ps | grep 8080
-# or
-ss -tlnp | grep :8080   # shows dockerd or the container process
-
-# Stop the conflicting container
-docker stop <container_name>
-docker run -p 8080:8080 myimage
+echo 'net.ipv4.ip_local_reserved_ports = 50000' | sudo tee /etc/sysctl.d/90-reserved-ports.conf
+sudo sysctl --system
 ```
 
 ---
 
-## Prevent It Recurring
+## Stop it from happening on every deploy
 
-### Use systemd socket activation
-
-Instead of the app binding to the port directly, let systemd manage the socket:
-
-```ini
-# /etc/systemd/system/myapp.socket
-[Socket]
-ListenStream=8080
-BindIPv6Only=both
-
-[Install]
-WantedBy=sockets.target
-```
-
-This way the port is held by systemd, and a restart of the app doesn't release and re-acquire it — eliminating the race condition window.
-
-### Check on startup
-
-```bash
-# Add to your start script
-if ss -tlnp | grep -q ':8080'; then
-  echo "ERROR: port 8080 already in use"
-  ss -tlnp | grep :8080
-  exit 1
-fi
-```
+- **Let systemd manage the process.** `systemctl restart` stops the whole cgroup before starting again, so no orphaned copy keeps the port.
+- **Fail fast with a clear message** if your start script runs outside systemd:
+  ```bash
+  if ss -Htln 'sport = :8080' | grep -q .; then
+    echo "port 8080 already in use:" >&2
+    ss -tlnp 'sport = :8080' >&2
+    exit 1
+  fi
+  ```
+- **Two services configured for the same port** (Apache and NGINX both on 80 after a package install is a classic): disable the one you don't want with `systemctl disable --now apache2` rather than racing them at boot.
 
 ---
 
-## Common Mistakes
+## Quick checklist
 
-**Mistake 1: `kill -9` immediately**
-SIGTERM first. SIGKILL doesn't let the process clean up — can leave temp files, locks, or corrupt state.
-
-**Mistake 2: Killing a PID managed by systemd**
-It respawns immediately. Use `systemctl stop`.
-
-**Mistake 3: Confusing TIME-WAIT for a live listener**
-`ss -tlnp` shows listeners only. If it's empty, check `ss -tn state time-wait`. Two completely different problems.
+1. `sudo ss -tlnp 'sport = :PORT'` to get the PID.
+2. `systemctl status PID` to see who manages it.
+3. Stop the unit, socket unit or container; `kill` only stray processes, SIGTERM first.
+4. Nothing listening? Check for duplicate/IPv6 binds in your own config, then TIME-WAIT.
+5. Start the service and confirm it owns the port.
 
 ---
 
-## Conclusion
-
-`ss -tlnp | grep :<port>` → find the PID → `kill -15 <pid>` or `systemctl stop <service>`. If nothing shows but bind still fails, check for TIME-WAIT sockets. If systemd manages the service, always use `systemctl stop`, not `kill`.
-
----
-
-*Related: [Linux Kill Process by Port](/blog/linux-kill-process-by-port) — all methods to kill by port. [Check Open Ports in Linux: ss vs netstat](/blog/check-open-ports-linux-ss-netstat-guide) — full ss usage guide.*
+*Related: [Cannot Connect to Server](/blog/cannot-connect-to-server-linux-troubleshooting) if the service starts but clients still can't reach it. [systemctl Service Not Starting](/blog/systemctl-service-not-starting-fix) for other start-up failures.*

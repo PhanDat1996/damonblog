@@ -1,328 +1,276 @@
 ---
-title: "strace, lsof, and ss: The Trio That Solves Every Mystery"
+title: "strace, lsof and ss: Debug a Misbehaving Process"
 date: "2024-05-02"
-excerpt: "When logs give you nothing and the debugger isn't an option, these three tools let you see exactly what a running process is doing at the system call level."
+updated: "2026-10-28"
+excerpt: "Logs are quiet but a process hangs, leaks connections or fills the disk. Combine strace, lsof and ss to see what it's doing, holding and waiting on."
 tags: ["debugging", "linux", "troubleshooting", "production"]
 featured: false
 category: "linux"
 ---
 
-## When Normal Debugging Fails
+The process isn't crashing. It's just wrong: requests hang, database connections keep climbing, or `df` says the disk is full while `du` disagrees. The logs are quiet, and you can't attach a debugger in production.
 
-You have a process that's misbehaving. It's not crashing — it's just wrong. Maybe it's slow. Maybe it's not writing to a file it should be. Maybe it's making network connections you don't expect. The logs are quiet. You can't attach a debugger in production.
+Three standard tools answer most of these from the outside, each from a different angle:
 
-This is where `strace`, `lsof`, and `ss` become your best friends.
+| Tool | Answers | Cost to run |
+|---|---|---|
+| `lsof` | What does the process have **open** right now? Files, sockets, pipes, deleted files. | Cheap snapshot |
+| `ss` | What state are its **network connections** in? Queues, timers, retransmits. | Cheap snapshot |
+| `strace` | What is it **doing** right now, call by call? | Slows the process while attached |
 
-## strace: Watch Every System Call
-
-Every meaningful thing a program does — read a file, write to a socket, allocate memory, create a process — goes through the kernel via system calls. `strace` intercepts those calls and shows them to you in real time.
-
-```bash
-# Attach to a running process
-strace -p <pid>
-
-# The output you'll see:
-# read(3, "HTTP/1.1 200 OK\r\n...", 4096) = 847
-# write(1, "data: ...", 52)               = 52
-# select(4, [3], NULL, NULL, {tv_sec=30}) = 0 (Timeout)
-```
-
-That last line is gold. A `select()` or `poll()` timing out tells you the process is waiting for something that never came.
-
-### Most Useful strace Flags
-
-```bash
-# Follow child processes too (for multi-process apps)
-strace -f -p <pid>
-
-# Filter to specific syscalls only
-strace -e trace=read,write,open,close -p <pid>
-strace -e trace=network -p <pid>    # network calls only
-strace -e trace=file -p <pid>       # file operations only
-
-# Show timestamps
-strace -t -p <pid>
-
-# Show time spent in each call (find slow syscalls)
-strace -T -p <pid>
-
-# Write output to file (for long traces)
-strace -o /tmp/trace.log -p <pid>
-
-# Count syscalls (summary mode)
-strace -c -p <pid>
-# Press Ctrl+C after a few seconds to see the summary
-```
-
-### Finding a Stuck Process
-
-```bash
-# Is the process hung in a syscall?
-strace -p <pid>
-
-# If it immediately shows something like:
-# futex(0x..., FUTEX_WAIT, ...) = ?
-# ...it's blocked on a mutex/lock
-
-# epoll_wait, select, poll with timeout = waiting for I/O
-# read(fd, ...) with no return = blocked on slow read
-```
-
-### Finding File Access Issues
-
-```bash
-# Which files is the process opening?
-strace -e trace=open,openat,read,write -p <pid> 2>&1 | grep -v ENOENT
-
-# Looking for failed opens:
-strace -e trace=open,openat -p <pid> 2>&1 | grep "EACCES\|ENOENT\|EPERM"
-```
-
-## lsof: Every Open File Descriptor
-
-`lsof` ("list open files") shows you everything a process has open — files, sockets, pipes, devices.
-
-```bash
-# All open files for a process
-lsof -p <pid>
-
-# Open network connections only
-lsof -p <pid> -i
-
-# Who has a specific file open?
-lsof /var/log/app/app.log
-
-# Who is listening on port 8080?
-lsof -i :8080
-
-# All connections to a remote host
-lsof -i @192.168.1.100
-```
-
-### What to Look For
-
-```bash
-lsof -p <pid>
-# Output columns:
-# COMMAND  PID  USER  FD   TYPE  DEVICE  SIZE   NODE  NAME
-# nginx   1234  root   4u  IPv4  12345   0t0   TCP   *:80 (LISTEN)
-# nginx   1234  root   5u  IPv4  12346   0t0   TCP   host:80->client:41234 (ESTABLISHED)
-# nginx   1234  root   6r  REG   8,1    4096  89012  /var/log/nginx/access.log
-```
-
-**FD column meanings:**
-- `r` = open for reading
-- `w` = open for writing
-- `u` = open for read+write
-- `mem` = memory-mapped file
-- `txt` = program text (executable)
-
-**Too many open files?**
-
-```bash
-# Count open FDs
-lsof -p <pid> | wc -l
-
-# Check the limit
-cat /proc/<pid>/limits | grep "open files"
-
-# If approaching the limit, raise it
-ulimit -n 65535  # for current shell
-# Or permanently in /etc/security/limits.conf
-```
-
-## ss: Socket Statistics
-
-`ss` is the modern replacement for `netstat`. Faster, more information.
-
-```bash
-# All listening sockets
-ss -tlnp
-
-# All established TCP connections
-ss -tnp state established
-
-# Connections to a specific port
-ss -tnp dport :5432  # who's talking to postgres?
-
-# Show socket stats summary
-ss -s
-
-# Extended info including timers
-ss -tnpe
-```
-
-### Diagnosing Connection Issues
-
-```bash
-# Is something stuck in TIME-WAIT? (seen this cause 502s)
-ss -tn state time-wait | wc -l
-
-# SYN-SENT connections that never complete (firewall/routing issue)
-ss -tn state syn-sent
-
-# Sockets with large receive buffers (receiver can't keep up)
-ss -tnm | awk '$0 ~ /rmem/ {print $0}' | sort -t: -k4 -rn | head
-
-# See retransmit counters
-ss -tnei
-```
-
-## A Real Debugging Session
-
-Here's how these tools work together. Scenario: an app is making database connections that aren't being released.
-
-```bash
-# 1. Find the PID
-pgrep -f "my-app"  # → 4521
-
-# 2. How many DB connections?
-lsof -p 4521 -i :5432 | wc -l  # → 97 (suspiciously high)
-
-# 3. What state are they in?
-ss -tnp src :5432 | awk '{print $1}' | sort | uniq -c
-# ESTABLISHED: 97
-# (none closing — they're leaking)
-
-# 4. Watch what the app does with those connections
-strace -p 4521 -e trace=network 2>&1 | head -50
-# ... connect() calls but no corresponding close() calls
-
-# 5. Confirm: file descriptor leak
-lsof -p 4521 | grep -c "TCP"  # count climbs over time
-watch -n 5 'lsof -p 4521 | grep -c TCP'
-```
-
-Now you have a definitive answer: the application is opening DB connections and never closing them. That's not a network issue, not a firewall issue — it's a connection pool bug.
-
-## Quick Reference
-
-| Tool | Best For |
-|---|---|
-| `strace -p <pid>` | What is this process *doing* right now? |
-| `strace -e trace=file` | File access issues, missing files |
-| `strace -T` | Which syscalls are slow? |
-| `lsof -p <pid> -i` | Network connections this process has open |
-| `lsof -i :<port>` | Who is using this port? |
-| `ss -tlnp` | What is listening and on which interface? |
-| `ss -s` | Overall socket count summary |
-| `ss -tn state time-wait` | TIME-WAIT buildup (connection exhaustion) |
-
-These three tools won't give you application-level visibility — for that you need traces and metrics. But they will tell you exactly what the OS sees a process doing, which cuts through a huge amount of guesswork.
+The order matters: start with the cheap snapshots, and attach `strace` only when you know what to look for. For strace on its own in depth, see the [strace tutorial](/blog/strace-tutorial-linux).
 
 ---
 
-## Three More Real Scenarios
-
-### Scenario 2: Process Consuming CPU But Logs Are Silent
-
-A service is at 80% CPU. No application errors. No business logic issues visible.
+## The 30-second toolkit
 
 ```bash
-# Step 1: summary mode — identify which syscall category dominates
-strace -c -p <pid>
-# Press Ctrl+C after 30 seconds
+PID=$(pgrep -o -x myapp)
 
-# If futex dominates with high time:
-# → Thread contention / deadlock. One thread holds a lock, others wait.
-strace -f -p <pid> -e trace=futex 2>&1 | grep "FUTEX_WAIT" | head -20
+# lsof: -n no DNS, -P no port names (both make it much faster), -a = AND the filters
+sudo lsof -nP -p $PID | head -30
+sudo lsof -nP -a -p $PID -i              # only this process's network files
+sudo lsof -nP -i :5432                   # anything using port 5432, local or remote side
+sudo lsof -nP +L1                        # deleted files still held open
 
-# If read/write dominates with high call count:
-# → Many small I/O operations — check lsof for what it is writing to
-lsof -p <pid> | grep -E "REG|CHR"
+# ss
+ss -tanp | grep "pid=$PID,"              # all TCP sockets of the process, with state
+ss -ltn                                  # listening sockets and their queues
+ss -tn state close-wait                  # connections the app forgot to close
+ss -s                                    # totals per state
 
-# If no syscalls dominate but CPU is still high:
-# → Pure user-space compute. No syscall-level fix.
-# Use perf or a profiler instead.
-cat /proc/<pid>/wchan  # should show 'schedule' for CPU-bound
+# strace
+sudo strace -f -tt -T -yy -p $PID -o /tmp/trace.txt
 ```
 
-### Scenario 3: Intermittent Connection Failures to a Service
+The `-a` in lsof is the one people miss. lsof **ORs** its selection options by default, so `lsof -p 4521 -i` lists everything open by 4521 **plus** every network socket on the whole system. Add `-a` to require both.
 
-A service fails to connect to a backend every 30 minutes or so, recovers, then fails again.
+---
+
+## Reading lsof
 
 ```bash
-# Watch connection state continuously
-watch -n 2 'ss -tnp | grep <backend_port>'
-
-# When it fails, capture state immediately
-# Better: background monitor
-while true; do
-  TIMESTAMP=$(date '+%H:%M:%S')
-  COUNT=$(ss -tnp state established dport :<port> | wc -l)
-  echo "$TIMESTAMP established: $COUNT"
-  ss -s | grep -i time-wait >> /tmp/tw_monitor.log
-  sleep 5
-done
-
-# Look for TIME-WAIT spike before connection failures
-# Correlate timestamp of spike with application error log timestamp
+sudo lsof -nP -p 4521
 ```
 
-### Scenario 4: File Descriptor Leak Detection Over Time
+```
+COMMAND  PID USER   FD   TYPE  DEVICE SIZE/OFF    NODE NAME
+myapp   4521 app   cwd    DIR   253,0     4096  131074 /opt/myapp
+myapp   4521 app   txt    REG   253,0 18234112  131090 /opt/myapp/bin/myapp
+myapp   4521 app   mem    REG   253,0  2216304  1835071 /usr/lib/x86_64-linux-gnu/libc.so.6
+myapp   4521 app     3w   REG   253,1 52428800   65538 /var/log/myapp/app.log
+myapp   4521 app     7u  IPv4  883412      0t0     TCP 10.0.1.5:51234->10.0.2.15:5432 (ESTABLISHED)
+myapp   4521 app     9u  IPv4  883420      0t0     TCP *:8080 (LISTEN)
+myapp   4521 app    12w   REG   253,1 9876543210  65601 /var/log/myapp/debug.log (deleted)
+```
 
-You suspect a process is leaking FDs but it is slow — hard to catch in the act.
+- **FD**: `cwd` (working directory), `txt` (the executable), `mem` (memory-mapped files, mostly libraries) aren't file descriptors. Numbers are real FDs, with a mode: `r` read, `w` write, `u` both.
+- **TYPE**: `REG` file, `DIR` directory, `IPv4`/`IPv6` network socket, `unix` local socket, `FIFO` pipe.
+- **NAME**: path, or the connection with its TCP state.
+
+Because of the `cwd`/`txt`/`mem` lines, `lsof -p PID | wc -l` overstates the FD count. For leak hunting, count `/proc/PID/fd` instead. [Too many open files](/blog/too-many-open-files-linux-fix) covers that in detail.
+
+---
+
+## Reading ss
 
 ```bash
-PID=4521
+ss -tanp | grep "pid=4521,"
+```
 
-# Track FD count every minute
-while true; do
-  FD_COUNT=$(ls /proc/$PID/fd 2>/dev/null | wc -l)
-  echo "$(date '+%H:%M:%S') FDs: $FD_COUNT"
-  sleep 60
-done | tee /tmp/fd_track.log
+```
+State      Recv-Q Send-Q  Local Address:Port   Peer Address:Port  Process
+LISTEN     0      4096         0.0.0.0:8080         0.0.0.0:*      users:(("myapp",pid=4521,fd=9))
+ESTAB      0      0           10.0.1.5:51234      10.0.2.15:5432   users:(("myapp",pid=4521,fd=7))
+CLOSE-WAIT 1      0           10.0.1.5:51240      10.0.2.15:5432   users:(("myapp",pid=4521,fd=15))
+```
 
-# If FD count grows past ~500, check what type is leaking
-lsof -p $PID | awk '{print $5}' | sort | uniq -c | sort -rn
-# TYPE counts: REG (files), IPv4 (sockets), FIFO (pipes)
-# Growing IPv4 count = socket leak
-# Growing REG count = file handle leak
+(The trailing comma in `pid=4521,` stops it from also matching PID 45210.)
+
+`Recv-Q` and `Send-Q` mean different things depending on the state:
+
+| State | Recv-Q | Send-Q |
+|---|---|---|
+| `LISTEN` | Connections waiting in the accept queue | Size of the accept queue (backlog) |
+| Established and others | Bytes received but **not yet read** by the application | Bytes sent but **not yet acknowledged** by the peer |
+
+That makes `ss` a quick blame tool:
+
+- **Recv-Q growing on an established socket:** data has arrived and your app isn't reading it. The app is busy or stuck.
+- **Send-Q growing:** the peer (or the network) isn't keeping up.
+- **LISTEN Recv-Q at or near Send-Q:** the accept queue is full and new connections are being dropped. The app isn't calling `accept()` fast enough.
+
+Filters, so you don't need grep:
+
+```bash
+ss -tn state established '( dport = :5432 )'      # established connections to Postgres
+ss -tn state time-wait | wc -l                     # TIME-WAIT count (includes 1 header line)
+ss -tnoi '( dport = :443 )'                        # -o timers, -i rtt/retransmits/cwnd
 ```
 
 ---
 
-## Combining All Three: The Full Investigation Workflow
+## Symptom 1: connections keep climbing
+
+Monitoring shows the app's connections to the database rising all day until the DB refuses new clients.
+
+```bash
+PID=$(pgrep -o -x myapp)
+
+# 1. How many, and in what state?
+ss -Htanp | grep "pid=$PID," | awk '{print $1}' | sort | uniq -c
+#    187 CLOSE-WAIT
+#     20 ESTAB
+#      1 LISTEN
+
+# 2. To where?
+ss -Htn state close-wait | awk '{print $4}' | sort | uniq -c | sort -rn | head
+#    187 10.0.2.15:5432
+```
+
+(`-H` drops the header line; it needs a reasonably recent iproute2.)
+
+**CLOSE-WAIT** means the remote side closed the connection, the kernel told your application, and your application never called `close()`. The kernel can't clean these up on its own. It's always an application bug, typically a connection that isn't returned to the pool on an error path, or an HTTP client response that's never closed.
+
+If they're instead `ESTAB` and the count grows without limit, the pool is leaking live connections, or it's just sized too large for the number of instances (pool size × instances > the DB's connection limit).
+
+To confirm, watch the app's network calls for a minute:
+
+```bash
+sudo timeout 60 strace -f -tt -yy -e trace=connect,close,shutdown -p $PID -o /tmp/conn.txt
+grep -c "connect(" /tmp/conn.txt; grep -c "close(" /tmp/conn.txt
+```
+
+Many `connect` calls to 5432 and no matching `close` on those FDs confirms the leak, and the timestamps tell you which requests triggered them.
+
+---
+
+## Symptom 2: disk full, but `du` can't find the space
+
+```bash
+df -h /var        # 100% used
+du -sh /var/*     # adds up to far less
+```
+
+A file that's deleted while a process still has it open keeps using space until that process closes it. `du` can't see it (it has no name anymore), `df` can.
+
+```bash
+sudo lsof -nP +L1
+```
 
 ```
-Process is misbehaving
+COMMAND  PID USER FD TYPE DEVICE   SIZE/OFF NLINK  NODE NAME
+myapp   4521 app  12w REG  253,1 9876543210     0 65601 /var/log/myapp/debug.log (deleted)
+```
+
+Someone ran `rm` on a 9.8 GB log the app was still writing. Options:
+
+- **Restart the service** (cleanest): the FD closes and the space returns.
+- **Can't restart now?** Truncate it through the process's FD:
+
+```bash
+sudo truncate -s 0 /proc/4521/fd/12
+```
+
+That irreversibly discards the contents, so only do it for data you don't need. Next time, truncate instead of deleting a live log (`truncate -s 0 file`), or fix log rotation. See [disk full cleanup](/blog/disk-full-linux-cleanup) and [deleting large files safely](/blog/how-to-delete-large-files-linux-safely).
+
+---
+
+## Symptom 3: requests hang, the process looks idle
+
+CPU is low, the app isn't logging, and requests time out.
+
+```bash
+# 1. What is it blocked on?
+sudo strace -f -tt -T -yy -p $PID 2>&1 | head -20
+```
+
+```
+[pid  4533] read(7<TCP:[10.0.1.5:51234->10.0.2.15:5432]>,
+[pid  4534] read(7<TCP:[10.0.1.5:51234->10.0.2.15:5432]>,
+[pid  4521] epoll_wait(4<anon_inode:[eventpoll]>, [], 1024, 1000) = 0 <1.001042>
+```
+
+Worker threads are all stuck in `read` on FD 7, a connection to the database. (Without `-yy`, `lsof -nP -a -p $PID -d 7` gives the same answer.)
+
+```bash
+# 2. What does that connection look like?
+ss -tnoi '( sport = :51234 )'
+```
+
+```
+ESTAB 0 0 10.0.1.5:51234 10.0.2.15:5432 timer:(keepalive,1min52s,0)
+	 cubic rtt:0.412/0.1 ... bytes_acked:5112 bytes_received:18233 ...
+```
+
+`Recv-Q 0`, `Send-Q 0`: the query was delivered and acknowledged, and nothing has come back. The database is still working on it, or is waiting on a lock. The problem has moved to the DB server: look at its active queries and locks there. The app's lack of a query timeout is the second bug.
+
+If instead `Send-Q` were large and `retrans` climbing in `ss -i`, the network path or the peer would be the problem.
+
+---
+
+## Symptom 4: slow under load, no errors
+
+```bash
+ss -ltn 'sport = :8080'
+# State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+# LISTEN 4097   4096         0.0.0.0:8080      0.0.0.0:*
+
+nstat -az TcpExtListenOverflows TcpExtListenDrops
+```
+
+The accept queue is full (Recv-Q at the backlog) and the overflow counters are rising: clients' connection attempts are dropped and retried, which shows up as seconds of extra latency. The app isn't accepting fast enough, because its workers are all busy. `strace -c -w -f -p $PID` for 20 seconds shows where their time goes. Raising the backlog (`listen()` argument, capped by `net.core.somaxconn`) only buys headroom; the fix is worker capacity or whatever the workers are waiting on.
+
+---
+
+## Symptom 5: who has this file or port?
+
+```bash
+sudo lsof -nP /var/lib/myapp/data.db             # which processes have this file open
+sudo lsof -nP +D /mnt/backup                     # anything open under a directory (why umount says busy)
+ss -ltnp 'sport = :8080'                         # who listens on 8080
+sudo fuser -v 8080/tcp                           # alternative for ports
+```
+
+`+D` walks the whole directory tree, which is slow on large trees. For "port already in use" errors, see [port already in use](/blog/port-already-in-use-linux-fix).
+
+---
+
+## Which tool for which question
+
+```
+Process misbehaving, logs quiet
 │
-├─ Is it consuming unexpected resources?
-│   strace -c -p <pid>   → identifies syscall category
+├─ What does it hold?         lsof -nP -p PID        (files, sockets, deleted files)
+│     too many FDs?           ls /proc/PID/fd | wc -l
 │
-├─ Is it stuck or hung?
-│   strace -p <pid>      → shows current syscall
-│   cat /proc/<pid>/wchan → kernel wait channel
+├─ Network trouble?           ss -tanp | grep pid=PID,
+│     CLOSE-WAIT piling up    → app never closes: code bug
+│     Recv-Q growing          → app not reading: app busy/stuck
+│     Send-Q growing          → peer/network slow
+│     LISTEN queue full       → app not accepting fast enough
 │
-├─ Network connections wrong?
-│   lsof -p <pid> -i     → open sockets + state
-│   ss -tnp | grep <pid> → connection states
-│
-├─ File access wrong?
-│   strace -e trace=file -p <pid> 2>&1 | grep "= -1"  → failed opens
-│   lsof -p <pid> | grep REG                           → open files
-│
-└─ Growing over time?
-    watch -n 5 'lsof -p <pid> | wc -l'  → FD count trend
-    watch -n 5 'ss -tnp | grep <pid> | wc -l'  → connection count trend
+└─ What is it doing / waiting on?
+      strace -f -tt -T -yy -p PID   (short, to a file)
+      the call that doesn't return + its FD → back to lsof/ss for that FD
 ```
 
 ---
 
 ## FAQ
 
-**When should I use strace vs lsof?**
-Use `strace` when you need to see what a process is *doing* — the sequence of operations, what it is trying to open, what it is waiting on. Use `lsof` when you need to see the current *state* — what files and sockets are open right now. `strace` has overhead; `lsof` is essentially free. Use `lsof` for quick checks, `strace` for deeper investigation.
+**Do lsof and ss affect the running process?**
+No. They read kernel state from `/proc` and netlink without stopping the process. lsof can be slow on hosts with many open files or hung NFS mounts (`-b` avoids blocking calls), but it doesn't slow the target. strace does.
 
-**Will strace affect my production service?**
-Yes. The `ptrace` mechanism strace uses stops the process on every system call. On a busy process making thousands of syscalls per second, this can slow it by 50–100%. Use `-c` (summary mode) or `-e trace=` (filtered mode) to minimize impact. Always have a way to Ctrl+C.
+**Why does `lsof -p PID -i` show other processes?**
+lsof combines selection options with OR. Use `lsof -a -p PID -i` to get the intersection.
 
-**Can I use these on containers?**
-Yes for `lsof` and `ss` — both work normally inside a container. `strace` requires `SYS_PTRACE` capability, which many container runtimes disable by default. In Docker: `docker run --cap-add SYS_PTRACE`. In Kubernetes: add `securityContext.capabilities.add: [SYS_PTRACE]` to the pod spec.
+**Can I use these inside containers?**
+`lsof` and `ss` inside a container see only that container's processes and network namespace. From the host, enter its network namespace: `sudo nsenter -t $(docker inspect -f '{{.State.Pid}}' web) -n ss -tanp`. strace inside a container needs `SYS_PTRACE`, so it's usually easier to run it on the host against the container's host PID.
 
-**What is the difference between ss and netstat?**
-Both show socket information. `ss` reads directly from the kernel and is faster and more accurate. `netstat` reads from `/proc/net/` and is deprecated on modern Linux but still widely available. Use `ss`. The equivalent of `netstat -tlnp` is `ss -tlnp`.
+**ss or netstat?**
+`ss`. It talks to the kernel over netlink, is faster on busy hosts, and has state filters and TCP internals (`-i`). `netstat` comes from the deprecated net-tools package. See [netstat vs ss](/blog/netstat-vs-ss-command).
 
 ---
 
-*Related reading: [strace Tutorial: Debug Linux Processes Like a Pro](/blog/strace-tutorial-linux-debugging) — full strace guide with 5 real scenarios. [Check Open Ports in Linux: ss vs netstat Explained](/blog/check-open-ports-linux-ss-netstat) — deeper ss usage for port investigation. [Linux Log Analysis: How to Debug Issues Like a Senior Engineer](/blog/linux-log-analysis-debugging-guide) — correlating tool output with logs.*
+*Related: [Linux TIME_WAIT explained](/blog/linux-time-wait-explained) when the sockets piling up are TIME-WAIT rather than CLOSE-WAIT, and [Linux debugging tools](/blog/linux-debugging-tools-guide) for the wider toolkit.*

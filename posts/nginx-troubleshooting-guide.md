@@ -1,321 +1,322 @@
 ---
-title: "NGINX Troubleshooting Guide: Complete Production Reference"
+title: "NGINX Troubleshooting: Fix 502, 504, 403 and Config Errors"
 date: "2026-04-21"
-excerpt: "The complete NGINX troubleshooting reference — 502/504 errors, upstream failures, SSL issues, connection limits, keepalive misconfiguration, and production debugging workflows with real commands."
+updated: "2026-10-28"
+excerpt: "NGINX misbehaving in production? Map the symptom or error-log line to its cause: 502/504, 403/404, 413, 499, startup failures, TLS errors and reloads."
 tags: ["nginx", "troubleshooting", "production", "infrastructure"]
 featured: true
-slug: "nginx-troubleshooting-guide"
 category: "nginx"
 ---
 
-## TL;DR
+Something in front of your app is returning errors, and the response says `nginx`. Maybe it's a 502 after a deploy, a 403 on a directory that was fine yesterday, NGINX refusing to start after a config change, or a reload that "worked" but changed nothing.
 
-- **502 Bad Gateway** = NGINX cannot reach upstream. Check upstream health, then TIME-WAIT, then worker_connections
-- **504 Gateway Timeout** = upstream is alive but too slow. Tune `proxy_read_timeout`
-- **Missing keepalive** in upstream block is the #1 cause of 502s under load
-- **Always read the exact error log message** — `connect() failed (111)` vs `timed out (110)` need different fixes
-- **SSL grade below A** = weak ciphers, no HSTS, missing OCSP stapling
-- Reload with `nginx -t && systemctl reload nginx` — never restart in production
+NGINX is unusually good at telling you what's wrong. Almost every failure produces a specific line in the error log. This guide is the starting point: the first commands to run, a symptom-to-cause map, and links to the detailed posts for the big topics.
 
 ---
 
-## Introduction
-
-NGINX sits in front of almost every production web service. When it breaks, everything breaks. When it is misconfigured, the symptoms are often misleading — 502s that only appear under load, SSL issues that look like application errors, timeouts that blame the wrong service.
-
-This is the reference guide for NGINX production troubleshooting. It covers the most common failure modes, the exact commands to diagnose them, and the configurations that fix them.
-
----
-
-## Reading NGINX Error Logs
-
-Before anything else, read the exact error message. NGINX error log messages are specific — each points to a different root cause.
+## The first five commands
 
 ```bash
-# Follow live
-tail -f /var/log/nginx/error.log
-
-# Last 100 lines, no pager
-journalctl -u nginx -n 100 --no-pager
-
-# Filter to upstream errors only
-grep "upstream" /var/log/nginx/error.log | tail -20
+systemctl status nginx --no-pager          # running? last log lines?
+nginx -t                                   # is the config valid right now?
+nginx -T 2>/dev/null | grep -E '^\s*(error_log|access_log)'   # where are the logs?
+tail -n 50 /var/log/nginx/error.log        # the actual reason
+journalctl -u nginx -n 50 --no-pager       # startup/reload failures land here too
 ```
 
-### Error message decoder
+`nginx -T` prints the **full effective configuration**, every included file in order. Use it whenever you're not sure which `server` block or which included file is actually in effect.
 
-| Error message | Root cause | First action |
+Reading tips:
+
+- Each error line ends with `client:`, `server:`, `request:`, and often `upstream:`. Those fields tell you which vhost and which backend were involved.
+- The number in parentheses is the Linux errno: `(13: Permission denied)`, `(111: Connection refused)`, `(24: Too many open files)`. It's the most useful part of the line.
+- Default level is `error`. For a hard case, temporarily set `error_log /var/log/nginx/error.log info;` for one server block.
+
+---
+
+## Symptom → cause → where to go
+
+| Symptom / log line | Usual cause | Details |
 |---|---|---|
-| `connect() failed (111: Connection refused)` | Upstream not running or port exhausted | Check upstream process + ss -s |
-| `connect() failed (99: Cannot assign requested address)` | Ephemeral port exhaustion | Add keepalive, widen port range |
-| `upstream timed out (110: Connection timed out)` | Upstream too slow | Check app performance, tune timeouts |
-| `upstream sent invalid header` | Upstream crashed mid-response | Check app error logs |
-| `worker_connections are not enough` | NGINX connection limit hit | Increase worker_connections |
-| `no live upstreams while connecting to upstream` | All upstream servers failed | Check all upstream health |
-| `SSL_do_handshake() failed` | TLS handshake failure | Check cert, cipher compatibility |
+| **502 Bad Gateway** | Upstream down, wrong address/socket, upstream closed or reset, invalid response | [NGINX 502: find the cause from the error log](/blog/nginx-502-bad-gateway-fix-linux) |
+| **502 only under load** | Backend accept queue full, workers killed, port exhaustion | [502 under load](/blog/nginx-502-under-load) |
+| `99: Cannot assign requested address` | Ephemeral ports exhausted, no upstream keepalive | [Upstream keepalive](/blog/nginx-upstream-keepalive) |
+| **504 Gateway Timeout**, `upstream timed out (110...)` | Upstream too slow, or connect stalls | 504 section below |
+| **403 Forbidden** | Filesystem permissions, no index file, `deny` rule, SELinux | 403 section below |
+| **404 Not Found** for files that exist | `root` vs `alias`, wrong `server` block | 404 section below |
+| **413 Request Entity Too Large** | `client_max_body_size` (default 1m) | 413 section below |
+| **499** in access log | Client gave up before NGINX answered | 499 section below |
+| **429 / 503** with `limiting requests` in log | `limit_req` rate limiting | [Rate limiting](/blog/nginx-rate-limiting-config) |
+| NGINX won't start: `(98: Address already in use)` | Another process owns port 80/443 | [Port already in use](/blog/port-already-in-use-linux-fix) |
+| `(24: Too many open files)` | Worker FD limit | [Too many open files](/blog/too-many-open-files-linux-fix) |
+| TLS errors, bad SSL Labs grade | Cert/key mismatch, missing chain, old protocols | TLS section below, [SSL hardening](/blog/nginx-ssl-hardening) |
+| Config change has no effect | Reload failed, or another `server` block matches | Reload section below |
 
 ---
 
-## 502 Bad Gateway: Complete Diagnosis
+## 502 Bad Gateway
 
-### Step 1: Read the exact error
+NGINX generated the 502 because the upstream refused, reset, or garbled the connection. The error log names the upstream and the reason. The three most common in practice:
 
-```bash
-tail -f /var/log/nginx/error.log | grep "502\|upstream\|connect"
+```
+connect() failed (111: Connection refused) while connecting to upstream        → nothing listening there
+connect() to unix:/run/php/php8.2-fpm.sock failed (2: No such file or directory) → wrong socket path
+upstream prematurely closed connection while reading response header             → app crashed or worker killed
 ```
 
-### Step 2: Is the upstream running?
-
-```bash
-# Is the port listening?
-ss -tlnp | grep <upstream_port>
-
-# Does it respond directly?
-curl -sf http://127.0.0.1:<port>/health && echo "OK"
-```
-
-### Step 3: Check for TIME-WAIT buildup (most common cause)
-
-```bash
-# Watch while load is active
-watch -n 0.5 'ss -s | grep time-wait'
-```
-
-If TIME-WAIT is climbing: missing `keepalive` in upstream block.
-
-```nginx
-upstream app_backend {
-    server 127.0.0.1:8080;
-    keepalive 64;
-    keepalive_requests 1000;
-    keepalive_timeout 75s;
-}
-
-server {
-    location /api/ {
-        proxy_pass http://app_backend;
-        proxy_http_version 1.1;         # required for keepalive
-        proxy_set_header Connection ""; # clear Connection: close
-    }
-}
-```
-
-### Step 4: Check worker connection limits
-
-```bash
-nginx -T 2>/dev/null | grep worker_connections
-ss -tnp | grep nginx | wc -l  # current connection count
-```
-
-If current > worker_connections × worker_processes:
-
-```nginx
-worker_processes auto;
-worker_rlimit_nofile 65535;
-
-events {
-    worker_connections 4096;
-    use epoll;
-    multi_accept on;
-}
-```
-
-> **Complete guide:** [NGINX 502 Bad Gateway Under Load: Causes, Debugging, and Fixes](/blog/nginx-502-under-load)
-
-> **Keepalive deep dive:** [NGINX Upstream Keepalive Explained: Why Missing It Causes 502 Errors](/blog/nginx-upstream-keepalive)
+Test the exact `upstream:` address from the log with `curl -sv` from the NGINX host. The full message-to-fix table is in [NGINX 502 Bad Gateway: Find the Cause From the Error Log](/blog/nginx-502-bad-gateway-fix-linux). If the 502s only appear at peak traffic, go straight to [502 under load](/blog/nginx-502-under-load).
 
 ---
 
 ## 504 Gateway Timeout
 
-504 means NGINX reached the upstream but the upstream took too long to respond.
+```
+upstream timed out (110: Connection timed out) while reading response header from upstream
+upstream timed out (110: Connection timed out) while connecting to upstream
+```
+
+The text after the errno tells you which timeout fired:
+
+- **`while reading response header`**: connected, sent the request, and the app didn't answer within `proxy_read_timeout` (default 60s). The app is slow. Check its logs, DB queries, and downstream calls.
+- **`while connecting`**: the TCP connect itself didn't finish within `proxy_connect_timeout`. Usually the backend's accept queue is full (see [502 under load](/blog/nginx-502-under-load)) or a firewall is silently dropping packets ([test the TCP connection](/blog/test-tcp-connection-linux)).
+
+Raise `proxy_read_timeout` only for endpoints that are legitimately slow (exports, reports), and only in their own `location`:
+
+```nginx
+location /api/export/ {
+    proxy_pass http://app_backend;
+    proxy_read_timeout 300s;
+}
+```
+
+`proxy_read_timeout` is the time **between two reads**, not the total response time. A streaming response that sends something every 30 seconds never trips a 60-second timeout.
+
+---
+
+## 403 Forbidden
+
+Check the error log line. It tells you which kind of 403 it is:
+
+```
+open() "/var/www/site/index.html" failed (13: Permission denied)
+directory index of "/var/www/site/" is forbidden
+access forbidden by rule
+```
+
+**`13: Permission denied`**: the NGINX worker user (`www-data` or `nginx`) needs read permission on the file and execute (`x`) permission on **every parent directory**:
 
 ```bash
-# Confirm: look for timeout errors in log
-grep "timed out" /var/log/nginx/error.log | tail -10
+namei -l /var/www/site/index.html      # shows permissions along the whole path
 ```
+
+On RHEL-family systems with SELinux enforcing, correct Unix permissions aren't enough. Content outside `/usr/share/nginx/html` and `/var/www` needs the right label:
+
+```bash
+ls -Z /srv/site
+semanage fcontext -a -t httpd_sys_content_t "/srv/site(/.*)?"
+restorecon -Rv /srv/site
+```
+
+More on fixing permissions without `chmod 777`: [Permission denied on Linux](/blog/permission-denied-linux-fix-chmod-chown).
+
+**`directory index ... is forbidden`**: the URL maps to a directory with no `index` file, and `autoindex` is off. Usually the wrong `root`, or the build didn't produce `index.html`.
+
+**`access forbidden by rule`**: an `allow`/`deny` matched. Search `nginx -T` for `deny`.
+
+---
+
+## 404 for files that exist
+
+```
+open() "/usr/share/nginx/html/static/app.js" failed (2: No such file or directory)
+```
+
+The path in the log is where NGINX actually looked. If it's not where your file is, the cause is one of these:
+
+- **Wrong `server` block.** `/usr/share/nginx/html` means the request hit the default server, so your `server_name` didn't match. Check the `Host` header and `listen` directives.
+- **`root` vs `alias`.** `root` appends the full URI, while `alias` replaces the location prefix:
+
+```nginx
+location /static/ { root  /srv/app;         }   # /static/a.js → /srv/app/static/a.js
+location /static/ { alias /srv/app/public/; }   # /static/a.js → /srv/app/public/a.js
+```
+
+With `alias`, keep the trailing slashes consistent on both the location and the path.
+
+---
+
+## 413 Request Entity Too Large
+
+```
+client intended to send too large body: 5242880 bytes
+```
+
+The default `client_max_body_size` is `1m`. Raise it where uploads happen, not globally:
+
+```nginx
+location /upload/ {
+    client_max_body_size 50m;
+    proxy_pass http://app_backend;
+}
+```
+
+---
+
+## 499 in the access log
+
+499 is NGINX-specific: **the client closed the connection** before NGINX sent a response. NGINX didn't fail. Something upstream of it (a browser, a mobile app, a load balancer, a health checker) gave up waiting.
+
+Many 499s on one endpoint mean that endpoint is slower than its callers' timeouts. Compare `$request_time` in the access log with the client or load balancer timeout. The fix is on the slow backend, or in aligning timeouts so the outer layer waits longer than the inner one.
+
+---
+
+## NGINX won't start
+
+```bash
+nginx -t
+journalctl -u nginx -n 30 --no-pager
+```
+
+| Message | Fix |
+|---|---|
+| `bind() to 0.0.0.0:80 failed (98: Address already in use)` | Find the owner with `ss -ltnp 'sport = :80'`. See [port already in use](/blog/port-already-in-use-linux-fix) |
+| `bind() to 0.0.0.0:8081 failed (13: Permission denied)` | SELinux: allow the port with `semanage port -a -t http_port_t -p tcp 8081` |
+| `cannot load certificate "/etc/ssl/..." ... No such file or directory` | Wrong path or permissions on the cert |
+| `SSL_CTX_use_PrivateKey(...) failed ... key values mismatch` | Certificate and key don't belong together (see below) |
+| `host not found in upstream "app:8080"` | Hostname in `proxy_pass` or `upstream` doesn't resolve at startup |
+| `unknown directive "..."` | Typo, or the module isn't built in or loaded |
+
+For startup failures that aren't NGINX-specific (unit file errors, dependency failures), see [systemctl service not starting](/blog/systemctl-service-not-starting-fix).
+
+---
+
+## TLS and certificate errors
+
+Check that the certificate and key match, and when the certificate expires:
+
+```bash
+openssl x509 -in /etc/ssl/certs/site.crt -noout -pubkey | sha256sum
+openssl pkey -in /etc/ssl/private/site.key -pubout | sha256sum
+# the two hashes must be identical
+
+openssl x509 -in /etc/ssl/certs/site.crt -noout -subject -enddate
+```
+
+See what clients actually receive, including the chain:
+
+```bash
+openssl s_client -connect example.com:443 -servername example.com </dev/null 2>/dev/null \
+  | grep -E "subject=|issuer=|Verify return code|Protocol|Cipher"
+```
+
+`Verify return code: 21 (unable to verify the first certificate)` usually means you configured `cert.pem` instead of `fullchain.pem`. Some browsers work around the missing intermediate, but curl, mobile apps, and API clients fail.
+
+Leave out `-servername` and you'll often get the default server's certificate. If browsers see the wrong certificate, the `server_name` on the 443 block doesn't match.
+
+For protocol and cipher settings, see [NGINX SSL Hardening](/blog/nginx-ssl-hardening). To check whether your NGINX version itself has known TLS or HTTP/2 vulnerabilities, run it through the [NGINX CVE Checker](/tools/nginx-cve-checker).
+
+---
+
+## My change did nothing
+
+1. **The reload failed.** If the new config is invalid, NGINX keeps running the **old** one. Always run `nginx -t && systemctl reload nginx`, then check the error log for `[emerg]` lines.
+2. **A different `server` block handles the request.** Look for duplicate names:
+
+```bash
+nginx -T 2>&1 | grep -E "conflicting server name|server_name"
+```
+
+`conflicting server name "example.com" on 0.0.0.0:80, ignored` means one of the two blocks is never used.
+
+3. **`add_header` in a `location` drops all inherited headers.** `add_header` is inherited only if the current level has none of its own.
+4. **Browser or CDN cache.** Test with `curl -sI` directly against the server.
+
+---
+
+## Common misconfigurations
+
+### `proxy_pass` with and without a URI
+
+```nginx
+location /api/ { proxy_pass http://backend;      }  # /api/users → /api/users
+location /api/ { proxy_pass http://backend/;     }  # /api/users → /users
+location /api/ { proxy_pass http://backend/v2/;  }  # /api/users → /v2/users
+```
+
+If `proxy_pass` contains any path (even just `/`), the matched location prefix is replaced by it.
+
+### Upstream keepalive without its headers
+
+Before NGINX 1.29.7, `keepalive` in an `upstream` block does nothing unless the proxying location also sets `proxy_http_version 1.1` and `proxy_set_header Connection ""`. Details: [NGINX upstream keepalive](/blog/nginx-upstream-keepalive).
+
+### `if` inside `location`
+
+`if` in a location creates an implicit nested location with surprising rules about which directives apply. Safe uses are `return` and `rewrite ... last`. For method restrictions, use `limit_except`, which must be **inside** the location:
 
 ```nginx
 location /api/ {
-    proxy_pass http://app_backend;
-    proxy_connect_timeout  5s;   # time to establish connection
-    proxy_send_timeout    60s;   # time to send request
-    proxy_read_timeout    60s;   # time to wait for response
+    limit_except GET HEAD POST { deny all; }
+    proxy_pass http://backend;
 }
 ```
 
-Tighten timeouts if your SLA requires fast failure. Increase them if the upstream is legitimately slow (batch jobs, heavy queries).
+### `localhost` in `proxy_pass`
+
+`localhost` can resolve to both `::1` and `127.0.0.1`. If the app only listens on IPv4, half the attempts fail first. Use `127.0.0.1`.
+
+Most of the mistakes in this section can be spotted from the config alone. Paste your `nginx -T` output into the [NGINX Config Analyzer](/tools/nginx-config-analyzer) to check for them in one pass. For a security baseline review, use the [NGINX CIS Hardening Checker](/tools/nginx-cis-hardening-checker).
 
 ---
 
-## SSL/TLS Issues
-
-### Check current SSL grade
-
-Test at [SSL Labs](https://www.ssllabs.com/ssltest/) or from CLI:
+## Reload vs restart
 
 ```bash
-# Check supported protocols
-openssl s_client -connect yourdomain.com:443 -tls1 2>&1 | grep -E "SSL|error"
-# Should fail — TLS 1.0 should be disabled
-
-# Check cipher
-openssl s_client -connect yourdomain.com:443 2>&1 | grep "Cipher"
+nginx -t && systemctl reload nginx     # graceful: new workers, old ones finish their requests
 ```
 
-### Production-hardened SSL config
+Reload applies almost every config change, including new `listen` ports, `worker_processes`, and certificates. A **restart** drops in-flight connections, and you only need it when:
 
-```nginx
-# /etc/nginx/snippets/ssl-params.conf
-
-ssl_protocols TLSv1.2 TLSv1.3;
-ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
-ssl_prefer_server_ciphers on;
-ssl_dhparam /etc/nginx/ssl/dhparam.pem;  # generate: openssl dhparam -out 4096
-ssl_session_cache shared:SSL:10m;
-ssl_session_timeout 1d;
-ssl_session_tickets off;
-ssl_stapling on;
-ssl_stapling_verify on;
-resolver 1.1.1.1 8.8.8.8 valid=300s;
-
-add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-add_header X-Frame-Options DENY always;
-add_header X-Content-Type-Options nosniff always;
-```
-
-> **Complete SSL hardening guide:** [NGINX SSL Hardening: From C Grade to A+ on SSL Labs](/blog/nginx-ssl-hardening)
+- You changed the systemd unit or its limits (e.g. `LimitNOFILE`). These apply to the master process at start.
+- The master process itself is stuck.
+- You need the new binary after an upgrade, and the package didn't handle it. (`nginx -s reload` re-reads config, not the binary.)
 
 ---
 
-## Common Misconfigurations
+## Useful log formats
 
-### Missing `proxy_http_version 1.1`
-
-Keepalive silently does nothing without this line:
+Add upstream timing to the access log. It turns "the site is slow" into "this upstream takes 4 seconds":
 
 ```nginx
-# BROKEN — keepalive configured but not actually used
-upstream app { server 127.0.0.1:8080; keepalive 64; }
-location / { proxy_pass http://app; }  # missing proxy_http_version 1.1
-
-# CORRECT
-location / {
-    proxy_pass http://app;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-}
+log_format timed '$remote_addr "$request" $status $body_bytes_sent '
+                 'rt=$request_time uct=$upstream_connect_time '
+                 'urt=$upstream_response_time ua="$upstream_addr"';
+access_log /var/log/nginx/access.log timed;
 ```
-
-### Wrong `proxy_pass` trailing slash
-
-```nginx
-# These behave differently:
-location /api/ { proxy_pass http://backend; }      # passes /api/foo
-location /api/ { proxy_pass http://backend/; }     # strips /api/, passes /foo
-location /api/ { proxy_pass http://backend/api/; } # passes /api/foo
-```
-
-### Using `if` in location blocks
-
-```nginx
-# WRONG — "if is evil" in NGINX
-location / {
-    if ($request_method = POST) { proxy_pass http://backend; }  # unreliable
-}
-
-# CORRECT
-location / { proxy_pass http://backend; }
-limit_except GET HEAD { deny all; }  # or handle in upstream
-```
-
-### Reload vs Restart
 
 ```bash
-# ALWAYS test config before applying
-nginx -t
-
-# RELOAD — graceful, zero downtime
-systemctl reload nginx
-# or: nginx -s reload
-
-# RESTART — kills existing connections
-# Only needed for: changing listen port, changing worker count
-systemctl restart nginx
+# Slowest requests
+awk '{for(i=1;i<=NF;i++) if($i ~ /^rt=/){sub("rt=","",$i); print $i, $0}}' /var/log/nginx/access.log \
+  | sort -rn | head
 ```
 
----
-
-## Performance Tuning Checklist
-
-```nginx
-# worker_processes should match CPU cores
-worker_processes auto;
-
-# Increase if hitting connection limits
-worker_connections 4096;
-worker_rlimit_nofile 65535;
-
-# Enable sendfile for static files
-sendfile on;
-tcp_nopush on;
-tcp_nodelay on;
-
-# Upstream keepalive (see above)
-keepalive 64;
-
-# Gzip compression
-gzip on;
-gzip_types text/plain text/css application/json application/javascript;
-gzip_min_length 1000;
-
-# Client timeouts
-client_body_timeout 30s;
-client_header_timeout 30s;
-keepalive_timeout 65s;
-send_timeout 30s;
-```
-
----
-
-## Quick Diagnostic Workflow
-
-```bash
-# 1. What error is NGINX logging?
-tail -f /var/log/nginx/error.log
-
-# 2. Is NGINX running and config valid?
-systemctl status nginx
-nginx -t
-
-# 3. Is the upstream reachable?
-ss -tlnp | grep <upstream_port>
-curl -sf http://127.0.0.1:<port>/health
-
-# 4. Connection state under load?
-ss -s | grep time-wait
-watch -n 1 'ss -tnp | grep nginx | wc -l'
-
-# 5. Worker connection limit hit?
-nginx -T | grep worker_connections
-
-# 6. SSL issue?
-openssl s_client -connect domain.com:443 2>&1 | grep -E "Cipher|Protocol|Verify"
-```
+`rt` much larger than `urt` means the time was spent on the client side (slow uploads or downloads). `urt` close to `rt` means the backend is slow. More log techniques: [Linux log analysis](/blog/linux-log-analysis-guide).
 
 ---
 
 ## FAQ
 
-**502 only appears under load — what is it?**
-Almost certainly ephemeral port exhaustion from missing `keepalive` in the upstream block. Check `ss -s` while load is active — TIME-WAIT count will be climbing. Fix: add `keepalive 64` to the upstream block plus `proxy_http_version 1.1` and `proxy_set_header Connection ""` in the location block.
+**How do I see the full NGINX configuration that is actually running?**
+`nginx -T` prints the config NGINX would load now, including all includes. If a reload failed since the last start, the running config may be older. Check the error log for `[emerg]` after reloads.
 
-**nginx -t passes but the site is still broken after reload — why?**
-`nginx -t` validates syntax but not runtime behavior. Common causes: upstream DNS not resolving at startup (use `resolver` directive), file permissions on SSL cert, or a `lua_` or `njs_` module error that only triggers on first request.
+**Why does nginx -t pass but the site is still broken?**
+`nginx -t` checks syntax and that files and hostnames exist. It doesn't check that upstreams are up, that permissions allow reading content, or that the right `server` block matches. Read the error log after the reload.
 
-**What is the difference between `proxy_read_timeout` and `proxy_connect_timeout`?**
-`proxy_connect_timeout` is how long NGINX waits to establish a TCP connection to the upstream. `proxy_read_timeout` is how long NGINX waits between two successive read operations from the upstream response. Both default to 60s. For most APIs, `proxy_connect_timeout 5s` and `proxy_read_timeout 30s` are more appropriate.
+**NGINX resolves my upstream hostname only once. How do I make it follow DNS changes?**
+By default NGINX resolves hostnames in `proxy_pass`/`upstream` at startup and reload. Use a `resolver` plus the `resolve` parameter on `server` lines in an `upstream` block (available in open-source NGINX since 1.27.3), or put a variable in `proxy_pass` so it resolves at request time.
+
+**What's the difference between proxy_connect_timeout and proxy_read_timeout?**
+`proxy_connect_timeout` limits establishing the TCP connection to the upstream (default 60s, and it usually can't exceed 75s). `proxy_read_timeout` limits the gap between two successive reads of the response (default 60s).
 
 ---
 
-*Related reading: [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load) — complete 502 diagnosis guide. [NGINX Upstream Keepalive Explained](/blog/nginx-upstream-keepalive) — deep dive on keepalive and TCP connection reuse. [NGINX SSL Hardening](/blog/nginx-ssl-hardening) — TLS configuration for A+ SSL Labs score.*
+*Related: [Linux Debugging Tools Guide](/blog/linux-debugging-tools-guide) for strace, ss and lsof when the log isn't enough. [Check open ports on Linux](/blog/check-open-ports-linux) to confirm what's listening.*

@@ -1,362 +1,263 @@
 ---
-title: "strace Tutorial: Debug Linux Processes Like a Senior Engineer"
+title: "strace Tutorial: Trace a Running Linux Process Safely"
 date: "2026-04-21"
-excerpt: "A practical strace tutorial for production debugging — trace system calls, diagnose hung processes, find missing files, and debug permission errors with real command examples and incident workflows."
+updated: "2026-10-28"
+excerpt: "Use strace to see why a process hangs, fails or is slow: attach to a PID, filter syscalls, read the output, and know what it costs a production service."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
-slug: "strace-tutorial-linux-debugging"
 category: "linux"
+---
+
+The application says `initialization failed` and nothing else. Or it's been "processing" the same request for ten minutes with an empty log. Or it's slow and nobody knows where the time goes. `strace` shows what the process is actually asking the kernel to do: which files it opens, which addresses it connects to, what it's waiting on. Often the answer is on the first screen.
+
+It also slows the traced process down, sometimes dramatically. This tutorial covers both: how to get answers, and how to avoid causing a second incident while you do.
+
 ---
 
 ## TL;DR
 
-- **`strace`** intercepts and logs every system call a process makes
-- Use it when logs say nothing and the debugger is not an option
-- **`strace -p <pid>`** — attach to a running process
-- **`strace -e trace=file`** — filter to file-related calls only
-- **`strace -c`** — summary mode, shows call counts and time spent
-- **`strace -f`** — follow child processes (needed for multi-process apps)
-- Overhead is real — strace slows the traced process. Use it in production carefully.
-- For a quick look at what a process is doing, `-c` with a 10-second window is low-risk
+```bash
+sudo strace -f -tt -T -yy -p 4521 -o /tmp/trace.txt     # attach to a running process (all threads)
+strace -f -e trace=%file -o /tmp/t.txt ./myapp           # start a program, file syscalls only
+sudo strace -c -f -p 4521                                # count syscalls; Ctrl+C for the summary
+grep -E "= -1 E" /tmp/trace.txt | head                   # failed calls
+```
+
+| Flag | Does |
+|---|---|
+| `-p PID` | Attach to a running process |
+| `-f` | Follow threads and child processes (you almost always want this) |
+| `-e trace=...` | Only show some syscalls: `%file`, `%network`, `%process`, `%signal`, `%memory`, `%desc`, or names like `openat,connect` |
+| `-o FILE` | Write to a file; `-ff -o FILE` writes one file per PID (`FILE.4521`...) |
+| `-tt` | Wall-clock time with microseconds |
+| `-T` | Time spent inside each syscall |
+| `-r` | Time since the **previous** syscall |
+| `-y` / `-yy` | Show the path behind each FD / also socket addresses |
+| `-s 256` | Print up to 256 characters of strings (default 32) |
+| `-c` | Summary table instead of a trace |
 
 ---
 
-## Introduction: When Logs Tell You Nothing
+## Reading the output
 
-A process is hung. The application log shows the last successful request 20 minutes ago, then silence. No errors, no stack traces, nothing. `ps` shows it is alive and in `S` state. Restarting it fixes the problem temporarily, but it hangs again within hours.
-
-This is exactly when you reach for **strace**.
-
-`strace` sits between your process and the Linux kernel, recording every system call — every file open, every network read, every memory allocation, every signal. It shows you what a process is actually doing at the kernel level, regardless of what the application thinks it is doing or what it is logging.
-
-This strace tutorial covers how to attach it, what to look for, and how to use it during real production incidents without causing more problems.
-
----
-
-## What Is strace?
-
-Every meaningful thing a user-space process does goes through the kernel via system calls: reading files, writing to sockets, allocating memory, creating threads, receiving signals. `strace` uses the `ptrace` system call to intercept these calls and log them.
-
-```bash
-# Basic: trace a new process from start
-strace ls /tmp
-
-# Attach to running process by PID
-strace -p 1234
-
-# Install if not present
-apt install strace     # Ubuntu
-dnf install strace     # RHEL/Fedora
+```
+14:22:03.118204 openat(AT_FDCWD, "/etc/myapp/config.yml", O_RDONLY) = -1 ENOENT (No such file or directory) <0.000021>
+14:22:03.118302 openat(AT_FDCWD, "/opt/myapp/config.yml", O_RDONLY) = 3</opt/myapp/config.yml> <0.000015>
+14:22:03.118340 read(3</opt/myapp/config.yml>, "server:\n  port: 8080\n", 4096) = 21 <0.000009>
+└─ -tt time ──┘ └syscall┘└──────────── arguments ──────────────┘   └ return value ┘        └ -T ┘
 ```
 
-Output format:
-```
-openat(AT_FDCWD, "/etc/app/config.yml", O_RDONLY) = 3
-read(3, "server:\n  port: 8080\n", 4096)  = 21
-close(3)                                   = 0
-```
+- **Return value:** for `openat`, the new file descriptor (`3`). `-1` plus an errno name means failure.
+- **`<0.000021>`** (with `-T`): seconds spent in the call. A `read` or `poll` taking seconds is where the time goes.
+- **`3</opt/...>`** (with `-y`): the path behind the FD, so you don't have to track numbers by hand.
 
-Each line shows: `syscall(arguments) = return_value`
-
-A return value of `-1` with an error code means the call failed:
-```
-openat(AT_FDCWD, "/etc/app/secret.key", O_RDONLY) = -1 ENOENT (No such file or directory)
-```
-
----
-
-## Essential strace Flags
-
-### Attach to a Running Process
-
-```bash
-strace -p 1234
-```
-
-This is what you use in production — attach to an already-running process. You do not need to restart it.
-
-### Follow Child Processes
-
-```bash
-strace -f -p 1234
-```
-
-Without `-f`, you only see the main process. Most production applications fork workers. `-f` follows all children. Essential for multi-threaded applications and anything that forks.
-
-### Filter to Specific System Call Categories
-
-```bash
-# File operations only (open, read, write, close, stat)
-strace -e trace=file -p 1234
-
-# Network operations only
-strace -e trace=network -p 1234
-
-# Process management (fork, exec, exit, wait)
-strace -e trace=process -p 1234
-
-# Memory operations (mmap, mprotect, brk)
-strace -e trace=memory -p 1234
-
-# Signal handling
-strace -e trace=signal -p 1234
-
-# Specific calls only
-strace -e trace=read,write,openat -p 1234
-```
-
-Filtering is critical in production — unfiltered strace on a busy process generates thousands of lines per second.
-
-### Summary Mode — Low Overhead, High Value
-
-```bash
-# Run for 10 seconds, then show summary
-strace -c -p 1234
-# Press Ctrl+C after 10 seconds
-
-# Output:
-# % time     seconds  usecs/call     calls    errors syscall
-# ------ ----------- ----------- --------- --------- ----------------
-#  45.23    0.023481         234       100        12 futex
-#  30.12    0.015643          15      1023           read
-#  15.34    0.007965          79       100           write
-```
-
-`-c` is the lowest-overhead option. It counts calls and measures time without logging each one. Use it to identify which category of syscall is consuming time, then follow up with a targeted `-e trace=` filter.
-
-### Timestamps
-
-```bash
-# Absolute timestamps
-strace -t -p 1234
-
-# Time since first syscall (useful for measuring durations)
-strace -r -p 1234
-
-# Time spent in each call (microseconds)
-strace -T -p 1234
-```
-
-`-T` is valuable for finding slow syscalls. If `read()` is taking 2 seconds, that is a blocking I/O call you can investigate.
-
-### Write Output to File
-
-```bash
-# Write strace output to file (not terminal)
-strace -o /tmp/strace_output.txt -p 1234
-
-# Follow children, each to separate files
-strace -f -o /tmp/trace -p 1234
-# Creates /tmp/trace.1234, /tmp/trace.1235, etc.
-```
-
-Always write to file in production. Terminal output is lossy, especially on fast processes.
-
----
-
-## Real Debugging Scenarios
-
-### Scenario 1: Process Hangs — What Is It Waiting On?
-
-Process is stuck. PID is 8823. `ps` shows state `S`.
-
-```bash
-strace -p 8823
-```
-
-Output immediately shows:
-```
-futex(0x7f3a2c001234, FUTEX_WAIT, 1, NULL
-```
-
-The process is blocked on a futex — a mutex or semaphore. Something it is waiting to lock is held by another thread or process.
-
-```bash
-# Find who holds the lock
-strace -f -p 8823 2>&1 | grep -E "futex|LOCK"
-
-# Or check with gdb if available
-gdb -p 8823 -ex "thread apply all bt" -batch
-```
-
-If `futex` with `NULL` timeout means it is waiting indefinitely. This is a deadlock or a lock held by a crashed process.
-
-### Scenario 2: Application Fails to Start — Missing File or Permission
-
-New deployment. Application fails immediately. Log says "initialization failed" with no details.
-
-```bash
-strace -e trace=file ./myapp 2>&1 | grep -E "ENOENT|EACCES|EPERM"
-```
-
-Output:
-```
-openat(AT_FDCWD, "/etc/myapp/config.yml", O_RDONLY) = -1 ENOENT (No such file or directory)
-openat(AT_FDCWD, "/etc/myapp/config.yaml", O_RDONLY) = -1 ENOENT (No such file or directory)
-openat(AT_FDCWD, "/opt/myapp/config.yml", O_RDONLY) = 3
-```
-
-The application tried two config paths before finding a third. If you are deploying to a new path structure, the first two fail silently. Without strace, you would never know the application was looking in multiple places.
-
-Common errors to grep for:
-```bash
-strace -e trace=file -p <pid> 2>&1 | grep -E "= -1"
-```
+The errno names you'll see most:
 
 | Error | Meaning |
 |---|---|
-| `ENOENT` | File or directory does not exist |
-| `EACCES` | Permission denied |
-| `EPERM` | Operation not permitted (capability or ownership) |
-| `ENOTSUP` | Operation not supported |
-| `ETIMEDOUT` | Network/socket timeout |
-| `ECONNREFUSED` | Connection refused |
+| `ENOENT` | File or directory doesn't exist |
+| `EACCES` | Permission denied (file mode, directory traversal, SELinux/AppArmor) |
+| `EPERM` | Operation not permitted (missing capability, immutable file) |
+| `ECONNREFUSED` | Remote host answered with a reset: nothing listening on that port |
+| `ETIMEDOUT` | No answer at all: host down or a firewall silently dropping |
+| `EAGAIN` | "Try again": normal on non-blocking sockets, usually not an error |
+| `EINPROGRESS` | Non-blocking `connect()` started; the result comes later |
 
-### Scenario 3: High CPU — What Is the Process Doing?
+Not every `-1` is a problem. Programs probe for optional files, and event loops get `EAGAIN` constantly. Look for the failure **right before** the program gives up.
 
-A process is consuming 80% CPU. The application team says "we don't know why."
+With `-f` you'll also see split lines when two threads interleave:
 
-```bash
-# Summary mode first — identify the syscall category
-strace -c -p <pid>
-# Run for 30 seconds, Ctrl+C
+```
+[pid  4533] read(12, <unfinished ...>
+[pid  4521] futex(0x7f3a2c0012a8, FUTEX_WAKE_PRIVATE, 1) = 1
+[pid  4533] <... read resumed>"GET /health HTTP/1.1\r\n...", 4096) = 78
 ```
 
-If the top syscall by time is `futex`:
-- Thread contention — check thread count with `ps -eLf | grep <pid>`
-
-If the top syscall is `read` or `write` with high count:
-- Heavy I/O — check what file descriptors: `lsof -p <pid>`
-
-If no syscalls dominate and CPU is in `%us`:
-- Pure compute in user space — no syscall-level fix. Profile at application level.
-
-```bash
-# See what it is reading/writing
-strace -e trace=read,write -T -p <pid> 2>&1 | head -30
-```
-
-### Scenario 4: Network Connection Debugging
-
-Service cannot connect to a database. Error is generic: "connection failed."
-
-```bash
-strace -e trace=network -p <pid> 2>&1 | grep -E "connect|recv|send"
-```
-
-Output:
-```
-connect(5, {sa_family=AF_INET, sin_port=htons(5432), sin_addr=inet_addr("10.0.1.50")}, 16) = -1 ETIMEDOUT
-```
-
-The process is trying to connect to `10.0.1.50:5432` (PostgreSQL) and getting a timeout. Now you know:
-- The exact destination IP and port
-- The error is ETIMEDOUT (not ECONNREFUSED — server is not there at all, or firewall is dropping packets)
-
-```bash
-# Verify from the command line
-nc -zv 10.0.1.50 5432
-```
-
-### Scenario 5: Finding What Files an Application Writes
-
-Audit requirement: what files does this application write to?
-
-```bash
-strace -e trace=openat,creat,write -f -p <pid> -o /tmp/file_writes.txt 2>&1 &
-# Let it run for a few minutes
-kill %1  # stop strace
-
-grep 'O_WRONLY\|O_RDWR\|O_CREAT' /tmp/file_writes.txt | grep -v '= -1'
-```
-
-This gives you a list of every file the process opened for writing during the trace period.
+`<unfinished ...>` and `<... resumed>` are the same `read` call, printed in two halves.
 
 ---
 
-## Performance Overhead and Production Safety
-
-`strace` has real overhead. The `ptrace` mechanism stops the process on every system call to record it. On a busy process making thousands of syscalls per second, this can slow it down by 50–100%.
-
-**Safe usage patterns in production:**
+## Attaching to a running process
 
 ```bash
-# SAFE: summary mode, short window
-strace -c -p <pid>  # 10-30 seconds, then Ctrl+C
-
-# SAFE: filtered trace, low-volume process
-strace -e trace=file -p <pid>  # only if process makes few file calls
-
-# RISKY: full unfiltered trace on busy process
-strace -p <pid>  # can significantly slow a production service
-
-# SAFEST: trace on a copy in staging, not production
+pgrep -a myapp                 # find the PID
+sudo strace -f -tt -T -p 4521
 ```
 
-**Always have a way to detach:**
-- `Ctrl+C` detaches strace but leaves the process running normally
-- The traced process continues after strace exits
+Notes that save time:
 
-```bash
-# Detach strace from a process without killing it
-# Just Ctrl+C in the strace terminal — the process keeps running
-```
+- **Use `-f`, even with `-p`.** Without it, strace attaches only to the thread whose ID you gave, usually the main thread, which in many servers just sits waiting while worker threads do the work.
+- **Use `sudo`.** On Ubuntu and others, `kernel.yama.ptrace_scope=1` lets ordinary users trace only their own child processes. Attaching to an existing process as non-root fails with `Operation not permitted`.
+- **`Ctrl+C` detaches.** The process keeps running normally. strace doesn't kill it.
+- **Always `-o` to a file in production.** It's faster than printing to a terminal and you can grep it afterwards.
 
 ---
 
-## strace vs Other Tools
+## What it costs: overhead you need to know
 
-| Tool | Use case |
+strace uses `ptrace`. Every syscall the process makes stops it **twice** (entry and exit), switches to strace, and back. A process making tens of thousands of syscalls per second can slow down many times over while traced. Latency-sensitive services will notice.
+
+Two common beliefs that are wrong:
+
+- **"`-c` is low overhead."** `-c` prints less, but the process still stops on every syscall. The cost is similar to a full trace.
+- **"`-e trace=` filtering reduces the overhead."** When attaching with `-p`, strace still stops on every syscall and just doesn't print the others. Since strace 5.3, `--seccomp-bpf` can filter in the kernel so unrelated syscalls don't stop at all, but it only works for processes strace **starts** (with `-f`), not for `-p`.
+
+Practical rules:
+
+- Keep traces short: seconds to a minute, not "leave it running".
+- Trace one worker, not the whole fleet. If there's a load balancer, take that instance out of rotation first.
+- For low-overhead syscall visibility on busy production systems, use `perf trace` or eBPF tools (`bpftrace`, the bcc tools like `opensnoop` and `tcpconnect`). They use kernel tracepoints instead of stopping the process.
+
+---
+
+## Scenario 1: "initialization failed", no details
+
+```bash
+strace -f -e trace=%file -o /tmp/start.txt /opt/myapp/bin/myapp --config /etc/myapp/prod.yml
+grep -E "= -1 E(NOENT|ACCES|PERM)" /tmp/start.txt | tail -20
+```
+
+```
+openat(AT_FDCWD, "/etc/myapp/prod.yml", O_RDONLY) = 3
+openat(AT_FDCWD, "/etc/myapp/certs/client.key", O_RDONLY) = -1 EACCES (Permission denied)
+```
+
+The config opened fine; the client key didn't. The last failure before exit is usually the cause. Check the file **and every parent directory**: `namei -l /etc/myapp/certs/client.key` shows permissions along the whole path.
+
+For a service, reproduce it as the service user: `sudo -u appuser strace -f -e trace=%file ...`. See [permission denied fixes](/blog/permission-denied-linux-fix-chmod-chown) and [systemd service not starting](/blog/systemctl-service-not-starting-fix).
+
+---
+
+## Scenario 2: the process hangs
+
+```bash
+sudo strace -f -tt -T -yy -p 4521
+```
+
+What you see first tells you what it's waiting for:
+
+| You see | It's waiting for |
 |---|---|
-| `strace` | What syscalls is the process making? |
-| `lsof` | What files/sockets does the process have open right now? |
-| `ss` / `netstat` | What network connections does the process have? |
-| `gdb` | What is the application-level call stack? |
-| `perf` | Which code paths are consuming CPU? |
-| `ltrace` | What library calls is the process making? |
+| `read(7<TCP:[10.0.1.5:51234->10.0.2.15:5432]>, ` with no return | Data from that peer, here the database |
+| `epoll_wait(...)`, `poll(...)`, `select(...)` repeating with timeouts | Nothing to do: an idle event loop. Normal for an idle server. |
+| `futex(0x..., FUTEX_WAIT_PRIVATE, ...)` on every thread | Threads waiting on locks or condition variables |
+| `wait4(...)` | A child process it started |
+| `flock(...)` / `fcntl(..., F_SETLKW, ...)` | A file lock held by another process: `lsof /path` finds it |
+| Nothing at all | Possibly stuck **inside** the kernel (D state). Check `ps -o stat= -p 4521`. |
 
-Use `strace` when you need to know what the process is doing at the kernel boundary. Use `lsof` when you want to see the current state of open file descriptors without the overhead of tracing.
+About `futex`: idle thread pools sit in `futex` waits all the time, so it isn't proof of a deadlock. strace also can't tell you which thread holds the lock. For that you need a stack dump from the runtime: `jstack` (Java), `py-spy dump` (Python), or `gdb -p 4521 -batch -ex "thread apply all bt"` for native code.
 
-> *For `lsof` and `ss` usage in production, see [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging).*
+For a process in **D state**, strace usually prints nothing because the process isn't returning to user space. Read the kernel stack instead: `sudo cat /proc/4521/stack`. The [process states guide](/blog/linux-process-states-guide) explains D state.
 
 ---
 
-## Quick Reference
+## Scenario 3: connection failures and slow calls
 
 ```bash
-# ── ATTACH ───────────────────────────────────────────────────────
-strace -p <pid>                    # attach to running process
-strace -f -p <pid>                 # follow children too
-strace command                     # trace from start
-
-# ── FILTER ───────────────────────────────────────────────────────
-strace -e trace=file -p <pid>      # file operations
-strace -e trace=network -p <pid>   # network operations
-strace -e trace=process -p <pid>   # fork/exec/exit
-strace -e trace=read,write -p <pid> # specific calls
-
-# ── OUTPUT ───────────────────────────────────────────────────────
-strace -o /tmp/out.txt -p <pid>    # write to file
-strace -c -p <pid>                 # summary mode (low overhead)
-strace -T -p <pid>                 # show time per call
-strace -t -p <pid>                 # show timestamps
-
-# ── FIND FAILURES ─────────────────────────────────────────────────
-strace -e trace=file -p <pid> 2>&1 | grep "= -1"   # all failed calls
-strace -e trace=file -p <pid> 2>&1 | grep ENOENT   # missing files
-strace -e trace=file -p <pid> 2>&1 | grep EACCES   # permission denied
+sudo strace -f -tt -T -yy -e trace=%network -p 4521 -o /tmp/net.txt
+grep -E "connect|SO_ERROR" /tmp/net.txt | head
 ```
 
+Blocking connect, failing fast:
+
+```
+connect(9, {sa_family=AF_INET, sin_port=htons(5432), sin_addr=inet_addr("10.0.2.15")}, 16) = -1 ECONNREFUSED (Connection refused) <0.000412>
+```
+
+The host answered and refused. Nothing is listening on 10.0.2.15:5432, or a firewall rejects with a reset. Check the service and `ss -ltn` on the database host.
+
+Same failure on a **non-blocking** socket (most modern runtimes) looks different, because the result comes later:
+
+```
+connect(9, {sa_family=AF_INET, sin_port=htons(5432), sin_addr=inet_addr("10.0.2.15")}, 16) = -1 EINPROGRESS (Operation now in progress)
+poll([{fd=9, events=POLLOUT}], 1, 5000) = 1 ([{fd=9, revents=POLLOUT|POLLERR|POLLHUP}]) <0.000390>
+getsockopt(9, SOL_SOCKET, SO_ERROR, [111], [4]) = 0
+```
+
+`EINPROGRESS` isn't the error. The real result is the `SO_ERROR` value: `111` is `ECONNREFUSED`, `110` is `ETIMEDOUT` (newer strace versions print the name instead of the number). A `poll` that waits its full timeout (`<5.00...>`) before `SO_ERROR` returns 110 means packets are being dropped somewhere: host down, routing, or a firewall `DROP`. [Test TCP connections](/blog/test-tcp-connection-linux) has the next steps.
+
+Slow DNS looks like this: a `connect` to port 53, then `poll` calls that each take seconds.
+
+```
+connect(5, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("10.0.0.2")}, 16) = 0
+sendto(5, "\x8a\x1f\x01\x00...", 36, MSG_NOSIGNAL, NULL, 0) = 36
+poll([{fd=5, events=POLLIN}], 1, 5000) = 0 (Timeout) <5.005117>
+```
+
+Each lookup waits 5 seconds for a dead resolver before trying the next one. See [DNS not resolving](/blog/dns-not-resolving-linux-fix).
+
 ---
 
-## Conclusion
+## Scenario 4: where does the time go?
 
-`strace` is the tool you reach for when the application has stopped telling you anything useful. It bypasses application-level abstractions and shows you exactly what the process is doing at the system call level.
+```bash
+sudo strace -c -f -p 4521           # Ctrl+C after 10 to 30 seconds
+```
 
-The most important skill with strace is filtering. Unfiltered output on a busy process is overwhelming. Start with `-c` to find which syscall category dominates, then drill down with `-e trace=` to get actionable output.
+```
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 61.40    0.412337          41     10021           write
+ 22.18    0.148950          14     10022           read
+  9.73    0.065322          65      1002       201 futex
+  3.90    0.026181          26      1001           epoll_wait
+...
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.671530                 22109       201 total
+```
 
-**Use it carefully in production** — the overhead is real. Short windows, filtered traces, and summary mode are your safe patterns.
+By default, `-c` reports **CPU time spent in the kernel** for each syscall, not wall-clock time. A thread blocked for 10 seconds in `read` barely shows up. Add `-w` to summarize wall-clock latency instead, which is what you want when hunting for blocking calls:
+
+```bash
+sudo strace -c -w -f -p 4521
+```
+
+How to read it:
+
+- **Huge `calls` for `read`/`write` with tiny sizes:** many small I/O operations, e.g. unbuffered logging, writing one line per syscall.
+- **High `errors` on one syscall:** check what's failing with a filtered trace (`-e trace=futex` or whatever it is).
+- **Process at 100% CPU but few syscalls:** the time is in user space (application code). strace can't help; use `perf top -p 4521` or a language profiler. See [high CPU usage](/blog/linux-high-cpu-usage-guide).
 
 ---
 
-*Related reading: [strace, lsof, and ss: The Trio That Solves Every Mystery](/blog/strace-lsof-ss-debugging) — combining strace with lsof and ss for full process investigation. [Linux Process States Explained](/blog/linux-process-states-guide) — understanding D and S states that strace helps diagnose.*
+## Scenario 5: what does this script actually run?
+
+```bash
+strace -f -e trace=execve -s 256 -o /tmp/exec.txt ./deploy.sh
+grep execve /tmp/exec.txt | grep -v ENOENT
+```
+
+```
+4610  execve("/usr/bin/curl", ["curl", "-fsS", "https://artifacts.internal/app-2.4.1.tar.gz", "-o", "/tmp/app.tgz"], 0x5581... /* 24 vars */) = 0
+4612  execve("/usr/bin/tar", ["tar", "xzf", "/tmp/app.tgz", "-C", "/opt/app"], 0x5581... /* 24 vars */) = 0
+```
+
+Every command with its full arguments, including those buried in sourced files. (`ENOENT` lines are the shell searching `PATH`; filter them out.)
+
+---
+
+## Containers
+
+strace inside a container needs the `SYS_PTRACE` capability and a seccomp profile that allows `ptrace`, which many setups don't grant. It's usually easier to trace from the **host**, where container processes are ordinary PIDs:
+
+```bash
+PID=$(docker inspect -f '{{.State.Pid}}' mycontainer)
+sudo strace -f -p "$PID"
+```
+
+Paths in the output are from the container's filesystem view.
+
+---
+
+## Quick checklist
+
+1. `pgrep -a` for the PID; `sudo strace -f -tt -T -yy -p PID -o file`.
+2. Keep it short; take the instance out of rotation if you can.
+3. Failure? Last `= -1 E...` before the exit.
+4. Hang? The syscall that doesn't return, and the FD it's on.
+5. Slow? `-c -w` for wall-clock time per syscall; `-T` on the suspect.
+6. Busy CPU with few syscalls? It's user space: switch to `perf`.
+
+---
+
+*Related: [strace, lsof and ss together](/blog/strace-lsof-ss-debugging) for a symptom-driven workflow with all three tools, and [Linux debugging tools](/blog/linux-debugging-tools-guide) for choosing the right tool for a symptom.*

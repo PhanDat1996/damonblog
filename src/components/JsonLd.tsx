@@ -53,7 +53,7 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
       url: 'https://www.damonsec.com',
     },
     datePublished: new Date(post.date).toISOString(),
-    dateModified: new Date(post.date).toISOString(),
+    dateModified: new Date(post.updated ?? post.date).toISOString(),
     url,
     mainEntityOfPage: {
       '@type': 'WebPage',

@@ -1,247 +1,185 @@
 ---
-title: "How to Find Process by Name in Linux: pgrep, ps, pidof"
+title: "Find a Process by Name in Linux: pgrep, pidof, ps -C"
 date: "2026-04-22"
-excerpt: "Find a Linux process by name using pgrep, ps, pidof, and top — with real examples for scripting, killing, and monitoring processes in production."
+updated: "2026-10-28"
+excerpt: "pgrep found nothing, but the process is running? How pgrep, pidof and ps -C match names, the 15-character limit, -f vs -x, and safe use in scripts."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
-slug: "linux-find-process-by-name-guide"
 category: "linux"
 ---
 
-You know what the process is called. You need its PID, its state, its parent, or just to know if it's running. Here's every reliable way to find a process by name.
-
----
-
-## TL;DR
+You run `pgrep -x elasticsearch-server` and get nothing. `ps aux` clearly shows it running. Or `pkill java` takes down three services instead of one. Both come from the same thing: each tool matches against a **different** name, and the rules aren't obvious.
 
 ```bash
-pgrep nginx           # PID(s) — best for scripting
-pgrep -a nginx        # PID + full command
-ps aux | grep '[n]ginx'    # with details, no self-match
-pidof nginx           # PID only, exact binary name
+pgrep -a nginx                  # PIDs + command lines matching "nginx" in the process name
+pgrep -x nginx                  # exact process name only
+pgrep -af "service-prod.jar"    # match anywhere in the full command line
+pidof nginx                     # PIDs of the program named nginx
+ps -C nginx -o pid,ppid,stat,args
 ```
 
 ---
 
-## pgrep: Cleanest for Scripting
+## What "the name" actually is
 
-`pgrep` searches the process table by name and returns matching PIDs:
+Every process has two names the kernel reports:
 
-```bash
-# Basic — returns PID(s)
-pgrep nginx
+| Name | Where it lives | Example | Used by |
+|---|---|---|---|
+| **comm** | `/proc/<PID>/comm` | `java` | `pgrep`, `pkill`, `ps -C`, `top` |
+| **command line** | `/proc/<PID>/cmdline` | `java -Xmx4g -jar /opt/app/service-prod.jar` | `pgrep -f`, `ps ... args` |
 
-# Show full command line
-pgrep -a nginx
+Two consequences:
 
-# Case-insensitive
-pgrep -i NGINX
+1. **comm is truncated to 15 characters.** A program called `elasticsearch-server` has comm `elasticsearch-s`. `pgrep -x elasticsearch-server` never matches. Use `pgrep -f` or match the truncated name.
+2. **For interpreted programs, comm is the interpreter** (or whatever the program set). A Python app shows up as `python3`, a Node app as `node`, a JAR as `java`. To find *your* app, match the command line with `-f`.
 
-# Match exact name only
-pgrep -x nginx       # won't match "nginx-debug"
-
-# By user
-pgrep -u www-data nginx
-
-# Count matching processes
-pgrep -c nginx
-
-# Return 0 if found, 1 if not — good for conditionals
-pgrep -x nginx > /dev/null && echo "running" || echo "not running"
-```
+Programs can also rename themselves. NGINX workers show `nginx: worker process` in `args`, PostgreSQL backends show `postgres: app mydb 10.0.0.5(51234) idle`.
 
 ---
 
-## ps: Find with Full Details
-
-`ps` shows processes with resource usage, state, and parent PID:
+## pgrep
 
 ```bash
-# Find all nginx processes
-ps aux | grep nginx
-
-# Avoid matching grep itself (important in scripts)
-ps aux | grep '[n]ginx'
-# The character class [n] doesn't match the string "grep [n]ginx"
-
-# Find by command pattern (full command line)
-ps aux | grep "java.*service.jar"
-
-# Show specific columns
-ps -eo pid,ppid,user,stat,%cpu,%mem,comm | grep nginx
+pgrep nginx              # pattern (regex) anywhere in comm: also matches "nginx-exporter"
+pgrep -x nginx           # comm must equal "nginx" exactly
+pgrep -f "worker.py"     # pattern anywhere in the full command line
+pgrep -a nginx           # also print the command line
+pgrep -l nginx           # also print the name
+pgrep -u www-data nginx  # only this user's processes
+pgrep -c nginx           # count instead of list
+pgrep -o -x nginx        # oldest match (usually the master/parent)
+pgrep -n -x nginx        # newest match
+pgrep -P 1102            # children of PID 1102
+pgrep -d, -x nginx       # comma-separated, handy for top -p
 ```
 
-### The self-match problem
+The pattern is an extended regular expression, so `pgrep 'php-fpm|nginx'` works and `.` matches any character.
+
+Exit codes are script-friendly: **0** if something matched, **1** if nothing did, **2** for a syntax error. `pgrep` never matches itself.
+
+### The `-f` self-match trap
+
+`pgrep` excludes itself, but not its parent shell. This in a script:
 
 ```bash
-# BAD — the grep process shows up in results
-ps aux | grep nginx
-# nginx   1234  ... nginx: master process
-# root    9901  ... grep nginx       ← this is the grep itself
-
-# GOOD — character class trick
-ps aux | grep '[n]ginx'
-# nginx   1234  ... nginx: master process
+ssh host "pgrep -f worker.py"
 ```
+
+can match the remote `bash -c "pgrep -f worker.py"` process, because that shell's command line contains `worker.py`. The same happens in cron jobs and `watch`. Make the pattern something the wrapper won't contain, e.g. `pgrep -f '[w]orker.py'` (the regex still matches `worker.py`, but the literal text `[w]orker.py` in the wrapper's command line doesn't).
 
 ---
 
-## pidof: Exact Binary Name
-
-`pidof` matches the exact executable name:
+## pidof
 
 ```bash
 pidof nginx
-# 1234 1235 1236   ← master + workers
-
-pidof sshd
-# 1023
-
-# Multiple processes
-pidof nginx sshd postgres
+# 1103 1102
+pidof -s nginx           # just one PID
+pidof -x backup.sh       # also match shell scripts by script name
 ```
 
-Unlike `pgrep`, `pidof` matches the exact binary name only. `pidof ngin` returns nothing even though `nginx` is running.
+`pidof` matches the program name (from the executable or `argv[0]`), not a pattern. `pidof ngin` returns nothing. It doesn't truncate at 15 characters the way comm does, so it can find long names that `pgrep -x` misses.
+
+It doesn't filter by user and doesn't do regexes. On Debian/Ubuntu it comes from `sysvinit-utils`; on RHEL 8 and later from `procps-ng`. Behavior is close but not identical, so prefer `pgrep` in portable scripts.
 
 ---
 
-## Finding by Full Command Line
-
-When multiple processes have the same name but different arguments:
+## ps -C and ps | grep
 
 ```bash
-# pgrep with full command match
-pgrep -f "java.*service-prod.jar"
-
-# ps with grep
-ps aux | grep "service-prod.jar" | grep -v grep
-
-# Find all java processes with different configs
-ps -eo pid,cmd | grep java | grep -v grep
+ps -C nginx -o pid,ppid,user,stat,etime,args
 ```
 
-`pgrep -f` matches against the full command line including arguments — essential when you have multiple instances of the same binary with different configs.
+`-C` selects by exact comm (same 15-character limit) and lets you choose columns, which is the best combination when you want details rather than just PIDs.
+
+If you grep `ps` output, avoid matching the grep itself:
+
+```bash
+ps aux | grep '[n]ginx'
+```
+
+The regex `[n]ginx` matches "nginx", but grep's own command line contains `[n]ginx`, which doesn't. Fine for a quick look; in scripts, `pgrep` is cleaner.
 
 ---
 
-## Real Examples
+## Common lookups
 
-### Check if a service is running
+### Is it running? (in a script)
 
 ```bash
-pgrep -x nginx > /dev/null && echo "nginx is running" || echo "nginx is NOT running"
-
-# In a script
-if pgrep -x nginx > /dev/null 2>&1; then
-  echo "OK: nginx running ($(pgrep -c nginx) processes)"
+if pgrep -x nginx >/dev/null; then
+  echo "nginx running ($(pgrep -cx nginx) processes)"
 else
-  echo "ALERT: nginx not found"
+  echo "nginx not running" >&2
   exit 1
 fi
 ```
 
-### Find all instances of an app
+For systemd-managed services, `systemctl is-active --quiet nginx` is a better check: it tells you whether the **service** is up, not just whether some process named nginx exists. See [How to Check Running Processes](/blog/check-running-process-linux).
+
+### Which of several Java apps is which?
 
 ```bash
-# List all java processes with their args
-ps -eo pid,user,cmd | grep '[j]ava'
-# 8823 app  java -Xmx4g -jar service-prod.jar
-# 9011 app  java -Xmx2g -jar worker.jar
+pgrep -af java
+# 8823 java -Xmx4g -jar /opt/app/service-prod.jar
+# 9011 java -Xmx2g -jar /opt/app/worker.jar
 ```
-
-### Find a process and check its state
 
 ```bash
-PID=$(pgrep -x myapp)
-if [ -n "$PID" ]; then
-  ps -p $PID -o pid,stat,etime,%cpu,%mem,comm
-fi
+PID=$(pgrep -f 'service-prod\.jar')
 ```
 
-### Find and monitor a process's resources
+Escape the dot or it matches any character.
+
+### Details for every match
 
 ```bash
-# Watch CPU and memory for nginx
-watch -n 2 'ps -eo pid,user,%cpu,%mem,stat,comm | grep [n]ginx'
-
-# Or use top filtered to PID
-top -p $(pgrep -d, nginx)
+ps -o pid,ppid,stat,etime,%cpu,rss,args -p "$(pgrep -d, -x nginx)"
+top -p "$(pgrep -d, -x nginx)"
 ```
 
-### Find zombie processes by name
+Both fail with an error if `pgrep` returns nothing, so check first in scripts. Column meanings are in [ps Command in Linux](/blog/ps-command-linux-troubleshooting).
+
+### What's using a port
+
+Name unknown, port known? Go from the port:
 
 ```bash
-ps -eo pid,stat,comm | awk '$2 ~ /Z/ && $3 ~ /myapp/'
+sudo ss -tlnp 'sport = :8080'
 ```
+
+Then [Kill a Process by Port](/blog/linux-kill-process-by-port) if that's the goal.
 
 ---
 
-## Output Explanation
+## Killing by name, safely
+
+`pkill` uses exactly the same matching as `pgrep`, so **run `pgrep` with the same arguments first** and look at what it selects:
 
 ```bash
-ps aux | grep '[n]ginx'
+pgrep -a -x -u app myworker      # preview
+pkill    -x -u app myworker      # same match, sends SIGTERM
 ```
 
-```
-USER   PID  %CPU %MEM    VSZ   RSS TTY   STAT START   TIME COMMAND
-www    1234   0.0  0.1  45312  4096 ?     Ss   09:15   0:00 nginx: master process /usr/sbin/nginx
-www    1235   2.1  0.3  45312  8192 ?     S    09:15   1:23 nginx: worker process
-www    1236   1.8  0.3  45312  8064 ?     S    09:15   1:19 nginx: worker process
-```
+- Without `-x`, `pkill nginx` also signals `nginx-exporter` or anything else containing "nginx".
+- `pkill -f java` kills every Java process on the box. Match the JAR or main class instead.
+- For services managed by systemd, use `systemctl stop|restart`. A unit with `Restart=always` will simply start a pkill'd process again.
+- Default signal is SIGTERM. Use `-9` (SIGKILL) only if the process ignores SIGTERM, since it gets no chance to flush data or remove lock files.
 
-- `Ss` — sleeping, session leader (master process)
-- `S` — sleeping (worker processes)
-- `TIME` — cumulative CPU time consumed, not wall time
+`killall` exists too (psmisc). On Linux it kills by name; on some other Unix systems `killall` kills **everything**, so don't build that habit if you work across platforms.
 
 ---
 
-## Common Mistakes
+**Why does pgrep not find a process with a long name?**
+`pgrep` matches the 15-character comm by default. Use `pgrep -f` to match the full command line, or `pidof`, which uses the full program name.
 
-**Mistake 1: Using `ps aux | grep name | awk '{print $2}' | xargs kill`**
-Race condition — PID may change between `ps` and `kill`. Use `pkill` instead:
+**How do I find a process by name and get only one PID?**
+`pgrep -o -x name` for the oldest (typically the parent), `pgrep -n -x name` for the newest, or `pidof -s name`.
 
-```bash
-pkill -TERM nginx
-kill $(pgrep -x nginx)   # explicit but controlled
-```
-
-**Mistake 2: `pidof` returning nothing for interpreted scripts**
-`pidof python` may not find `python3 /opt/app/server.py`. Use `pgrep -f "server.py"` instead.
-
-**Mistake 3: Not accounting for multiple instances**
-`pgrep nginx` returns multiple PIDs. When you only expect one, check:
-
-```bash
-pgrep -c nginx   # count
-# If > 1, investigate why
-```
+**Is pgrep case-sensitive?**
+Yes. Add `-i` for case-insensitive matching.
 
 ---
 
-## Pro Tips
-
-```bash
-# Find process and immediately show its open files
-lsof -p $(pgrep -x nginx | head -1)
-
-# Find process and trace it
-strace -p $(pgrep -x myapp)
-
-# Find processes started in the last 5 minutes
-ps -eo pid,lstart,cmd | awk -v d="$(date -d '5 minutes ago' '+%s')" '
-  NR>1 && mktime($2" "$3" "$4" "$5" "$6) > d {print}'
-
-# Find by port (combine ss + pgrep)
-PID=$(ss -tlnp | awk -F'pid=' '/8080/{print $2}' | cut -d, -f1)
-pgrep -a -P $PID    # show children of that PID
-```
-
----
-
-## Conclusion
-
-`pgrep` is the right tool for scripting — returns clean PIDs, supports exact matching, works with full command line via `-f`. `ps aux | grep '[name]'` is for interactive investigation where you want context. `pidof` is fast when you know the exact binary name. Never use `ps | grep | awk | kill` pipelines in scripts — use `pkill` or `kill $(pgrep ...)` instead.
-
----
-
-*Related: [ps Command Linux: The Engineer's Troubleshooting Guide](/blog/ps-command-linux-troubleshooting-guide) — full ps usage for production investigation. [Linux Kill Process by Port](/blog/linux-kill-process-by-port) — when you need to find and kill by port instead of name.*
+*Related: [Linux Process States](/blog/linux-process-states-guide) for reading the `STAT` of what you found.*

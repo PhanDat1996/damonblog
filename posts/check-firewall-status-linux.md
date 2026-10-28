@@ -1,266 +1,240 @@
 ---
-title: "How to Check Firewall Status in Linux: iptables, firewalld, ufw"
+title: "Check Firewall Status on Linux: ufw, firewalld, nftables"
 date: "2026-04-22"
-excerpt: "Check firewall status in Linux using iptables, firewalld, and ufw — see active rules, verify port access, and diagnose whether firewall is blocking traffic."
+updated: "2026-10-28"
+excerpt: "Find which firewall is active on a Linux server, read its real rules, and prove whether it is the thing blocking your port before you change anything."
 tags: ["linux", "security", "networking", "troubleshooting", "infrastructure"]
 featured: false
-slug: "check-firewall-status-linux-guide"
 category: "security"
 ---
 
-Is the firewall blocking that connection? Is it even running? Different distros use different tools. Here's how to check with all three.
+A connection to port 8080 times out. Someone says "it's probably the firewall." Before you add a rule or, worse, disable the firewall, answer two questions: **which** firewall is actually active on this box, and **is it really the one dropping the traffic?**
+
+The first question is harder than it used to be. On current distributions `iptables -L` can show an empty ruleset while firewalld is dropping packets, because firewalld writes nftables rules that `iptables` doesn't display.
 
 ---
 
-## TL;DR
+## Quick answer
 
 ```bash
-# RHEL / CentOS / Rocky (firewalld)
-firewall-cmd --state
-firewall-cmd --list-all
+systemctl is-active firewalld ufw nftables 2>/dev/null   # which manager is running
+ufw status verbose                                         # Ubuntu / Debian with ufw
+firewall-cmd --state && firewall-cmd --list-all            # RHEL, Rocky, Alma, Fedora
+nft list ruleset                                           # everything the kernel enforces
+```
 
-# Ubuntu (ufw)
+`nft list ruleset` is the ground truth on any modern kernel. Whatever wrote the rules (firewalld, ufw via iptables-nft, Docker, Kubernetes), the rules show up there.
+
+---
+
+## Which firewall is this box using?
+
+| Distribution | Default manager | Backend |
+|---|---|---|
+| RHEL / Rocky / Alma 8 and 9 | firewalld (enabled) | nftables |
+| Fedora | firewalld | nftables |
+| Ubuntu 22.04 / 24.04 | ufw (installed, **inactive** by default) | iptables-nft |
+| Debian 11 / 12 | none enabled by default | nftables available |
+| Cloud VMs (any distro) | plus security groups / NSGs **outside** the VM | n/a |
+
+Check what `iptables` really talks to:
+
+```bash
+iptables -V
+# iptables v1.8.7 (nf_tables)    <- rules live in nftables
+# iptables v1.8.4 (legacy)       <- old x_tables backend
+```
+
+With `(nf_tables)`, `iptables -L` only shows rules created through the iptables interface. firewalld's own tables are only visible with `nft list ruleset`.
+
+---
+
+## ufw (Ubuntu, Debian)
+
+```bash
 ufw status verbose
-
-# Any system (iptables directly)
-iptables -L -n --line-numbers
-iptables -L INPUT -n | grep <port>
 ```
-
----
-
-## iptables: Universal (All Distributions)
-
-iptables is the underlying kernel firewall. All higher-level tools (firewalld, ufw) write iptables rules. You can always check at this level regardless of which manager is in use.
-
-```bash
-# Show all rules
-iptables -L -n --line-numbers
-
-# INPUT chain only (incoming traffic)
-iptables -L INPUT -n --line-numbers
-
-# Check for a specific port
-iptables -L INPUT -n | grep :8080
-iptables -L INPUT -n | grep "22"
-```
-
-Output:
-
-```
-Chain INPUT (policy ACCEPT)
-num  target   prot  opt  source      destination
-1    ACCEPT   tcp   --   0.0.0.0/0   0.0.0.0/0    tcp dpt:22
-2    ACCEPT   tcp   --   0.0.0.0/0   0.0.0.0/0    tcp dpt:80
-3    ACCEPT   tcp   --   0.0.0.0/0   0.0.0.0/0    tcp dpt:443
-4    DROP     all   --   0.0.0.0/0   0.0.0.0/0
-```
-
-`policy ACCEPT` + no rules = all traffic allowed.
-`policy DROP` at end = default deny.
-
-**IPv6:**
-
-```bash
-ip6tables -L INPUT -n --line-numbers
-```
-
----
-
-## firewalld (RHEL / CentOS / Rocky / Fedora)
-
-```bash
-# Is firewalld running?
-firewall-cmd --state
-systemctl status firewalld
-
-# Active zone and rules
-firewall-cmd --list-all
-
-# All zones
-firewall-cmd --list-all-zones
-
-# Check specific port
-firewall-cmd --query-port=8080/tcp
-# yes = allowed, no = blocked
-
-# Check specific service
-firewall-cmd --query-service=http
-```
-
-Output of `--list-all`:
-
-```
-public (active)
-  target: default
-  interfaces: eth0
-  sources:
-  services: dhcpv6-client http https ssh
-  ports: 8080/tcp
-  protocols:
-  rich rules:
-```
-
----
-
-## ufw (Ubuntu / Debian)
-
-```bash
-# Status and rules
-ufw status verbose
-
-# Numbered rules (easier to delete specific ones)
-ufw status numbered
-```
-
-Output:
 
 ```
 Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), disabled (routed)
+New profiles: skip
 
 To                         Action      From
 --                         ------      ----
 22/tcp                     ALLOW IN    Anywhere
-80/tcp                     ALLOW IN    Anywhere
 443/tcp                    ALLOW IN    Anywhere
-8080/tcp                   DENY IN     Anywhere
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+443/tcp (v6)               ALLOW IN    Anywhere (v6)
 ```
 
+`Status: inactive` means ufw is not filtering anything, but other rules (Docker, a hand-written nftables file) may still be loaded. `ufw status numbered` gives rule numbers for deleting.
+
+---
+
+## firewalld (RHEL family, Fedora)
+
 ```bash
-# Check if ufw is active
-systemctl status ufw
-ufw status | head -1
+firewall-cmd --state             # running / not running
+firewall-cmd --get-active-zones  # which zone each interface/source is in
+firewall-cmd --list-all          # the DEFAULT zone only
+```
+
+```
+public (active)
+  target: default
+  icmp-block-inversion: no
+  interfaces: eth0
+  sources:
+  services: cockpit dhcpv6-client ssh
+  ports: 8080/tcp
+  protocols:
+  forward: yes
+  masquerade: no
+  forward-ports:
+  source-ports:
+  icmp-blocks:
+  rich rules:
+```
+
+Two things trip people up:
+
+1. **`--list-all` shows the default zone, not necessarily the zone your interface is in.** If `--get-active-zones` puts `eth1` in `internal`, check `firewall-cmd --list-all --zone=internal`.
+2. **Runtime vs permanent.** Rules added without `--permanent` work now and vanish on the next reload or reboot. Compare:
+
+```bash
+firewall-cmd --list-all --zone=public
+firewall-cmd --list-all --zone=public --permanent
+```
+
+A port present in the first and missing from the second will disappear at the next `firewall-cmd --reload`.
+
+---
+
+## iptables and nftables directly
+
+```bash
+iptables -L INPUT -n -v --line-numbers   # with packet/byte counters
+iptables -S                              # rules as the commands that created them
+ip6tables -L INPUT -n -v                 # IPv6 is a separate ruleset
+
+nft list ruleset                         # all tables, all families
+nft list table inet firewalld            # just firewalld's rules
+```
+
+Sample `iptables -L INPUT -n -v --line-numbers`:
+
+```
+Chain INPUT (policy DROP 1532 packets, 91920 bytes)
+num   pkts bytes target  prot opt in   out  source      destination
+1     187K   21M ACCEPT  all  --  *    *    0.0.0.0/0   0.0.0.0/0    ctstate RELATED,ESTABLISHED
+2      412 24720 ACCEPT  all  --  lo   *    0.0.0.0/0   0.0.0.0/0
+3      389 23340 ACCEPT  tcp  --  *    *    0.0.0.0/0   0.0.0.0/0    tcp dpt:22
+4        0     0 ACCEPT  tcp  --  *    *    0.0.0.0/0   0.0.0.0/0    tcp dpt:8080
+```
+
+`policy DROP` means anything that matches no rule is dropped. The counter on the policy (1532 packets) is how much traffic fell through to it. Rule 4 has zero hits, so either no traffic for 8080 reached this host, or something earlier (another table, another tool) handled it first.
+
+---
+
+## Is the firewall really blocking my port?
+
+Work through this in order. Each step rules out a layer.
+
+**1. Is anything listening, and on which address?**
+
+```bash
+ss -tlnp | grep ':8080'
+# LISTEN 0  511  127.0.0.1:8080  0.0.0.0:*  users:(("node",pid=2211,fd=19))
+```
+
+Bound to `127.0.0.1` means it only accepts local connections. No firewall rule will fix that. More in [check open ports on Linux](/blog/check-open-ports-linux).
+
+**2. Read the client's error.**
+
+```bash
+nc -zv -w 3 server.example.com 8080
+```
+
+| Client sees | Usually means |
+|---|---|
+| `Connection timed out` | Packets are silently dropped: host firewall DROP, cloud security group, or network ACL |
+| `Connection refused` | The host answered: nothing listening, or a REJECT rule with a TCP reset / port-unreachable |
+| `No route to host` (and the route exists) | Often a REJECT with an ICMP "prohibited" message, firewalld's style |
+
+**3. Do the packets even arrive?**
+
+```bash
+tcpdump -ni eth0 'tcp port 8080'
+```
+
+Run the client test again. No SYN packets at all means the traffic is dropped **before** the host (security group, upstream firewall, wrong IP). SYNs arriving with no reply means the host firewall or the service is the problem.
+
+**4. Watch the counters or the drop log.**
+
+Rerun the test and see which rule or policy counter increases:
+
+```bash
+watch -n1 'iptables -L INPUT -n -v | head -15'
+nft list ruleset | grep -B2 -A2 counter
+```
+
+On firewalld, log denied packets temporarily:
+
+```bash
+firewall-cmd --set-log-denied=unicast
+journalctl -k -f | grep -i 'REJECT\|DROP'
+# ... test, then turn it off again:
+firewall-cmd --set-log-denied=off
 ```
 
 ---
 
-## Check If Firewall Is Causing Connection Issues
+## Test with a targeted, temporary rule
 
-### The test: does removing the firewall fix it?
-
-```bash
-# Temporarily allow all traffic (for testing ONLY — restore after)
-# iptables
-iptables -I INPUT 1 -j ACCEPT
-
-# firewalld
-firewall-cmd --set-default-zone=trusted  # TEMPORARY TEST ONLY
-
-# ufw
-ufw disable  # TEMPORARY TEST ONLY
-```
-
-If the connection works after disabling: the firewall was blocking it. Re-enable and add the correct rule.
-
-### Count rule hits (see which rules are matching)
+Don't disable the firewall to test. On an internet-facing server that exposes every listening service at once. Open just the port, in a way that reverts on its own:
 
 ```bash
-# Show packet/byte counts for each rule
-iptables -L INPUT -n -v
+# firewalld: runtime-only, gone after the next reload/reboot
+firewall-cmd --add-port=8080/tcp
 
-# Output:
-# pkts bytes target  prot  ...
-# 1234 89012 ACCEPT  tcp   ...  dpt:22
-#    0     0 ACCEPT  tcp   ...  dpt:8080   ← zero hits = no traffic reaching this rule
-#  567 34567 DROP    all   ...
+# ufw: add, test, then remove
+ufw allow 8080/tcp
+ufw delete allow 8080/tcp
 ```
 
-Zero packets on an ACCEPT rule + traffic still getting dropped = earlier DROP rule is catching it.
+If that fixes it, make it permanent the proper way (`--permanent` plus `--reload`, or keep the ufw rule).
+
+> **Why `iptables -I INPUT -j ACCEPT` doesn't help on firewalld systems:** with nftables, each table hooks into the packet path separately. An ACCEPT in the iptables table does not stop firewalld's own table from dropping the same packet. A packet has to survive every base chain on the hook. The [nftables migration guide](/blog/nftables-migration-guide) explains this in more detail.
 
 ---
 
-## Real Examples
+## Common mistakes
 
-### Port is blocked — find the rule
+**Trusting `iptables -L` on a firewalld host.** It can look empty while firewalld drops traffic. Use `firewall-cmd` or `nft list ruleset`.
 
-```bash
-# Connection refused/timeout to port 8080
-# Check if iptables has a DROP for it
-iptables -L INPUT -n -v | grep -E "8080|DROP|REJECT"
+**`--permanent` without `--reload`.** Permanent rules are written to config but not applied until `firewall-cmd --reload`.
 
-# If there's a DROP rule before any ACCEPT rule for 8080:
-iptables -I INPUT 1 -p tcp --dport 8080 -j ACCEPT
-# (adds ACCEPT at position 1, before the DROP)
-```
+**Forgetting IPv6.** `iptables` and `ip6tables` are separate. If clients connect over IPv6, check that ruleset too. ufw shows `(v6)` lines when IPv6 is enabled.
 
-### firewalld: add a port permanently
+**Forgetting the cloud firewall.** Security groups, NSGs and VPC firewall rules filter before packets reach the VM. `tcpdump` showing no SYNs is the tell.
 
-```bash
-firewall-cmd --permanent --add-port=8080/tcp
-firewall-cmd --reload
-firewall-cmd --query-port=8080/tcp
-# yes
-```
-
-### ufw: allow a specific IP to a port
-
-```bash
-ufw allow from 10.0.1.50 to any port 5432
-ufw status | grep 5432
-```
-
-### Check if connection is being dropped vs rejected
-
-```bash
-# Test from client
-nc -zv -w 3 server 8080
-# Connection timed out → firewall DROP (silently discards)
-# Connection refused → firewall REJECT (sends RST) or nothing listening
-```
+**Expecting ufw to protect Docker ports.** Published container ports (`-p 8080:80`) are DNAT'd and go through the FORWARD path, not INPUT, so ufw's normal rules don't apply to them. Bind to `127.0.0.1:8080:80` or filter in the `DOCKER-USER` chain.
 
 ---
 
-## Common Mistakes
+## FAQ
 
-**Mistake 1: Checking iptables but using firewalld**
-On RHEL with firewalld running, iptables changes you make manually get overwritten when firewalld reloads. Make changes through firewall-cmd.
+**How do I check if the firewall is enabled on Ubuntu?**
+Run `ufw status`. `Status: inactive` is the default on a fresh Ubuntu install. Also run `nft list ruleset` to see rules from other sources, such as Docker.
 
-**Mistake 2: `--permanent` without `--reload`**
-On firewalld, `--permanent` flags don't take effect until you `--reload`:
+**How do I check firewall status on RHEL 9?**
+`systemctl status firewalld` and `firewall-cmd --state` tell you whether it's running. `firewall-cmd --get-active-zones` and `firewall-cmd --list-all --zone=<zone>` show the rules that apply to each interface.
 
-```bash
-firewall-cmd --permanent --add-port=8080/tcp
-firewall-cmd --reload   # required
-```
-
-**Mistake 3: Assuming default policy means everything is blocked**
-`iptables -L INPUT -n` showing `policy ACCEPT` means the default is to accept. You need explicit DROP rules to block anything.
-
-**Mistake 4: Not checking IPv6 firewall**
-If IPv6 is in use, `iptables` shows IPv4 rules. Check `ip6tables` separately:
-
-```bash
-ip6tables -L INPUT -n
-```
+**Why is iptables -L empty when firewalld is running?**
+firewalld on RHEL 8+ uses the nftables backend and creates its own `inet firewalld` table, which `iptables` doesn't display. `nft list ruleset` shows it.
 
 ---
 
-## Quick Reference
-
-```bash
-# iptables (all distros)
-iptables -L INPUT -n -v                  # rules with hit counts
-iptables -L INPUT -n | grep <port>      # specific port
-
-# firewalld (RHEL/CentOS)
-firewall-cmd --state                     # running?
-firewall-cmd --list-all                  # active rules
-firewall-cmd --query-port=8080/tcp       # specific port allowed?
-firewall-cmd --permanent --add-port=8080/tcp && firewall-cmd --reload
-
-# ufw (Ubuntu)
-ufw status verbose                       # all rules
-ufw allow 8080/tcp                       # allow port
-ufw deny 8080/tcp                        # deny port
-ufw status numbered                      # numbered for easy deletion
-```
-
----
-
-## Conclusion
-
-`iptables -L INPUT -n -v` works everywhere and shows actual packet counts — it tells you not just what rules exist but which ones are matching traffic. For firewalld, use `firewall-cmd --list-all`. For ufw, `ufw status verbose`. When debugging a blocked connection, add `-v` to iptables to see packet counts — a rule with zero hits means it's not being reached.
-
----
-
-*Related: [iptables Block IP Example](/blog/iptables-block-ip-example) — add blocking rules. [Cannot Connect to Server Linux](/blog/cannot-connect-to-server-linux-troubleshooting) — firewall is step 4 in the connectivity workflow.*
+*Related: [iptables block IP examples](/blog/iptables-block-ip-example) for adding deny rules safely. [Cannot connect to server on Linux](/blog/cannot-connect-to-server-linux-troubleshooting) for the full connectivity checklist.*

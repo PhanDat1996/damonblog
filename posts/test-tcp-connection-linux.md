@@ -1,228 +1,182 @@
 ---
-title: "How to Test TCP Connection in Linux: nc, curl, telnet"
+title: "Test a TCP Connection on Linux: nc, curl and /dev/tcp"
 date: "2026-04-22"
-excerpt: "Test TCP connections in Linux using nc, curl, telnet, and /dev/tcp — verify port reachability, measure response time, and debug connection failures with real examples."
+updated: "2026-10-28"
+excerpt: "Check if a remote port is reachable with nc, curl, bash /dev/tcp or telnet, and learn what refused, timed out and no route to host each tell you."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
-slug: "how-to-test-tcp-connection-linux"
 category: "linux"
 ---
 
-You need to know if a port is reachable before debugging further. Here are the reliable ways to test a TCP connection — and what the output actually tells you.
+The app logs say it can't reach the database. Before you touch any config, answer one question from the machine that's failing: can it open a TCP connection to that host and port at all?
+
+```bash
+nc -zv -w 3 10.0.1.20 5432
+```
+
+The answer you get back (succeeded, refused, timed out, no route) tells you which layer to look at next. That's the part most guides skip.
 
 ---
 
-## TL;DR
+## Pick a tool
 
-```bash
-nc -zv host 8080          # test port — best general purpose
-curl -v telnet://host:8080  # curl TCP test
-telnet host 8080           # classic, interactive
-cat /dev/null > /dev/tcp/host/8080 && echo open || echo closed  # no extra tools
-```
+| Tool | Command | When |
+|---|---|---|
+| `nc` | `nc -zv -w 3 HOST PORT` | Default choice |
+| bash | `timeout 3 bash -c '</dev/tcp/HOST/PORT'` | No nc installed, but bash is |
+| `curl` | `curl -sv --connect-timeout 3 telnet://HOST:PORT` | Containers that only have curl |
+| `telnet` | `telnet HOST PORT` | Interactive, e.g. typing SMTP or Redis commands |
+| `openssl` | `openssl s_client -connect HOST:443` | You also need to check TLS |
 
----
-
-## nc (netcat): The Standard Tool
-
-```bash
-nc -zv 192.168.1.100 8080
-```
-
-Flags:
-- `-z` — scan mode, don't send data
-- `-v` — verbose, shows result clearly
-
-Output:
-
-```
-# Success:
-Connection to 192.168.1.100 8080 port [tcp/http-alt] succeeded!
-
-# Refused (nothing listening):
-nc: connect to 192.168.1.100 port 8080 (tcp) failed: Connection refused
-
-# Timed out (firewall DROP):
-nc: connect to 192.168.1.100 port 8080 (tcp) failed: Connection timed out
-```
-
-**Refused** = something reachable but nothing on that port.
-**Timed out** = firewall silently dropping packets, or host unreachable.
-
-### Test multiple ports
-
-```bash
-for port in 80 443 8080 8443; do
-  nc -zv -w 2 192.168.1.100 $port 2>&1 | grep -E "succeeded|failed"
-done
-```
-
-### Set a timeout
-
-```bash
-nc -zv -w 3 host 8080   # 3 second timeout instead of hanging
-```
-
-### Test UDP
-
-```bash
-nc -zvu host 53    # test DNS UDP port
-```
+Always set a timeout. Without one, a filtered port makes Linux retry the SYN until `net.ipv4.tcp_syn_retries` runs out: with the default of 6, that's about **two minutes** before you get an answer.
 
 ---
 
-## /dev/tcp: No Extra Tools Required
-
-Available in bash without any packages:
+## nc
 
 ```bash
-# Test if port is open
-timeout 3 bash -c 'cat /dev/null > /dev/tcp/192.168.1.100/8080' 2>/dev/null \
-  && echo "Port open" || echo "Port closed/filtered"
+nc -zv -w 3 10.0.1.20 5432
 ```
 
-Useful in minimal containers where nc isn't installed.
+- `-z`: connect, then close without sending data
+- `-v`: print the result
+- `-w 3`: give up after 3 seconds
+
+On Debian/Ubuntu, `nc` is usually the OpenBSD version:
+
+```
+Connection to 10.0.1.20 5432 port [tcp/postgresql] succeeded!
+nc: connect to 10.0.1.20 port 5432 (tcp) failed: Connection refused
+nc: connect to 10.0.1.20 port 5432 (tcp) timed out: Operation now in progress
+```
+
+On RHEL, Rocky and Fedora, `nc` is Nmap's `ncat`, which prints things like `Ncat: Connected to 10.0.1.20:5432.` and `Ncat: Connection refused.` Older ncat builds don't support `-z`; use `nc -w 3 HOST PORT </dev/null` instead.
+
+Several ports:
+
+```bash
+for port in 22 80 443 5432; do
+  nc -zv -w 2 10.0.1.20 "$port"
+done 2>&1 | grep -E 'succeeded|Connected|refused|timed out|TIMEOUT'
+```
+
+### UDP is different
+
+```bash
+nc -zvu -w 3 10.0.1.53 53
+```
+
+This "succeeds" almost always. UDP has no handshake, so `nc` can only report failure if an ICMP port-unreachable comes back. Silence is not proof the port is open. To test a UDP service, talk its protocol: `dig @10.0.1.53 example.com` for DNS, `chronyc` or `ntpdate -q` for NTP.
 
 ---
 
-## curl: Test HTTP and TCP
+## bash /dev/tcp (no extra packages)
 
 ```bash
-# HTTP test
-curl -sv http://host:8080/health 2>&1 | head -30
-
-# Raw TCP (no HTTP)
-curl -v telnet://host:8080
-
-# With timeout
-curl -sv --connect-timeout 5 http://host:8080/
-
-# Check just the response code
-curl -o /dev/null -s -w "%{http_code}\n" http://host:8080/health
+timeout 3 bash -c '</dev/tcp/10.0.1.20/5432' && echo open || echo "closed or filtered"
 ```
 
-`curl -v` shows the full TLS handshake and HTTP exchange — useful for SSL debugging.
+`/dev/tcp/HOST/PORT` isn't a real file. It's a bash feature that opens a TCP connection when you redirect to it. It only works in **bash**: Alpine's `sh` (BusyBox ash) and Debian's `dash` don't have it, so always invoke it through `bash -c`.
 
----
-
-## telnet: Classic Interactive Test
+Useful inside containers where nothing else is installed:
 
 ```bash
-telnet host 8080
-```
-
-- If it connects: you'll see a blank line or a banner. Port is open.
-- `Connection refused`: nothing listening.
-- Hangs: firewall DROP rule.
-
-Press `Ctrl+]` then `quit` to exit.
-
-Not installed by default on minimal systems, but widely available.
-
----
-
-## Measure Connection Time
-
-```bash
-# Measure TCP handshake time with curl
-curl -o /dev/null -s -w "Connect: %{time_connect}s  Total: %{time_total}s\n" http://host:8080/
-
-# With nc (measure time to connect)
-time nc -zv -w 5 host 8080
+docker exec myapp bash -c 'timeout 3 bash -c "</dev/tcp/db/5432" && echo open'
 ```
 
 ---
 
-## Real Examples
+## curl
 
-### Verify a service is reachable from another server
+For an HTTP service, test the service, not just the port:
 
 ```bash
-# From app server, test database connectivity
-nc -zv db01 5432
-# Connection to db01 5432 port [tcp/postgresql] succeeded!
+curl -sS -o /dev/null -w '%{http_code}\n' --connect-timeout 3 http://10.0.1.30:8080/health
 ```
 
-### Debug "connection refused" during deployment
+For any other TCP port, `curl`'s telnet scheme works as a raw connect test:
 
 ```bash
-# Is the new app listening yet?
-while ! nc -z localhost 8080; do
-  echo "Waiting for app to start..."
+curl -sv --connect-timeout 3 --max-time 5 telnet://10.0.1.20:5432 </dev/null
+# *   Trying 10.0.1.20:5432...
+# * Connected to 10.0.1.20 (10.0.1.20) port 5432
+```
+
+`Connected to` is the line that matters. The command may then wait until `--max-time` because nothing is sent; that's expected.
+
+To see where time goes on a slow connection:
+
+```bash
+curl -o /dev/null -sS -w 'dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n' https://api.example.com/
+```
+
+---
+
+## telnet
+
+```bash
+telnet 10.0.1.20 5432
+# Trying 10.0.1.20...
+# Connected to 10.0.1.20.
+# Escape character is '^]'.
+```
+
+Exit with `Ctrl+]`, then `quit`. telnet is rarely installed by default anymore and has no timeout option, so it's best for interactive protocol testing. [ping vs curl vs telnet](/blog/ping-vs-curl-vs-telnet) compares when each tool is the right one.
+
+---
+
+## TLS ports
+
+A successful TCP connect on 443 says nothing about the certificate. Check both at once:
+
+```bash
+openssl s_client -connect api.example.com:443 -servername api.example.com </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates
+```
+
+`-servername` sends SNI. Without it, a server hosting several sites may hand you the wrong certificate.
+
+---
+
+## What the result means
+
+| Result | What happened on the wire | Look at |
+|---|---|---|
+| succeeded / Connected | SYN, SYN-ACK, ACK completed | Port is fine; the problem is higher up (TLS, auth, app) |
+| `Connection refused` | Host answered with a TCP RST, or a firewall REJECT with port-unreachable | Is the service running? Bound to `127.0.0.1` only? fail2ban? |
+| `timed out` | No answer at all | A firewall DROP rule, a cloud security group, routing, or the host is down |
+| `No route to host` | An ICMP host-unreachable came back | firewalld's default reject (`icmp-host-prohibited`), or ARP failing on the local subnet |
+| `Network is unreachable` | Your own host has no route | `ip route get <ip>` on the client |
+| `Name or service not known` | DNS lookup failed before any TCP | [DNS troubleshooting](/blog/dns-not-resolving-linux-fix) |
+
+"Refused" is good news in a way: you reached *something* that answered. On the server, [check what is listening](/blog/check-open-ports-linux) and on which address. "Timed out" means packets disappear in between, and the [connection troubleshooting walkthrough](/blog/cannot-connect-to-server-linux-troubleshooting) goes through that step by step.
+
+---
+
+## Test from the right place
+
+`nc -zv localhost 8080` on the server proves the app is up. It doesn't prove a client can reach it: loopback skips the external firewall and works even when the app is bound to `127.0.0.1`. Test from the client host, or as close to it as you can get.
+
+If the client has several addresses and you need a specific source IP (for an allow-list, say):
+
+```bash
+nc -zv -w 3 -s 10.0.2.15 10.0.1.20 5432
+```
+
+`-s` sets the source address. Which interface the packet leaves through is still decided by the routing table.
+
+### Wait for a port in a script
+
+```bash
+for i in $(seq 1 30); do
+  nc -z -w 1 localhost 8080 && { echo "up"; exit 0; }
   sleep 2
 done
-echo "App is up"
+echo "port 8080 not up after 60s" >&2; exit 1
 ```
 
-### Test port from inside a Docker container
-
-```bash
-docker exec mycontainer nc -zv db 5432
-# If nc isn't in container:
-docker exec mycontainer bash -c 'cat /dev/null > /dev/tcp/db/5432 && echo open'
-```
-
-### Test through a specific interface
-
-```bash
-# Force connection through eth1
-nc -s 192.168.2.10 -zv destination.host 443
-```
-
-### SSL/TLS port test
-
-```bash
-# Test TLS handshake
-openssl s_client -connect host:443 -servername hostname < /dev/null 2>&1 | grep -E "Verify|Cipher|subject"
-
-# Quick TLS check
-curl -sv https://host:443/ 2>&1 | grep -E "Connected|SSL|TLS|Certificate"
-```
+Always cap the loop. A `while ! nc ...` without a limit hangs a deploy forever.
 
 ---
 
-## Interpreting Results
-
-| Result | Cause | Next step |
-|---|---|---|
-| `succeeded` | Port is open and reachable | Service is running |
-| `Connection refused` | Port not listening | Check if service is running: `ss -tlnp` |
-| `Connection timed out` | Firewall DROP rule or host unreachable | Check firewall, check routing |
-| `Name or service not known` | DNS failure | Check DNS: `dig hostname` |
-| `No route to host` | Routing problem | Check `ip route`, check if host is up |
-
----
-
-## Common Mistakes
-
-**Mistake 1: Not setting a timeout**
-Without `-w 3` or `--connect-timeout`, nc and curl wait the OS default (30+ seconds) on timed-out connections. Always set a timeout in scripts.
-
-**Mistake 2: Confusing refused vs timed out**
-Refused = firewall with REJECT, or no service. Timed out = firewall with DROP. REJECT is more user-friendly but exposes that something is there. DROP reveals nothing.
-
-**Mistake 3: Testing from the wrong host**
-A service can be reachable locally (`nc -zv localhost 8080`) but not from external hosts if it's bound to `127.0.0.1`. Always test from the actual client perspective.
-
----
-
-## Quick Reference
-
-```bash
-nc -zv host port              # test TCP port
-nc -zv -w 3 host port         # with 3s timeout
-nc -zuv host 53               # test UDP
-curl -o /dev/null -s -w "%{http_code}" http://host/  # HTTP status
-timeout 3 bash -c 'cat /dev/null > /dev/tcp/host/port'  # no tools needed
-openssl s_client -connect host:443  # TLS test
-```
-
----
-
-## Conclusion
-
-`nc -zv host port` is the cleanest test — works for any TCP port, clear success/failure output. Add `-w 3` to avoid hanging on filtered ports. For HTTP specifically, `curl -sv` gives you headers and TLS info. In minimal environments without nc, `/dev/tcp` is always available in bash.
-
----
-
-*Related: [Cannot Connect to Server Linux](/blog/cannot-connect-to-server-linux-troubleshooting) — full diagnostic workflow when nc shows a problem. [Check Open Ports in Linux: ss vs netstat](/blog/check-open-ports-linux-ss-netstat-guide) — verify what's listening on the server side.*
+*Related: [traceroute examples](/blog/traceroute-linux-examples) when a connection times out and you need to see where packets stop.*

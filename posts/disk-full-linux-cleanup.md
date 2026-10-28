@@ -1,245 +1,258 @@
 ---
-title: "Disk Full Linux: How to Clean Up and Free Space Fast"
+title: "Disk Full on Linux: Free Space Fast Without Breaking Things"
 date: "2026-04-22"
-excerpt: "Fix a full disk on Linux fast — find what's taking space with df and du, clean logs, Docker, package caches, and deleted-but-open files in production."
+updated: "2026-10-28"
+excerpt: "Linux disk at 100% and No space left on device? Triage in the right order: inodes, deleted-but-open files, logs, journal, Docker and package caches."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
-slug: "disk-full-linux-cleanup-guide"
 category: "linux"
 ---
 
-Disk alert firing. Server at 100%. Services failing because they can't write. Here's the fastest path from full disk to recovered system.
+The alert fires at 3 a.m.: `/` is at 100%. The database can't write its WAL, NGINX logs `No space left on device`, and SSH logins feel sluggish. You delete a 20 GB log file and run `df -h` again. Still 100%.
+
+That's the trap this page is about. On a full disk, the order you do things in matters as much as what you delete. This is the runbook: get breathing room safely, find the real cause, then stop it from coming back.
 
 ---
 
-## TL;DR: 2-Minute Emergency Cleanup
+## TL;DR
 
 ```bash
-# Find which filesystem is full
-df -h
-
-# Find the biggest directories
-du -sh /* 2>/dev/null | sort -rh | head -10
-
-# Emergency: clean package cache
-apt clean        # Ubuntu (usually 500MB–2GB)
-dnf clean all    # RHEL
-
-# Emergency: clean old journal logs
-journalctl --vacuum-size=100M
-
-# Emergency: clean Docker
-docker system prune -f
+df -h /  &&  df -i /                  # bytes full, or inodes full?
+sudo lsof -nP +L1 | sort -k7 -rn | head   # deleted files still holding space
+sudo journalctl --vacuum-size=200M    # safe, quick win
+sudo apt clean    # or: sudo dnf clean all
 ```
+
+Then find the big folder with `du` (see [Check Disk Usage in Linux](/blog/check-disk-usage-linux-du-df)) and deal with the culprit. **Never `rm` a log file a process is still writing to**; empty it with `truncate -s 0` instead.
 
 ---
 
-## Step 1: Find What's Full
+## Step 1: Confirm what is actually full
 
 ```bash
 df -h
 ```
 
 ```
-Filesystem      Size  Used Avail Use%  Mounted on
-/dev/sda1        50G   50G     0  100%  /          ← this one
-/dev/sdb1       200G   12G  178G    7%  /data
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        50G   48G     0 100% /
+/dev/sdb1       200G   12G  189G   7% /data
 ```
 
-Note the mount point (`/`). All cleanup must target directories on that filesystem.
+Write down the mount point. Everything you delete must be **on that filesystem**; freeing space on `/data` does nothing for `/`.
+
+Then check inodes, because the error message is the same:
+
+```bash
+df -i /
+```
+
+```
+Filesystem      Inodes   IUsed IFree IUse% Mounted on
+/dev/sda1      3276800 3276800     0  100% /
+```
+
+If `IUse%` is 100% but `df -h` shows free space, you're out of inodes, not bytes. Deleting one big file won't help; you need to delete many small ones. Find the folder with the most files:
+
+```bash
+sudo du --inodes -x / 2>/dev/null | sort -rn | head -15
+```
+
+Typical culprits: PHP session folders (`/var/lib/php/sessions`), mail queues (`/var/spool/postfix`), application cache folders, and build artifacts in CI runners.
 
 ---
 
-## Step 2: Find What's Filling It
+## Step 2: Get breathing room safely
+
+When the disk is at 100%, services fail in odd ways and even your shell's tab completion can break. Get a few GB back with cleanups that can't hurt anything, before you start investigating.
+
+**systemd journal.** Archived journal files can be removed safely:
 
 ```bash
-# Top-level breakdown (takes 30 seconds on large disks)
-du -sh /* 2>/dev/null | sort -rh | head -10
-
-# Drill into the biggest one (usually /var)
-du -sh /var/* 2>/dev/null | sort -rh | head -10
-
-# Drill deeper
-du -sh /var/log/* 2>/dev/null | sort -rh | head -10
-```
-
-The most common culprits:
-- `/var/log` — application or system logs
-- `/var/lib/docker` — Docker images, containers, volumes
-- `/var/cache` — package manager cache
-- `/home` — user data
-- `/tmp` — temp files
-
----
-
-## Fix: Log Files
-
-```bash
-# Find large log files
-find /var/log -name "*.log" -size +100M -exec ls -lh {} \;
-
-# Check if a process has the file open (can't delete if it does)
-lsof | grep "deleted\|/var/log/app/debug.log"
-
-# If process has it open: TRUNCATE, don't delete
-truncate -s 0 /var/log/app/debug.log
-# This frees space immediately without closing the file handle
-
-# If no process has it open: delete
-rm /var/log/app/debug.log
-
-# Clean journal logs
 journalctl --disk-usage
-journalctl --vacuum-size=200M   # keep 200MB of journal
-journalctl --vacuum-time=7d     # keep 7 days of journal
+# Archived and active journals take up 3.9G in the file system.
+
+sudo journalctl --vacuum-size=200M
 ```
+
+`--vacuum-size` only deletes **archived** journal files, never the active one, so the result can stay a little above the target.
+
+**Package manager cache.** Downloaded package files, already installed:
+
+```bash
+sudo apt clean          # Debian/Ubuntu: empties /var/cache/apt/archives
+sudo dnf clean all      # Fedora/RHEL: empties /var/cache/dnf
+```
+
+**ext4 reserved blocks (emergency only).** ext4 keeps 5% of the filesystem for root. When a root-owned service is the one failing, you can temporarily lower it:
+
+```bash
+sudo tune2fs -l /dev/sda1 | grep -i "reserved block count"
+sudo tune2fs -m 1 /dev/sda1      # reserve 1% instead of 5%, takes effect immediately
+```
+
+On a 50 GB disk this frees about 2 GB for normal users. Put it back (`tune2fs -m 5`) once the disk is cleaned up; the reservation exists so root can still log in and fix things when users fill the disk. On large data-only volumes, 1% is a reasonable permanent setting. This doesn't apply to XFS or Btrfs.
 
 ---
 
-## Fix: Docker
+## Step 3: Check for deleted-but-open files
 
-Docker is one of the most common causes of unexpected disk full on servers:
+If you (or a cron job) already deleted something big and `df` didn't move, this is why. Removing a file only removes its name. The blocks are freed when the **last process closes it**, so a running app keeps writing to a file nobody can see.
 
 ```bash
-# See Docker disk usage
+sudo lsof -nP +L1
+```
+
+```
+COMMAND   PID USER   FD   TYPE DEVICE    SIZE/OFF NLINK    NODE NAME
+java     2318 app    41w   REG    8,1 21474836480     0 1048602 /var/log/app/debug.log (deleted)
+nginx    1102 www    5w    REG    8,1  3221225472     0 1048711 /var/log/nginx/access.log.1 (deleted)
+```
+
+`+L1` means "link count less than 1", which is exactly the set of deleted files that are still open. Two ways to free the space:
+
+```bash
+# Option 1: restart the process (cleanest)
+sudo systemctl restart myapp
+
+# Option 2: no restart allowed, empty the file through the open descriptor
+sudo truncate -s 0 /proc/2318/fd/41
+```
+
+For NGINX specifically, `sudo nginx -s reopen` makes it close and reopen its log files, which releases the deleted one without dropping connections.
+
+This is also why `df` and `du` disagree after a cleanup: `du` can't see a file without a name, `df` still counts its blocks.
+
+---
+
+## Step 4: Find and fix the real culprit
+
+Drill down on the full filesystem only:
+
+```bash
+sudo du -xh --max-depth=1 / 2>/dev/null | sort -rh | head
+```
+
+Repeat on the biggest folder. The full walkthrough, plus `ncdu` for interactive browsing, is in [Check Disk Usage in Linux](/blog/check-disk-usage-linux-du-df). To jump straight to individual big files, see [Find Large Files on Linux](/blog/find-large-files-linux).
+
+What you'll usually find, and what to do about it:
+
+### A huge application log
+
+```bash
+sudo lsof /var/log/app/debug.log      # is something writing to it?
+```
+
+If a process has it open, **empty it in place** instead of deleting:
+
+```bash
+sudo truncate -s 0 /var/log/app/debug.log
+# equivalent:  sudo sh -c ': > /var/log/app/debug.log'
+```
+
+This keeps the same inode, so the process keeps writing to the same (now empty) file and the space comes back immediately. If you need the content, copy the last part first: `tail -c 500M debug.log > /data/debug.tail`. The reasoning behind `rm` vs `truncate` is in [Delete Large Files Safely](/blog/how-to-delete-large-files-linux-safely).
+
+### Docker
+
+```bash
 docker system df
-
-# Output:
-# TYPE                 TOTAL    RECLAIMABLE
-# Images               15       3 (stopped images)
-# Containers           8        2 (stopped containers)
-# Volumes              5        1 (unused volumes)
-# Build Cache          ...
-
-# Clean stopped containers, unused images, dangling volumes
-docker system prune -f
-
-# Also clean unused volumes
-docker system prune -f --volumes
-
-# Clean only stopped containers
-docker container prune -f
-
-# Clean unused images
-docker image prune -a -f
 ```
+
+```
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          23        6         14.2GB    9.8GB (69%)
+Containers      9         6         1.1GB     312MB (28%)
+Local Volumes   7         4         5.4GB     1.2GB (22%)
+Build Cache     41        0         3.6GB     3.6GB
+```
+
+Start with the safe prunes and preview where possible:
+
+```bash
+docker container ls -a --filter status=exited    # what would be removed
+docker container prune                           # stopped containers
+docker image prune                               # dangling (untagged) images
+docker builder prune                             # build cache
+```
+
+`docker image prune -a` also removes every image not used by a container, which means the next deploy or rollback has to pull again. `docker system prune --volumes` deletes unused volumes, and a volume belonging to a removed or not-yet-created container is "unused" even if it holds your database. Don't run it on a production host without listing volumes first (`docker volume ls -f dangling=true`).
+
+If the space is in `/var/lib/docker/containers/*/*-json.log`, a container is logging without rotation; fix it with [Docker Log Rotation](/blog/docker-log-rotation).
+
+### Core dumps
+
+```bash
+sudo find / -xdev -type f \( -name core -o -name 'core.[0-9]*' \) -printf '%s\t%p\n' 2>/dev/null | sort -rn | head
+coredumpctl list     # systemd-coredump keeps them in /var/lib/systemd/coredump
+```
+
+The parentheses matter: without them, `-type f` only applies to the second `-name`. Check the names before deleting; some projects have source files or directories called `core`.
+
+### Old kernels (Ubuntu/Debian)
+
+```bash
+dpkg --list 'linux-image-*' | grep '^ii'
+sudo apt autoremove --purge
+```
+
+`autoremove` keeps the running kernel and the most recent ones. Mostly matters when `/boot` is a small separate partition.
+
+### /tmp
+
+Don't `rm -rf /tmp/*` on a running server; sockets and lock files live there. Preview old files first, then delete:
+
+```bash
+sudo find /tmp -xdev -type f -mtime +7 -print | head -50     # dry run
+sudo find /tmp -xdev -type f -mtime +7 -delete
+```
+
+More on age-based cleanup in [Find Files Older Than X Days](/blog/linux-find-files-older-than-x-days).
 
 ---
 
-## Fix: Package Manager Cache
+## Step 5: Stop it from happening again
 
-```bash
-# Ubuntu/Debian — often 1-3GB
-apt clean
-apt autoremove
+**Rotate application logs.** For apps that keep their log file open and can't be told to reopen it, use `copytruncate`; otherwise rotation renames the file and the app keeps filling the renamed one:
 
-# RHEL/CentOS/Rocky
-dnf clean all
-dnf autoremove
-
-# Check how much space packages are using
-dpkg-query -W --showformat='${Installed-Size}\t${Package}\n' | sort -rn | head -20
 ```
-
----
-
-## Fix: Old Kernel Versions
-
-```bash
-# Ubuntu — list installed kernels
-dpkg --list | grep linux-image
-
-# Remove old kernels (keeps current + one previous)
-apt autoremove --purge
-```
-
----
-
-## Fix: Deleted Files Still Held Open
-
-This explains the gap between `df` (says 100% full) and `du` (says only 60% used):
-
-```bash
-# Find deleted files still consuming space
-lsof | grep deleted | awk '{print $7, $9}' | sort -rn | head -10
-
-# 28747832  /var/log/app/debug.log (deleted)
-```
-
-The file was deleted from the directory but a process still has it open. The space isn't freed until the process closes it.
-
-```bash
-# Option 1: truncate the file descriptor (frees space immediately)
-PID=4521
-FD=12    # file descriptor number from lsof output
-truncate -s 0 /proc/$PID/fd/$FD
-
-# Option 2: restart the process (it will close the file handle)
-systemctl restart myapp
-```
-
----
-
-## Fix: /tmp and Core Dumps
-
-```bash
-# Clear /tmp (safe if nothing critical is there)
-find /tmp -type f -mtime +1 -delete    # files older than 1 day
-find /tmp -type f -atime +3 -delete    # not accessed in 3 days
-
-# Find core dumps (often GBs each)
-find / -name "core" -o -name "core.[0-9]*" -type f 2>/dev/null | xargs ls -lh 2>/dev/null
-# Safe to delete core dumps after you've captured the stack trace
-```
-
----
-
-## Prevent It Coming Back
-
-```bash
-# Set up log rotation
-cat > /etc/logrotate.d/myapp << EOF
+# /etc/logrotate.d/myapp
 /var/log/myapp/*.log {
     daily
     rotate 7
+    maxsize 500M
     compress
+    delaycompress
     missingok
     notifempty
-    maxsize 100M
+    copytruncate
 }
-EOF
-
-# Set journal size limit
-echo "SystemMaxUse=500M" >> /etc/systemd/journald.conf
-systemctl restart systemd-journald
-
-# Monitor disk usage with cron alert
-cat > /etc/cron.hourly/disk-alert << 'EOF'
-#!/bin/bash
-THRESHOLD=85
-df -h | awk -v t=$THRESHOLD 'NR>1 {gsub(/%/,"",$5); if ($5 > t) print "ALERT: "$1" is "$5"% full"}'
-EOF
-chmod +x /etc/cron.hourly/disk-alert
 ```
 
----
+Test it without changing anything: `sudo logrotate -d /etc/logrotate.d/myapp`. Note that `maxsize` is only checked when logrotate runs (daily by default), so a log that grows 50 GB in an hour will still fill the disk.
 
-## Common Mistakes
+**Cap the journal** with a drop-in instead of editing the main file:
 
-**Deleting log files that are still open.** Space isn't freed until the process closes the file descriptor. Truncate instead.
+```ini
+# /etc/systemd/journald.conf.d/size.conf
+[Journal]
+SystemMaxUse=500M
+```
 
-**Cleaning `/tmp` without checking if anything needs it.** Some services use `/tmp` for active work. Check with `lsof | grep /tmp` first.
+```bash
+sudo systemctl restart systemd-journald
+```
 
-**Not setting up log rotation after cleanup.** You cleared 30GB of logs manually — without rotation, it fills up again in the same timeframe.
-
-**Running `docker system prune --volumes` on production.** This deletes unused volumes. If a volume is referenced by a stopped (but important) container, you lose the data.
-
----
-
-## Conclusion
-
-`df -h` → find the full filesystem. `du -sh /* | sort -rh` → find the biggest directory. Drill down level by level until you find the file or directory. Check for deleted-but-open files if `df` and `du` disagree. Set up log rotation and journal size limits before walking away.
+**Alert before 100%.** Alert at 80–85% and on inode usage, not only bytes. A disk going from 70% to 100% in an hour is a runaway log or core dump loop, and you want to know while there's still room to act.
 
 ---
 
-*Related: [How to Find Large Files in Linux](/blog/find-large-files-linux-guide) — find exactly which files are responsible. [Docker Log Rotation](/blog/docker-log-rotation) — prevent Docker from filling your disk.*
+## Quick checklist
+
+1. `df -h` and `df -i`: which filesystem, bytes or inodes?
+2. Free safe space first: journal vacuum, package cache.
+3. `lsof +L1`: deleted files still held open? Restart or truncate via `/proc/<pid>/fd/<n>`.
+4. `du -x` drill-down to the culprit; truncate live logs, don't `rm` them.
+5. Preview every `find -delete` and `prune` before running it.
+6. Add log rotation, journal limits and an 85% alert.
+
+*Related: [Linux Log Analysis Guide](/blog/linux-log-analysis-guide) for working out why a log suddenly grew. [Check Disk I/O with iostat](/blog/linux-check-disk-io-iostat) if the disk is slow rather than full.*

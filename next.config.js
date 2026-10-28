@@ -28,6 +28,18 @@ const nextConfig = {
     inlineCss: true,
   },
 
+  // ── Merged posts ───────────────────────────────────────────────────────────
+  // Overlapping posts were consolidated into one stronger page each.
+  // Permanent redirects pass the old URLs' ranking signals to the new target.
+  async redirects() {
+    return [
+      { source: '/blog/check-open-ports-linux-ss-netstat', destination: '/blog/check-open-ports-linux', permanent: true },
+      { source: '/blog/check-listening-ports-linux',       destination: '/blog/check-open-ports-linux', permanent: true },
+      { source: '/blog/linux-check-listening-ports-ss',    destination: '/blog/check-open-ports-linux', permanent: true },
+      { source: '/blog/linux-check-disk-usage-by-folder-du', destination: '/blog/check-disk-usage-linux-du-df', permanent: true },
+    ];
+  },
+
   // ── Security + cache headers ───────────────────────────────────────────────
   async headers() {
     return [

@@ -61,6 +61,7 @@ export function getPostBySlug(slug: string): Post | null {
       slug,
       title: meta.title,
       date: meta.date,
+      updated: meta.updated,
       excerpt: meta.excerpt,
       tags: meta.tags ?? [],
       category: (meta.category as Category) ?? 'linux',
