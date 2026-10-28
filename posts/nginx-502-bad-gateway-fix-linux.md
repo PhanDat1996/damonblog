@@ -12,6 +12,8 @@ The browser shows `502 Bad Gateway` and the footer says `nginx`. It's tempting t
 
 The good news: NGINX writes the exact reason to its error log, and each message maps to a small set of causes. Read the line, look it up below, fix that one thing.
 
+> **Lab-tested:** every error line in the lab section below was reproduced on NGINX 1.28.3 (Ubuntu 26.04), with a small Python backend that fails on purpose. Where the lab result differed from common advice, the post says so.
+
 ---
 
 ## Step 1: Get the exact error line
@@ -51,7 +53,8 @@ curl -sv http://127.0.0.1:8080/ -o /dev/null
 | `connect() to unix:... failed (11: Resource temporarily unavailable)` | Socket backlog full, FPM can't keep up | `pm.max_children`, slow PHP requests |
 | `upstream prematurely closed connection while reading response header` | Upstream accepted, then closed without answering | App crash, worker killed (OOM, worker timeout), keepalive timeout mismatch |
 | `recv() failed (104: Connection reset by peer) while reading response header` | Upstream reset the connection | Same as above |
-| `upstream sent invalid header while reading response header` | Response wasn't valid HTTP | Proxying HTTP to an HTTPS or FastCGI port |
+| `upstream sent invalid header: "X-Bad\x20..." while reading response header` | A response header line is malformed | The app or a middleware writing a broken header (spaces in the name, bare LF) |
+| `upstream sent no valid HTTP/1.0 header while reading response header` | The reply isn't HTTP at all | Wrong protocol on that port. **Not a 502**: see the lab section below |
 | `upstream sent too big header while reading response header` | Response headers exceed the buffer | Large cookies or auth headers, raise `proxy_buffer_size` |
 | `SSL_do_handshake() failed ... while SSL handshaking to upstream` | TLS to an HTTPS upstream failed | Missing SNI: `proxy_ssl_server_name on` |
 | `no live upstreams while connecting to upstream` | Every server in the `upstream` block is marked failed | The *earlier* errors in the log are the real cause |
@@ -122,16 +125,29 @@ Typical causes:
 
 ### Invalid header
 
-Almost always a protocol mismatch:
+`upstream sent invalid header` means the response *was* HTTP, but one header line broke the rules. In the lab, a single line `X-Bad Header: yes` (a space inside the header name) was enough:
+
+```
+upstream sent invalid header: "X-Bad\x20..." while reading response header from upstream
+```
+
+NGINX quotes the start of the offending line, so the fix is usually obvious: find where the app or a middleware builds that header.
+
+### Wrong protocol on the upstream port
+
+Pointing `proxy_pass http://` at a port that speaks something else does **not** always produce a 502, and it doesn't produce `invalid header` either. In the lab:
+
+| Upstream on that port | What NGINX logged | What the client got |
+|---|---|---|
+| A TLS server (Python `ssl`) | `recv() failed (104: Connection reset by peer)` | **502** |
+| Another NGINX `listen ... ssl` | nothing in the error log | **400** "The plain HTTP request was sent to HTTPS port" |
+| Something that answers with non-HTTP bytes | `upstream sent no valid HTTP/1.0 header` | A broken response. The access log shows status **009** (NGINX passed it through as HTTP/0.9) and `curl` reports `000` |
+
+So if users see 400s or broken pages instead of 502s, still check the scheme and port in `proxy_pass`:
 
 ```nginx
-# Wrong: talking plain HTTP to a port that speaks TLS or FastCGI
-proxy_pass http://127.0.0.1:8443;     # backend expects HTTPS
-proxy_pass http://127.0.0.1:9000;     # that's PHP-FPM, use fastcgi_pass
-
-# Right
-proxy_pass https://127.0.0.1:8443;
-fastcgi_pass 127.0.0.1:9000;
+proxy_pass https://127.0.0.1:8443;    # backend speaks TLS
+fastcgi_pass 127.0.0.1:9000;          # PHP-FPM speaks FastCGI, not HTTP
 ```
 
 `curl -v http://127.0.0.1:<port>/` shows what the port actually returns.
@@ -162,7 +178,53 @@ location / {
 
 ### No live upstreams
 
-This message is a consequence, not a cause. With the defaults (`max_fails=1`, `fail_timeout=10s`), one failed attempt marks a server unavailable for 10 seconds. With a single server, every request in that window gets a 502 without NGINX even trying. Scroll up to the first error for that upstream. That's the one to fix.
+This message is a consequence, not a cause. With the defaults (`max_fails=1`, `fail_timeout=10s`), one failed attempt marks a server unavailable for 10 seconds. In the lab, an upstream with two dead servers produced this sequence on the **first** request:
+
+```
+[error] connect() failed (111: Connection refused) while connecting to upstream, ... upstream: "http://127.0.0.1:9011/nolive"
+[warn]  upstream server temporarily disabled while connecting to upstream, ... upstream: "http://127.0.0.1:9011/nolive"
+[error] connect() failed (111: Connection refused) while connecting to upstream, ... upstream: "http://127.0.0.1:9012/nolive"
+[warn]  upstream server temporarily disabled while connecting to upstream, ... upstream: "http://127.0.0.1:9012/nolive"
+```
+
+and on the **second** request, without trying either server:
+
+```
+[error] no live upstreams while connecting to upstream, ... upstream: "http://nolive/nolive"
+```
+
+Note the `upstream:` field switches from a real address to the upstream block's name. Scroll up to the first `111`/`104`/timeout for that upstream. That's the one to fix. The `[warn]` lines only appear if `error_log` is at `warn` or lower.
+
+---
+
+## Reproduced in the lab
+
+Each scenario below was one `curl` against NGINX 1.28.3, with a backend built to fail in that specific way. Exact error-log lines (client/server fields trimmed):
+
+| Backend behavior | Error log | Level | Client got |
+|---|---|---|---|
+| Nothing listening on the port | `connect() failed (111: Connection refused) while connecting to upstream` | `[error]` | 502 |
+| Reads the request, closes without answering | `upstream prematurely closed connection while reading response header from upstream` | `[error]` | 502 |
+| Reads the request, closes with RST | `recv() failed (104: Connection reset by peer) while reading response header from upstream` | `[error]` | 502 |
+| 16 KiB `Set-Cookie` header | `upstream sent too big header while reading response header from upstream` | `[error]` | 502 |
+| Unix socket path doesn't exist | `connect() to unix:/run/lab502/missing.sock failed (2: No such file or directory)` | **`[crit]`** | 502 |
+| Unix socket mode `600`, owned by another user | `connect() to unix:/run/lab502/perm.sock failed (13: Permission denied)` | **`[crit]`** | 502 |
+
+Two things worth knowing from these runs:
+
+- **Socket errors are logged at `[crit]`, not `[error]`.** A dashboard or alert that filters on `[error]` misses the classic PHP-FPM socket 502s. Grep for the message, not the level.
+- **`$upstream_connect_time` tells refused from closed.** With a log format that includes it, the access log showed `uct=-` for refused connections and socket errors (no connection was ever made) and `uct=0.000` for the close/reset cases (connected fine, then failed):
+
+```nginx
+log_format upstream_debug '$remote_addr "$request" $status upstream=$upstream_addr '
+                          'ustatus=$upstream_status rt=$request_time '
+                          'uct=$upstream_connect_time urt=$upstream_response_time';
+```
+
+```
+127.0.0.1 "GET /down HTTP/1.1" 502 upstream=127.0.0.1:9001 ustatus=502 rt=0.000 uct=- urt=0.000
+127.0.0.1 "GET /close HTTP/1.1" 502 upstream=127.0.0.1:9002 ustatus=502 rt=0.000 uct=0.000 urt=0.000
+```
 
 ---
 
