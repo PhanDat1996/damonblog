@@ -9,6 +9,7 @@ export interface Post {
   tags: string[];
   category: Category;
   featured?: boolean;
+  lab?: boolean;
   coverImage?: string;
   readingTime: string;
   content?: string;
@@ -22,5 +23,6 @@ export interface PostMeta {
   tags: string[];
   category: Category;
   featured?: boolean;
+  lab?: boolean; // commands and output were run on the lab VM
   coverImage?: string;
 }

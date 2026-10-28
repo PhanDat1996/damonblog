@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "A process vanished with signal 9? Reproduce an OOM kill, read every line of the kernel report, and use oom_score_adj, OOMPolicy and MemoryHigh to control it."
 tags: ["linux", "troubleshooting", "debugging", "monitoring"]
 featured: false
+lab: true
 category: "linux"
 ---
 
