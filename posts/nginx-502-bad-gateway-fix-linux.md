@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "NGINX returning 502 Bad Gateway? Match the exact error-log line to its cause (dead upstream, wrong socket, SELinux, bad headers) and apply the right fix."
 tags: ["nginx", "troubleshooting", "production", "debugging"]
 featured: false
+lab: true
 category: "nginx"
 ---
 

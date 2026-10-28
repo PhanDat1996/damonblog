@@ -1,7 +1,7 @@
 'use client';
 
 // Client Component wrapper for ReadingProgress dynamic import.
-// Same reason as TerminalHeroLazy — ssr:false requires a Client Component.
+// ssr:false requires a Client Component.
 
 import dynamic from 'next/dynamic';
 

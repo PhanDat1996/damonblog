@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "NGINX 502s only under load, while curl to the backend works? Diagnose accept-queue overflow, killed workers and port exhaustion, then fix each one."
 tags: ["nginx", "debugging", "linux", "infrastructure", "troubleshooting"]
 featured: false
+lab: true
 category: "nginx"
 ---
 

@@ -5,6 +5,7 @@ updated: "2026-10-28"
 excerpt: "Uploads fail with 413 Request Entity Too Large? Lab-tested client_max_body_size: the exact limit, the regex location trap, and app vs NGINX 413s."
 tags: ["nginx", "troubleshooting", "linux", "infrastructure"]
 featured: false
+lab: true
 category: "nginx"
 ---
 
