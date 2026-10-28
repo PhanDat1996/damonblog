@@ -2,11 +2,10 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getAllPosts } from '@/lib/posts';
 
-// SEO Fix: keyword-optimized title + meta description
 export const metadata: Metadata = {
-  title: 'Linux Troubleshooting & Performance Tuning — Damon',
+  title: 'Damon: notes on debugging Linux, NGINX and security',
   description:
-    'Real-world Linux troubleshooting guides from a Senior L3 engineer — debug high CPU, memory leaks, NGINX 502s, and production incidents. No theory, no fluff.',
+    'Debugging notes from an L3 support engineer: NGINX errors, Linux performance and CIS hardening, with lab-tested posts and free NGINX/PostgreSQL checkers.',
   alternates: { canonical: '/', types: { 'application/rss+xml': '/feed.xml' } },
 };
 
