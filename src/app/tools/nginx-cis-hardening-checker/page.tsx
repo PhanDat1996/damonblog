@@ -602,7 +602,7 @@ export default function NginxCisCheckerPage() {
               <ul className="space-y-2">
                 {[
                   { text: "NGINX Config Analyzer — AST-based full config audit",  href: "/tools/nginx-config-analyzer" },
-                  { text: "NGINX Hardening Checker",                               href: "/tools/nginx-hardening-checker" },
+                  { text: "NGINX Hardening Checker",                               href: "/tools/nginx-cis-hardening-checker" },
                   { text: "Fix NGINX 502 Bad Gateway under load",                  href: "/blog/nginx-502-under-load" },
                   { text: "Configure upstream keepalive — prevent 502s",           href: "/blog/nginx-upstream-keepalive" },
                   { text: "NGINX rate limiting for APIs and login endpoints",       href: "/blog/nginx-rate-limiting-config" },

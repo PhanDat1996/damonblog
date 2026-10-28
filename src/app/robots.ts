@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ['/api/', '/_next/'],
       },
     ],
-    sitemap: 'https://damonsec.com/sitemap.xml',
-    host: 'https://damonsec.com',
+    sitemap: 'https://www.damonsec.com/sitemap.xml',
+    host: 'https://www.damonsec.com',
   };
 }

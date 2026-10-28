@@ -128,7 +128,7 @@ export default async function BlogPage({ searchParams }: Props) {
             return (
               <a
                 key={cat}
-                href={`/blog/${cat}/`}
+                href={`/blog/${cat}`}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 font-mono text-xs text-zinc-400 hover:border-zinc-500 hover:text-white transition-all"
               >
                 {c.icon} {c.label}

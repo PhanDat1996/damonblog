@@ -10,12 +10,12 @@ export const metadata: Metadata = {
   title: 'NGINX Configuration & Troubleshooting Guides',
   description:
     'Production NGINX guides — reverse proxy configuration, upstream keepalive, performance tuning, 502/504 debugging, and SSL hardening. Real configs, real failure modes.',
-  alternates: { canonical: `${BASE_URL}/blog/nginx/` },
+  alternates: { canonical: `${BASE_URL}/blog/nginx` },
   openGraph: {
     title: 'NGINX Configuration & Troubleshooting Guides — damonsec.com',
     description:
       'Production NGINX guides — reverse proxy configuration, upstream keepalive, performance tuning, 502/504 debugging, and SSL hardening. Real configs, real failure modes.',
-    url: `${BASE_URL}/blog/nginx/`,
+    url: `${BASE_URL}/blog/nginx`,
     type: 'website',
     siteName: 'damonsec.com',
   },
@@ -234,7 +234,7 @@ export default function NginxCategoryPage() {
           {OTHER_CATEGORIES.map((cat) => (
             <Link
               key={cat.slug}
-              href={`/blog/${cat.slug}/`}
+              href={`/blog/${cat.slug}`}
               className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 rounded-lg hover:border-zinc-500 hover:text-white transition-all"
             >
               {cat.icon} {cat.label}

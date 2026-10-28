@@ -20,6 +20,7 @@ export default function Footer() {
               { href: '/blog', label: 'Blog' },
               { href: '/about', label: 'About' },
               { href: '/contact', label: 'Contact' },
+              { href: '/privacy', label: 'Privacy' },
             ].map(({ href, label }) => (
               <Link
                 key={href}
