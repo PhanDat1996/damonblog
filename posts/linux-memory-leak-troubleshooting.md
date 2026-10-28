@@ -76,6 +76,8 @@ Read two things:
 - **`Memory cgroup out of memory`** means a cgroup limit was hit (container, systemd `MemoryMax=`, Kubernetes `limits.memory`), not the whole machine. The host may have had plenty of free RAM. A plain `Out of memory:` line means the whole system ran out.
 - **`anon-rss`** is the process's private memory at the moment of death. Compare it with its normal size after startup.
 
+For a line-by-line walkthrough of that report, with a reproducible lab, see [Linux OOM Killer: Read the Log and Control What Dies](/blog/linux-oom-killer-explained).
+
 If there's no OOM line but the process still died, check the application's own logs and `systemctl status`; a JVM throwing `OutOfMemoryError` and exiting is a different event from the kernel killing it.
 
 ---
