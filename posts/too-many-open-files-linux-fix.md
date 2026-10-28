@@ -8,16 +8,11 @@ featured: false
 category: "linux"
 ---
 
-<!--
-TODO(Damon): replace this comment with 2–4 sentences from a real case before publishing.
-What service was it, what error did the customer/team see, what was tried first
-(probably `ulimit -n`), and what the actual cause turned out to be.
-No customer names needed. This paragraph is what makes the post yours.
--->
+It usually goes like this. An API that has run quietly for months starts returning errors right after a traffic spike. The log says `EMFILE: too many open files`. You SSH in, run `ulimit -n 65535`, restart the service with `systemctl restart`, and the errors stop.
 
-You see `Too many open files` in the log. You run `ulimit -n 65535`, restart the service, and ten minutes later the error is back. The command worked, so why didn't the fix?
+Twenty minutes later they're back. You run `ulimit -n` again and it still says `65535`. So the limit is raised… isn't it?
 
-Because `ulimit` changed the limit for **your shell**, not for the service. On a modern Linux box there are at least three different limits that can produce this error, and the one you raised is usually not the one being hit.
+It isn't. `ulimit` changed the limit for **your shell**, not for the service. On a modern Linux box there are at least three different limits that can produce this error, and the one you raised is usually not the one being hit.
 
 This guide is about finding the right one.
 
