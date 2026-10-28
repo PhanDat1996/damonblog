@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import { getAllSlugs, getPostWithHtml, getAllPosts } from '@/lib/posts';
+import { getAllSlugs, getPostWithHtml, getAllPosts, getRelatedPosts } from '@/lib/posts';
 import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
 import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
@@ -30,7 +30,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     description: post.excerpt,
     keywords: post.tags,
     authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],
-    alternates: { canonical: url },
+    alternates: { canonical: url, types: { 'application/rss+xml': '/feed.xml' } },
     openGraph: {
       title: post.title,
       description: post.excerpt,
@@ -61,6 +61,7 @@ export default async function BlogPostPage({ params }: Props) {
   const currentIndex = allPosts.findIndex((p) => p.slug === slug);
   const prev = currentIndex < allPosts.length - 1 ? allPosts[currentIndex + 1] : null;
   const next = currentIndex > 0 ? allPosts[currentIndex - 1] : null;
+  const related = getRelatedPosts(post);
 
   // Fix #3: extract FAQ items and word count for schema
   const faqItems = post.content ? extractFaqFromHtml(post.content) : [];
@@ -126,6 +127,30 @@ export default async function BlogPostPage({ params }: Props) {
           className="prose"
           dangerouslySetInnerHTML={{ __html: post.content ?? '' }}
         />
+
+        {/* Related posts — shared tags first, keeps readers on-site */}
+        {related.length > 0 && (
+          <section className="mt-14 border-t border-zinc-800 pt-8" aria-labelledby="related-heading">
+            <h2 id="related-heading" className="font-mono text-xs text-zinc-500 uppercase tracking-widest mb-4">
+              Related guides
+            </h2>
+            <ul className="space-y-3">
+              {related.map((r) => (
+                <li key={r.slug}>
+                  <Link
+                    href={`/blog/${r.slug}`}
+                    className="group block rounded-xl border border-zinc-800 bg-zinc-900/40 p-5 hover:border-zinc-700 transition-all"
+                  >
+                    <p className="text-sm font-semibold text-white group-hover:text-green-400 transition-colors">
+                      {r.title}
+                    </p>
+                    <p className="mt-1.5 text-sm text-zinc-400 line-clamp-2">{r.excerpt}</p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {/* Post footer tags */}
         <div className="mt-14 border-t border-zinc-800 pt-8 space-y-4">

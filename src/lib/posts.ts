@@ -90,8 +90,19 @@ export async function getPostWithHtml(slug: string): Promise<Post | null> {
   };
 }
 
-export function getRelatedPosts(currentSlug: string, category: Category, limit = 3): Post[] {
-  return getPostsByCategory(category)
-    .filter((p) => p.slug !== currentSlug)
-    .slice(0, limit);
+// Ranks by shared tags (+1 each) and same category (+1); ties keep newest first.
+export function getRelatedPosts(current: Post, limit = 3): Post[] {
+  const tags = new Set(current.tags.map((t) => t.toLowerCase()));
+  return getAllPosts()
+    .filter((p) => p.slug !== current.slug)
+    .map((p) => ({
+      post: p,
+      score:
+        p.tags.filter((t) => tags.has(t.toLowerCase())).length +
+        (p.category === current.category ? 1 : 0),
+    }))
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((r) => r.post);
 }
