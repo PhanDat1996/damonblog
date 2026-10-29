@@ -75,12 +75,12 @@ function finding(
 // ─── SHARED HELPERS ──────────────────────────────────────────────────────────
 
 /** Server blocks that actually serve content (not a server-level return/redirect) */
-function contentServers(ast: ParseResult): NginxBlock[] {
+export function contentServers(ast: ParseResult): NginxBlock[] {
   return getServerBlocks(ast.root).filter((s) => !isReturnOnlyServer(s));
 }
 
 /** Directives set inside the server (any depth) or inherited from http/main */
-function directivesInScope(server: NginxBlock, name: string): NginxDirective[] {
+export function directivesInScope(server: NginxBlock, name: string): NginxDirective[] {
   const deep = getAllDirectivesDeep(server, name);
   if (deep.length > 0) return deep;
   const inherited = server.parent ? findInheritedDirective(server.parent, name) : null;
@@ -88,14 +88,14 @@ function directivesInScope(server: NginxBlock, name: string): NginxDirective[] {
 }
 
 /** All blocks below (and including) `block`, depth-first */
-function allBlocks(block: NginxBlock): NginxBlock[] {
+export function allBlocks(block: NginxBlock): NginxBlock[] {
   const out: NginxBlock[] = [block];
   for (const d of block.directives) if (d.block) out.push(...allBlocks(d.block));
   return out;
 }
 
 /** Location path and modifier from a location block label */
-function locationMatch(loc: NginxBlock): { modifier: string; path: string } {
+export function locationMatch(loc: NginxBlock): { modifier: string; path: string } {
   const parts = loc.contextLabel.replace(/^location\s+/, "").trim().split(/\s+/);
   if (parts.length >= 2 && ["=", "~", "~*", "^~"].includes(parts[0])) return { modifier: parts[0], path: parts.slice(1).join(" ") };
   return { modifier: "", path: parts.join(" ") };

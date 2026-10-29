@@ -44,15 +44,15 @@ const WEB_TOOLS: WebTool[] = [
   },
   {
     slug: 'nginx-cis-hardening-checker',
-    title: 'NGINX CIS Hardening Checker',
+    title: 'NGINX Hardening Checker',
     glyph: 'CIS',
-    tagline: 'Check your NGINX config against CIS NGINX Benchmark v2.1.0 controls.',
+    tagline: 'Check an NGINX config against CIS NGINX Benchmark topics and common hardening practice.',
     input: 'nginx.conf',
     checks: [
-      'TLS, security headers, information disclosure',
-      'Each finding mapped to a CIS rule ID',
-      'Exact remediation snippet per finding',
-      'Generates a hardened config template',
+      'TLS, security headers, request limits, logging',
+      'Each finding links to its config line',
+      'Config fix snippet per finding',
+      'Hardened baseline that passes every check',
     ],
   },
   {
