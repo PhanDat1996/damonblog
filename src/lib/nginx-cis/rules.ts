@@ -1,464 +1,817 @@
 // lib/nginx-cis/rules.ts
-// CIS-style NGINX security rules — v3
-// Based on CIS-style NGINX hardening recommendations
+// NGINX hardening rules — v4
+// Rules run on the AST from the NGINX Config Analyzer parser, so comments are
+// ignored, directive values are compared exactly, and NGINX inheritance
+// (add_header, proxy_set_header, ssl_*) is respected.
+//
+// framework "cis": topic is covered by the CIS NGINX Benchmark.
+// framework "best-practice": common operational hardening, not a CIS item.
+
+import type { NginxBlock, NginxDirective, ParseResult } from "../../app/tools/nginx-config-analyzer/v2/types.ts";
+import {
+  getServerBlocks, getDirectives, getAllDirectivesDeep, getBlocksOfType,
+  getEffectiveArrayDirectives, getEffectiveHeaders, headerName, hasHeader,
+  hasCspFrameAncestors, findInheritedDirective, isReturnOnlyServer, isHttpsServer,
+  isFullConfig, findUsedUpstream,
+} from "../../app/tools/nginx-config-analyzer/v2/parser.ts";
+import { directivesInScope, allBlocks, locationMatch } from "../../app/tools/nginx-config-analyzer/v2/rules.ts";
 
 export type Severity   = "high" | "medium" | "low";
 export type Confidence = "high" | "medium" | "low";
+export type Framework  = "cis" | "best-practice";
+export type RuleStatus = "pass" | "fail" | "n/a";
+
+/** A config line a result points at */
+export interface SourceRef {
+  line:  number;
+  label: string;
+}
+
+export interface RuleOutcome {
+  status:    RuleStatus;
+  refs?:     SourceRef[];
+  evidence?: string;
+}
+
+export interface ScanContext {
+  ast:      ParseResult;
+  root:     NginxBlock;
+  /** Has http/events — a full nginx.conf rather than a conf.d snippet */
+  full:     boolean;
+  servers:  NginxBlock[];
+  /** Servers that serve content (not a server-level return/redirect) */
+  content:  NginxBlock[];
+  https:    NginxBlock[];
+  /** Blocks (server/location/if) with their own proxy_pass */
+  proxies:  NginxBlock[];
+}
 
 export interface CISRule {
-  id:               string;       // e.g. "2.1.1"
-  title:            string;
-  severity:         Severity;
-  category:         string;
-  description:      string;
-  check:            (config: string) => boolean; // true = issue found
-  remediation:      string;
-  config_fix:       string;
-  why_it_matters:   string;       // real-world impact
-  attack_type:      string;       // e.g. "Information Disclosure"
-  owasp_mapping:    string;       // e.g. "A05 Security Misconfiguration"
-  confidence:       Confidence;
-  detection_logic:  string;       // brief explanation of detection method
-  reference:        string;
+  id:              string;
+  title:           string;
+  severity:        Severity;
+  category:        string;
+  framework:       Framework;
+  description:     string;
+  check:           (ctx: ScanContext) => RuleOutcome;
+  remediation:     string;
+  config_fix:      string;
+  why_it_matters:  string;
+  attack_type:     string;
+  owasp_mapping:   string;
+  confidence:      Confidence;
+  detection_logic: string;
+  reference:       string;
 }
 
 export interface CISResult {
-  rule:   CISRule;
-  passed: boolean;
+  rule:      CISRule;
+  status:    RuleStatus;
+  /** true for pass and n/a — kept for callers that only care about failures */
+  passed:    boolean;
+  refs:      SourceRef[];
+  evidence?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-export const hasDirective = (config: string, name: string): boolean =>
-  new RegExp(`(?:^|\\n)\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(config);
+const PASS: RuleOutcome = { status: "pass" };
+const NA:   RuleOutcome = { status: "n/a" };
 
-export const hasHeader = (config: string, name: string): boolean =>
-  new RegExp(`add_header\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(config);
+function ref(at: NginxDirective | NginxBlock, label?: string): SourceRef {
+  if ("contextLabel" in at) return { line: at.line, label: label ?? at.contextLabel };
+  return { line: at.line, label: label ?? `${at.name} ${at.rawValue}`.trim() };
+}
 
-export const getDirectiveValue = (config: string, name: string): string | null =>
-  config.match(
-    new RegExp(`${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+([^;\\n]+)`, "i")
-  )?.[1]?.trim() ?? null;
+function fail(refs: SourceRef[], evidence?: string): RuleOutcome {
+  return { status: "fail", refs, evidence };
+}
+
+function value(d: NginxDirective | null): string {
+  return d?.rawValue.trim().toLowerCase() ?? "";
+}
+
+/** Where a directive applies to a server: inside it, or inherited from http/main */
+function effective(server: NginxBlock, name: string): NginxDirective | null {
+  return findInheritedDirective(server, name);
+}
+
+/** Blocks that hold settings for the whole http context (http, or root for snippets) */
+function httpScopes(ctx: ScanContext): NginxBlock[] {
+  const http = getBlocksOfType(ctx.root, "http");
+  return http.length ? http : [ctx.root];
+}
+
+export function buildContext(ast: ParseResult): ScanContext {
+  const servers = getServerBlocks(ast.root);
+  const content = servers.filter((s) => !isReturnOnlyServer(s));
+  return {
+    ast,
+    root:    ast.root,
+    full:    isFullConfig(ast.root),
+    servers,
+    content,
+    https:   servers.filter(isHttpsServer),
+    proxies: content.flatMap((s) => allBlocks(s).filter((b) => getDirectives(b, "proxy_pass").length > 0)),
+  };
+}
+
+function missingHeaderRule(header: string, extraOk?: (server: NginxBlock) => boolean) {
+  return (ctx: ScanContext): RuleOutcome => {
+    if (ctx.content.length === 0) return NA;
+    const missing = ctx.content.filter((s) => !hasHeader(getEffectiveHeaders(s), header) && !(extraOk?.(s)));
+    return missing.length ? fail(missing.map((s) => ref(s))) : PASS;
+  };
+}
 
 // ─── Rules ────────────────────────────────────────────────────────────────────
 
 export const CIS_RULES: CISRule[] = [
 
-  // ══ HIGH ══════════════════════════════════════════════════════════════════
+  // ══ Information disclosure ════════════════════════════════════════════════
 
   {
-    id:             "2.1.1",
-    title:          "NGINX version disclosure via server_tokens",
-    severity:       "high",
-    category:       "Information Disclosure",
-    description:    "server_tokens is on or not explicitly disabled. NGINX version leaks in every Server response header and default error page body.",
-    check:          (c) => {
-      const val = getDirectiveValue(c, "server_tokens");
-      return val === null || val.toLowerCase() !== "off";
+    id: "DISC-1",
+    title: "NGINX version disclosed (server_tokens not off)",
+    severity: "medium",
+    category: "Information Disclosure",
+    framework: "cis",
+    description: "server_tokens is on or not set. NGINX adds its version to the Server header and to default error pages.",
+    check: (ctx) => {
+      const scopes = ctx.servers.length ? ctx.servers : httpScopes(ctx);
+      if (scopes.length === 0 || ctx.root.directives.length === 0) return NA;
+      const bad = scopes.filter((s) => value(effective(s, "server_tokens")) !== "off");
+      return bad.length
+        ? fail(bad.map((s) => { const d = effective(s, "server_tokens"); return d ? ref(d) : ref(s); }))
+        : PASS;
     },
-    remediation:    "Set server_tokens off in the http{} block. This suppresses the NGINX version from both response headers and error pages.",
-    config_fix:     "server_tokens off;",
-    why_it_matters: "An attacker who knows your exact NGINX version can cross-reference public CVE databases and target version-specific vulnerabilities without ever sending a single exploit attempt. Shodan and other scanners index this information automatically. Version disclosure converts reconnaissance from active to passive.",
-    attack_type:    "Reconnaissance / Fingerprinting",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for explicit 'server_tokens on' or absence of 'server_tokens off'. Default NGINX value is on.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §5.1.1",
+    remediation: "Set server_tokens off in the http{} block.",
+    config_fix: "server_tokens off;",
+    why_it_matters: "The exact version lets anyone match your server against published CVEs without probing it. Internet scanners record the Server header for every host they see.",
+    attack_type: "Reconnaissance / Fingerprinting",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Resolves server_tokens for each server block (own value or inherited from http/main). The NGINX default is on.",
+    reference: "CIS NGINX Benchmark — server_tokens off",
   },
 
   {
-    id:             "2.1.2",
-    title:          "Directory listing enabled (autoindex on)",
-    severity:       "high",
-    category:       "Information Disclosure",
-    description:    "autoindex on is present. Any directory without an index file will expose its full contents to unauthenticated users.",
-    check:          (c) => /autoindex\s+on/i.test(c),
-    remediation:    "Remove autoindex on or explicitly set autoindex off. If directory listing is needed for a specific path, scope it to that location block only.",
-    config_fix:     "autoindex off;",
-    why_it_matters: "Directory listing can expose backup files (database dumps, .sql files), source code, configuration files with credentials, and private assets. Attackers routinely look for autoindex-enabled paths because they bypass authentication entirely. A single exposed backup file can lead to full database compromise.",
-    attack_type:    "Information Disclosure / Data Exposure",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Searches for 'autoindex on' directive anywhere in config.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §5.1.2",
+    id: "DISC-2",
+    title: "Directory listing enabled (autoindex on)",
+    severity: "high",
+    category: "Information Disclosure",
+    framework: "best-practice",
+    description: "autoindex on is set. Directories without an index file list their contents to anyone.",
+    check: (ctx) => {
+      const on = getAllDirectivesDeep(ctx.root, "autoindex").filter((d) => value(d) === "on");
+      return on.length ? fail(on.map((d) => ref(d))) : PASS;
+    },
+    remediation: "Remove autoindex on, or limit it to the one location that needs it and protect that location.",
+    config_fix: "autoindex off;",
+    why_it_matters: "Listings expose backup files, database dumps and config files that were never linked from the site.",
+    attack_type: "Information Disclosure",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Finds autoindex directives set to on (comments are ignored).",
+    reference: "NGINX ngx_http_autoindex_module",
   },
 
   {
-    id:             "2.1.3",
-    title:          "Legacy TLS versions enabled (TLS 1.0 / TLS 1.1)",
-    severity:       "high",
-    category:       "Transport Security",
-    description:    "ssl_protocols includes TLSv1 or TLSv1.1. Both versions are deprecated by RFC 8996 and contain well-documented cryptographic weaknesses.",
-    check:          (c) => /ssl_protocols[^;]*TLSv1(?:\.1)?\b/i.test(c),
-    remediation:    "Restrict ssl_protocols to TLSv1.2 TLSv1.3 only. All modern clients support TLS 1.2+. TLS 1.1 support was removed from Chrome 84 and Firefox 78.",
-    config_fix:     "ssl_protocols TLSv1.2 TLSv1.3;",
-    why_it_matters: "TLS 1.0 is vulnerable to BEAST (Browser Exploit Against SSL/TLS) and POODLE (Padding Oracle On Downgraded Legacy Encryption) attacks. TLS 1.1 lacks AEAD cipher suites and perfect forward secrecy requirements. Both will cause immediate failures in PCI-DSS, SOC 2 Type II, HIPAA, and FedRAMP audits. In a man-in-the-middle position, an attacker can force a downgrade to these protocols and decrypt session traffic.",
-    attack_type:    "Protocol Downgrade / MITM / Compliance Failure",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "high",
-    detection_logic: "Regex match for TLSv1 or TLSv1.1 inside ssl_protocols directive value.",
-    reference:      "RFC 8996 / CIS NGINX Benchmark v2.1.0 §4.1.2",
-  },
-
-  {
-    id:             "2.1.4",
-    title:          "No HTTPS listener configured",
-    severity:       "high",
-    category:       "Transport Security",
-    description:    "No listen 443 ssl directive was found. All traffic is served over unencrypted HTTP.",
-    check:          (c) => !/listen\s+443\b/i.test(c),
-    remediation:    "Add a TLS-enabled server block. Use Let's Encrypt (certbot) for free automated certificates, or your organization's certificate authority.",
-    config_fix: `server {
-    listen 443 ssl http2;
-    ssl_certificate     /etc/nginx/ssl/fullchain.pem;
-    ssl_certificate_key /etc/nginx/ssl/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-}`,
-    why_it_matters: "All HTTP traffic is plaintext. Credentials, session cookies, form data, and API tokens transmitted over HTTP are trivially interceptable on the same network (coffee shops, corporate networks, cloud provider networks). HTTP connections are also subject to content injection attacks where ISPs or attackers insert malicious scripts into responses.",
-    attack_type:    "Credential Interception / Session Hijacking / Content Injection",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "high",
-    detection_logic: "Checks for absence of 'listen 443' in any server block.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §4.1.1",
-  },
-
-  {
-    id:             "2.1.5",
-    title:          "Missing HTTP Strict Transport Security (HSTS)",
-    severity:       "high",
-    category:       "Transport Security",
-    description:    "An HTTPS listener was detected but no Strict-Transport-Security header is configured.",
-    check:          (c) => /listen\s+443/i.test(c) && !hasHeader(c, "Strict-Transport-Security"),
-    remediation:    "Add HSTS with a minimum max-age of 1 year inside every HTTPS server block. Include includeSubDomains once all subdomains serve HTTPS.",
-    config_fix:     `add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;`,
-    why_it_matters: "Without HSTS, users who navigate to your site via HTTP (e.g., bookmarks, typed URLs, email links) can be intercepted before being redirected to HTTPS. SSL stripping attacks silently remove the 'S' from HTTPS and serve the entire session over HTTP while appearing HTTPS to the server. HSTS forces the browser to refuse non-HTTPS connections at the client level, eliminating this window.",
-    attack_type:    "SSL Stripping / MITM",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "high",
-    detection_logic: "Detects HTTPS listener (listen 443) but absence of add_header Strict-Transport-Security.",
-    reference:      "RFC 6797 / CIS NGINX Benchmark v2.1.0 §4.1.5",
-  },
-
-  {
-    id:             "2.1.6",
-    title:          "Hidden files unprotected (.git, .env, .htaccess)",
-    severity:       "high",
-    category:       "Information Disclosure",
-    description:    "No location block was found denying access to dotfiles. .git directories, .env files, and .htaccess files may be publicly accessible.",
-    check:          (c) =>
-      !/location\s+[~*]+\s+["']?\\?\.(git|env|htaccess|svn)/i.test(c) &&
-      !/location\s+[~*]+\s+["']?\/\.\w/i.test(c),
-    remediation:    "Add a catch-all location block denying access to all paths beginning with a dot. Exclude .well-known for ACME certificate validation.",
+    id: "DISC-3",
+    title: "Hidden files not blocked (.git, .env, .htaccess)",
+    severity: "high",
+    category: "Information Disclosure",
+    framework: "cis",
+    description: "A server reads files from disk but no location denies paths that start with a dot.",
+    check: (ctx) => {
+      const fileServers = ctx.content.filter((s) =>
+        ["root", "alias", "try_files", "fastcgi_pass", "autoindex"].some((n) => directivesInScope(s, n).length > 0));
+      if (fileServers.length === 0) return NA;
+      const unprotected = fileServers.filter((s) => !getBlocksOfType(s, "location").some((loc) => {
+        const { modifier, path } = locationMatch(loc);
+        const blocksDotfiles =
+          /\.(git|env|htaccess|htpasswd|svn|ds_store)/i.test(path) ||
+          ((modifier === "~" || modifier === "~*") && /\/\\\./.test(path));
+        const denies =
+          getDirectives(loc, "deny").some((d) => value(d) === "all") ||
+          getDirectives(loc, "return").some((d) => /^(403|404|444)$/.test(d.values[0] ?? ""));
+        return blocksDotfiles && denies;
+      }));
+      return unprotected.length ? fail(unprotected.map((s) => ref(s))) : PASS;
+    },
+    remediation: "Deny every path segment that starts with a dot, except .well-known (used for ACME certificate validation).",
     config_fix: `location ~ /\\.(?!well-known) {
     deny all;
     return 404;
 }`,
-    why_it_matters: "Exposed .git directories allow downloading the entire source code history, including any credentials, API keys, or database passwords ever committed. .env files directly expose database credentials, third-party API keys, JWT secrets, and OAuth tokens. These are actively hunted by automated scanners — GitGuardian reported over 6 million secrets leaked via public repositories in 2023 alone. On NGINX, without a deny rule, these files are served directly as plaintext.",
-    attack_type:    "Credential Exposure / Source Code Disclosure",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "medium",
-    detection_logic: "Checks for absence of regex location blocks matching common dotfile patterns.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §5.1.3 / OWASP A05",
+    why_it_matters: "A reachable .git directory gives away the full source history, and .env files usually hold database passwords and API keys. Scanners request these paths on every new host.",
+    attack_type: "Credential Exposure / Source Code Disclosure",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "medium",
+    detection_logic: "For servers that serve files (root, alias, try_files, fastcgi_pass), looks for a regex location matching /\\. or a named dotfile that denies or returns 403/404/444. Pure proxy servers are not applicable.",
+    reference: "CIS NGINX Benchmark — hidden file serving disabled",
   },
 
   {
-    id:             "2.1.7",
-    title:          "Weak cipher suites configured",
-    severity:       "high",
-    category:       "Transport Security",
-    description:    "ssl_ciphers contains one or more weak cipher patterns: RC4, DES, 3DES, NULL, EXPORT, ANON, or MD5.",
-    check:          (c) => {
-      const val = getDirectiveValue(c, "ssl_ciphers")?.toUpperCase() ?? "";
-      if (!val) return false;
-      return /RC4|DES\b|3DES|NULL|EXPORT|ANON|MD5|ADH|AECDH/.test(val);
+    id: "DISC-4",
+    title: "Backend X-Powered-By header passed through",
+    severity: "low",
+    category: "Information Disclosure",
+    framework: "cis",
+    description: "Proxied responses keep the backend's X-Powered-By header, which names the framework and often its version.",
+    check: (ctx) => {
+      if (ctx.proxies.length === 0) return NA;
+      const bad = ctx.proxies.filter((b) =>
+        !getEffectiveArrayDirectives(b, "proxy_hide_header").some((d) => headerName(d) === "x-powered-by"));
+      return bad.length ? fail(bad.map((b) => ref(getDirectives(b, "proxy_pass")[0]))) : PASS;
     },
-    remediation:    "Replace ssl_ciphers with the Mozilla Intermediate or Modern cipher list. Set ssl_prefer_server_ciphers off to allow TLS 1.3 to use its own cipher ordering.",
+    remediation: "Hide backend identification headers at the http or server level.",
+    config_fix: "proxy_hide_header X-Powered-By;",
+    why_it_matters: "Headers like X-Powered-By: Express or PHP/8.1 tell an attacker which framework and version to target.",
+    attack_type: "Reconnaissance / Fingerprinting",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "For each block with proxy_pass, checks the effective proxy_hide_header list (with NGINX inheritance) for X-Powered-By.",
+    reference: "CIS NGINX Benchmark — hide proxied backend headers",
+  },
+
+  // ══ Transport security ════════════════════════════════════════════════════
+
+  {
+    id: "TLS-1",
+    title: "No HTTPS listener configured",
+    severity: "high",
+    category: "Transport Security",
+    framework: "cis",
+    description: "No server block listens with ssl. All traffic is plain HTTP.",
+    check: (ctx) => {
+      if (ctx.servers.length === 0) return NA;
+      return ctx.https.length ? PASS : fail(ctx.servers.map((s) => ref(s)));
+    },
+    remediation: "Add a TLS server block. Let's Encrypt (certbot) issues free certificates.",
+    config_fix: `server {
+    listen 443 ssl;
+    http2 on;
+    ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+}`,
+    why_it_matters: "Plain HTTP exposes credentials, cookies and API tokens to anyone on the network path, and lets them modify responses.",
+    attack_type: "Credential Interception / Content Injection",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "Looks for a listen directive with the ssl or quic parameter, or on port 443.",
+    reference: "CIS NGINX Benchmark — TLS configuration",
+  },
+
+  {
+    id: "TLS-2",
+    title: "HTTP not redirected to HTTPS",
+    severity: "medium",
+    category: "Transport Security",
+    framework: "cis",
+    description: "HTTPS is configured, but a plain-HTTP server serves content instead of redirecting.",
+    check: (ctx) => {
+      if (ctx.https.length === 0) return NA;
+      const plain = ctx.servers.filter((s) => !isHttpsServer(s));
+      if (plain.length === 0) return PASS;
+      const bad = plain.filter((s) => !getDirectives(s, "return").some((d) =>
+        /^30[1278]$/.test(d.values[0] ?? "") && /https:\/\//.test(d.rawValue)));
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
+    },
+    remediation: "Answer every plain-HTTP request with a permanent redirect to HTTPS.",
+    config_fix: `server {
+    listen 80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}`,
+    why_it_matters: "Users who type the domain or follow an old http:// link stay on plain HTTP unless the server redirects them.",
+    attack_type: "SSL Stripping / MITM",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "When an HTTPS server exists, each non-TLS server must have a server-level return 301/302/307/308 to an https:// URL.",
+    reference: "CIS NGINX Benchmark — HTTP redirected to HTTPS",
+  },
+
+  {
+    id: "TLS-3",
+    title: "Legacy SSL/TLS versions enabled",
+    severity: "high",
+    category: "Transport Security",
+    framework: "cis",
+    description: "ssl_protocols enables SSLv3, TLSv1 or TLSv1.1.",
+    check: (ctx) => {
+      if (ctx.https.length === 0) return NA;
+      const bad = ctx.https.flatMap((s) => directivesInScope(s, "ssl_protocols"))
+        .filter((d) => d.values.some((v) => ["sslv2", "sslv3", "tlsv1", "tlsv1.1"].includes(v.toLowerCase())));
+      return bad.length ? fail([...new Map(bad.map((d) => [d.line, ref(d)])).values()]) : PASS;
+    },
+    remediation: "Allow only TLS 1.2 and 1.3.",
+    config_fix: "ssl_protocols TLSv1.2 TLSv1.3;",
+    why_it_matters: "TLS 1.0 and 1.1 are deprecated by RFC 8996 and lack modern AEAD cipher suites. Keeping them allows downgrade attacks for no real compatibility gain.",
+    attack_type: "Protocol Downgrade / MITM",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "Compares each ssl_protocols value token exactly (TLSv1.2 is not treated as TLSv1).",
+    reference: "CIS NGINX Benchmark — only modern TLS protocols / RFC 8996",
+  },
+
+  {
+    id: "TLS-4",
+    title: "Weak cipher suites enabled",
+    severity: "high",
+    category: "Transport Security",
+    framework: "cis",
+    description: "ssl_ciphers enables RC4, DES/3DES, NULL, EXPORT, anonymous or MD5 suites.",
+    check: (ctx) => {
+      if (ctx.https.length === 0) return NA;
+      const bad = ctx.https.flatMap((s) => directivesInScope(s, "ssl_ciphers")).filter((d) => {
+        const enabled = d.rawValue.replace(/["']/g, "").toUpperCase().split(":")
+          .filter((c) => c && !c.startsWith("!") && !c.startsWith("-"));
+        return enabled.some((c) => /RC4|(^|-)DES|3DES|NULL|EXPORT|ANON|MD5|ADH|AECDH/.test(c));
+      });
+      return bad.length ? fail([...new Map(bad.map((d) => [d.line, ref(d)])).values()]) : PASS;
+    },
+    remediation: "Use the Mozilla Intermediate cipher list and let clients pick the order.",
     config_fix: `ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
 ssl_prefer_server_ciphers off;`,
-    why_it_matters: "RC4 has statistical biases that allow recovery of plaintext from enough ciphertext. 3DES is vulnerable to the Sweet32 birthday attack with only ~785GB of encrypted data (achievable in hours on a busy HTTPS connection). NULL and ANON cipher suites provide zero encryption or authentication. These ciphers signal a fundamental TLS misconfiguration and will cause immediate failures in security audits.",
-    attack_type:    "Cryptographic Attack / Compliance Failure",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "high",
-    detection_logic: "Extracts ssl_ciphers value and tests for known weak cipher name patterns.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §4.1.4 / Mozilla SSL Generator",
-  },
-
-  // ══ MEDIUM ════════════════════════════════════════════════════════════════
-
-  {
-    id:             "3.1.1",
-    title:          "Missing X-Frame-Options header",
-    severity:       "medium",
-    category:       "Security Headers",
-    description:    "No X-Frame-Options or CSP frame-ancestors directive found. Pages can be embedded in iframes by any origin.",
-    check:          (c) => !hasHeader(c, "X-Frame-Options") && !/frame-ancestors/i.test(c),
-    remediation:    "Add X-Frame-Options SAMEORIGIN, or use CSP frame-ancestors for more granular control. CSP frame-ancestors supersedes X-Frame-Options in modern browsers.",
-    config_fix:     `add_header X-Frame-Options "SAMEORIGIN" always;`,
-    why_it_matters: "Clickjacking attacks embed your page in an invisible iframe layered over a deceptive page. Users believe they are clicking on the attacker's page, but are actually clicking on your authenticated interface — executing account deletions, money transfers, or permission changes without their knowledge. This attack requires zero server-side vulnerabilities and is trivially executed.",
-    attack_type:    "Clickjacking / UI Redress Attack",
-    owasp_mapping:  "A03 Injection (UI-layer)",
-    confidence:     "high",
-    detection_logic: "Checks absence of add_header X-Frame-Options and absence of 'frame-ancestors' in CSP header.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §6.1.1 / OWASP Clickjacking Defense",
+    why_it_matters: "RC4 and 3DES have practical attacks (RC4 biases, Sweet32), and NULL or anonymous suites give no encryption or no authentication.",
+    attack_type: "Cryptographic Attack",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "Splits ssl_ciphers on ':' and checks only enabled entries; entries excluded with ! or - are ignored.",
+    reference: "CIS NGINX Benchmark — weak ciphers disabled / Mozilla SSL Configuration Generator",
   },
 
   {
-    id:             "3.1.2",
-    title:          "Missing X-Content-Type-Options header",
-    severity:       "medium",
-    category:       "Security Headers",
-    description:    "X-Content-Type-Options: nosniff is absent. Browsers may MIME-sniff responses and execute scripts from non-script content types.",
-    check:          (c) => !hasHeader(c, "X-Content-Type-Options"),
-    remediation:    "Add X-Content-Type-Options nosniff to all responses. This is a single-line addition with no operational impact.",
-    config_fix:     `add_header X-Content-Type-Options "nosniff" always;`,
-    why_it_matters: "MIME-sniffing allows browsers to execute JavaScript embedded in files served as text/plain or image/jpeg. An attacker who can upload files (profile pictures, documents) can upload a JavaScript payload served as an image, then link to it to execute the script in a victim's browser. This converts file upload features into XSS vectors. The nosniff directive forces browsers to respect the declared Content-Type.",
-    attack_type:    "MIME-Sniffing XSS / Content Injection",
-    owasp_mapping:  "A03 Injection",
-    confidence:     "high",
-    detection_logic: "Checks for absence of add_header X-Content-Type-Options directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §6.1.2",
-  },
-
-  {
-    id:             "3.1.3",
-    title:          "Missing Content-Security-Policy header",
-    severity:       "medium",
-    category:       "Security Headers",
-    description:    "No Content-Security-Policy header is configured. The browser applies no constraints on script execution sources.",
-    check:          (c) => !hasHeader(c, "Content-Security-Policy"),
-    remediation:    "Deploy CSP in report-only mode first (Content-Security-Policy-Report-Only) to identify violations without blocking. Tighten incrementally, then switch to enforcement.",
-    config_fix:     `add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'" always;`,
-    why_it_matters: "Without CSP, any XSS vulnerability — even a minor reflected XSS in a search parameter — allows an attacker to execute arbitrary JavaScript with full access to the page's DOM, cookies (unless HttpOnly), localStorage, and the ability to make authenticated API calls. CSP is the last line of defense that limits the blast radius of XSS from full account takeover to a contained, non-executable injection.",
-    attack_type:    "Cross-Site Scripting (XSS) Amplification",
-    owasp_mapping:  "A03 Injection",
-    confidence:     "high",
-    detection_logic: "Checks for absence of add_header Content-Security-Policy directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §6.1.3 / W3C CSP Level 3",
-  },
-
-  {
-    id:             "3.1.4",
-    title:          "Missing Referrer-Policy header",
-    severity:       "medium",
-    category:       "Security Headers",
-    description:    "No Referrer-Policy header found. Full URLs including paths and query strings are sent as Referer on external navigation.",
-    check:          (c) => !hasHeader(c, "Referrer-Policy"),
-    remediation:    "Set Referrer-Policy to strict-origin-when-cross-origin to send origin-only on cross-origin requests and full URL on same-origin.",
-    config_fix:     `add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
-    why_it_matters: "Query strings frequently contain session tokens, CSRF tokens, user IDs, and internal path structures. Without Referrer-Policy, every external link, image load from a third-party CDN, or analytics script receives the full URL of the page the user was on. This can leak authenticated session state, reveal internal application structure, and expose user activity to advertising networks.",
-    attack_type:    "Information Leakage / Token Exposure",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "high",
-    detection_logic: "Checks for absence of add_header Referrer-Policy directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §6.1.4 / W3C Referrer Policy",
-  },
-
-  {
-    id:             "3.2.1",
-    title:          "Proxy using HTTP/1.0",
-    severity:       "medium",
-    category:       "Reverse Proxy",
-    description:    "proxy_http_version is set to 1.0 or not explicitly configured. HTTP/1.0 closes the TCP connection after every request.",
-    check:          (c) => {
-      if (!/proxy_pass\s+/i.test(c)) return false;
-      const val = getDirectiveValue(c, "proxy_http_version");
-      return val === null || val === "1.0";
+    id: "TLS-5",
+    title: "Missing HSTS header on HTTPS server",
+    severity: "high",
+    category: "Transport Security",
+    framework: "cis",
+    description: "An HTTPS server sends no Strict-Transport-Security header.",
+    check: (ctx) => {
+      const servers = ctx.https.filter((s) => !isReturnOnlyServer(s));
+      if (servers.length === 0) return NA;
+      const bad = servers.filter((s) => !hasHeader(getEffectiveHeaders(s), "strict-transport-security"));
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
     },
-    remediation:    "Set proxy_http_version 1.1 in all proxy location blocks and clear the Connection header to enable keepalive with upstreams.",
-    config_fix: `proxy_http_version 1.1;
-proxy_set_header   Connection "";`,
-    why_it_matters: "With HTTP/1.0, each proxied request requires a complete TCP handshake to the upstream. Under load, the overhead of connection establishment consumes a significant percentage of request latency. More critically, without HTTP/1.1, upstream keepalive is non-functional — NGINX cannot reuse connections regardless of the keepalive setting in the upstream block, defeating the purpose of connection pooling entirely.",
-    attack_type:    "Denial of Service Risk / Performance Degradation",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks proxy_http_version value when proxy_pass is present. Flags if missing or set to 1.0.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §7.1.1",
+    remediation: "Send HSTS with max-age of at least one year from every HTTPS server. Add includeSubDomains once every subdomain serves HTTPS.",
+    config_fix: `add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;`,
+    why_it_matters: "Without HSTS, the first request to the site can go over HTTP, which is the window SSL stripping uses.",
+    attack_type: "SSL Stripping / MITM",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each HTTPS content server, following NGINX inheritance.",
+    reference: "CIS NGINX Benchmark — HSTS / RFC 6797",
   },
 
   {
-    id:             "3.2.2",
-    title:          "Upstream block without keepalive",
-    severity:       "medium",
-    category:       "Reverse Proxy",
-    description:    "An upstream{} block exists without a keepalive directive. NGINX opens a new TCP connection per proxied request.",
-    check:          (c) => {
-      const hasUpstream = /^\s*upstream\s+\w+\s*\{/im.test(c);
-      if (!hasUpstream) return false;
-      return !/keepalive\s+\d+/i.test(c);
+    id: "TLS-6",
+    title: "TLS session tickets enabled",
+    severity: "low",
+    category: "Transport Security",
+    framework: "cis",
+    description: "ssl_session_tickets is on (the default). Ticket keys that are not rotated weaken forward secrecy.",
+    check: (ctx) => {
+      if (ctx.https.length === 0) return NA;
+      const bad = ctx.https.filter((s) => value(directivesInScope(s, "ssl_session_tickets")[0] ?? null) !== "off");
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
     },
-    remediation:    "Add keepalive to upstream block. Pair with proxy_http_version 1.1 and proxy_set_header Connection empty string.",
-    config_fix: `upstream backend {
-    server 127.0.0.1:3000 max_fails=3 fail_timeout=30s;
-    keepalive 32;
+    remediation: "Disable session tickets and use a shared server-side session cache for resumption instead.",
+    config_fix: `ssl_session_tickets off;
+ssl_session_cache   shared:SSL:10m;
+ssl_session_timeout 1d;`,
+    why_it_matters: "NGINX does not rotate ticket keys by itself. Anyone who obtains the key can decrypt every recorded session that used it until the process restarts.",
+    attack_type: "Forward Secrecy Weakening",
+    owasp_mapping: "A02 Cryptographic Failures",
+    confidence: "high",
+    detection_logic: "Resolves ssl_session_tickets for each HTTPS server; NGINX defaults to on.",
+    reference: "CIS NGINX Benchmark — session resumption",
+  },
+
+  // ══ Security headers ══════════════════════════════════════════════════════
+
+  {
+    id: "HDR-1",
+    title: "Missing X-Frame-Options or CSP frame-ancestors",
+    severity: "medium",
+    category: "Security Headers",
+    framework: "cis",
+    description: "Responses can be embedded in an iframe on any site.",
+    check: missingHeaderRule("x-frame-options", (s) => hasCspFrameAncestors(getEffectiveHeaders(s))),
+    remediation: "Send X-Frame-Options SAMEORIGIN, or a CSP with frame-ancestors.",
+    config_fix: `add_header X-Frame-Options "SAMEORIGIN" always;`,
+    why_it_matters: "Clickjacking overlays your page in an invisible frame so users click buttons they cannot see.",
+    attack_type: "Clickjacking",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each content server for X-Frame-Options or a CSP containing frame-ancestors.",
+    reference: "CIS NGINX Benchmark — X-Frame-Options",
+  },
+
+  {
+    id: "HDR-2",
+    title: "Missing X-Content-Type-Options: nosniff",
+    severity: "medium",
+    category: "Security Headers",
+    framework: "cis",
+    description: "Browsers may guess content types instead of trusting Content-Type.",
+    check: missingHeaderRule("x-content-type-options"),
+    remediation: "Send X-Content-Type-Options nosniff on every response.",
+    config_fix: `add_header X-Content-Type-Options "nosniff" always;`,
+    why_it_matters: "If users can upload files, MIME sniffing can turn an uploaded 'image' into executable script.",
+    attack_type: "MIME-Sniffing XSS",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each content server.",
+    reference: "CIS NGINX Benchmark — X-Content-Type-Options",
+  },
+
+  {
+    id: "HDR-3",
+    title: "Missing Content-Security-Policy",
+    severity: "medium",
+    category: "Security Headers",
+    framework: "cis",
+    description: "No Content-Security-Policy is sent, so the browser runs scripts from any source.",
+    check: missingHeaderRule("content-security-policy", (s) => hasHeader(getEffectiveHeaders(s), "content-security-policy-report-only")),
+    remediation: "Start with Content-Security-Policy-Report-Only, review the reports, then enforce.",
+    config_fix: `add_header Content-Security-Policy "default-src 'self'; object-src 'none'; base-uri 'self'" always;`,
+    why_it_matters: "CSP limits what an XSS bug can do: injected inline scripts and scripts from other hosts are blocked.",
+    attack_type: "Cross-Site Scripting",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each content server; Report-Only also counts.",
+    reference: "CIS NGINX Benchmark — Content-Security-Policy",
+  },
+
+  {
+    id: "HDR-4",
+    title: "Missing Referrer-Policy",
+    severity: "low",
+    category: "Security Headers",
+    framework: "cis",
+    description: "No Referrer-Policy is sent. Browsers default to strict-origin-when-cross-origin, but older ones send the full URL.",
+    check: missingHeaderRule("referrer-policy"),
+    remediation: "Set Referrer-Policy explicitly.",
+    config_fix: `add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
+    why_it_matters: "URLs with tokens or IDs in the query string can leak to third-party sites through the Referer header.",
+    attack_type: "Information Leakage",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each content server.",
+    reference: "CIS NGINX Benchmark — Referrer-Policy",
+  },
+
+  {
+    id: "HDR-5",
+    title: "Missing Permissions-Policy",
+    severity: "low",
+    category: "Security Headers",
+    framework: "best-practice",
+    description: "No Permissions-Policy is sent, so embedded content can request camera, microphone or location access.",
+    check: missingHeaderRule("permissions-policy"),
+    remediation: "Disable browser features the site does not use.",
+    config_fix: `add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()" always;`,
+    why_it_matters: "A compromised third-party script or iframe cannot prompt for features that the policy disables.",
+    attack_type: "Browser Feature Abuse",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective add_header list of each content server.",
+    reference: "W3C Permissions Policy",
+  },
+
+  {
+    id: "HDR-6",
+    title: "add_header in a location drops inherited security headers",
+    severity: "high",
+    category: "Security Headers",
+    framework: "best-practice",
+    description: "A server or location sets its own add_header, so security headers from the parent level are no longer sent for it.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      const security = ["strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy", "permissions-policy"];
+      const refs: SourceRef[] = [];
+      for (const s of ctx.content) {
+        for (const b of allBlocks(s)) {
+          if (!b.parent || (b.contextType !== "server" && b.contextType !== "location")) continue;
+          const own = getDirectives(b, "add_header");
+          if (own.length === 0) continue;
+          const lost = [...new Set(getEffectiveHeaders(b.parent).map(headerName)
+            .filter((h) => security.includes(h) && !hasHeader(getEffectiveHeaders(b), h)))];
+          if (lost.length) refs.push(ref(own[0], `${b.contextLabel}: drops ${lost.join(", ")}`));
+        }
+      }
+      return refs.length ? fail(refs) : PASS;
+    },
+    remediation: "Repeat the security headers in that block (a shared include file keeps this manageable), or use add_header_inherit merge on NGINX 1.29.3+.",
+    config_fix: `# snippets/security-headers.conf, included in every block that has its own add_header
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "SAMEORIGIN" always;`,
+    why_it_matters: "A single add_header Cache-Control in a location silently removes HSTS and CSP for everything that location serves. The config looks hardened, but the responses are not.",
+    attack_type: "Security Control Bypass",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Compares each block's effective add_header list with its parent's, using NGINX inheritance (a level inherits only if it declares none).",
+    reference: "NGINX ngx_http_headers_module — add_header inheritance",
+  },
+
+  // ══ Request limits & access control ═══════════════════════════════════════
+
+  {
+    id: "ACC-1",
+    title: "No request rate limiting",
+    severity: "low",
+    category: "Request Limits",
+    framework: "cis",
+    description: "No limit_req is applied anywhere, so every endpoint accepts unlimited requests per client.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      return getAllDirectivesDeep(ctx.root, "limit_req").length ? PASS : fail(ctx.content.map((s) => ref(s)));
+    },
+    remediation: "Define a zone in http{} and apply limit_req to login, API and other expensive endpoints.",
+    config_fix: `# http {}
+limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
+# location
+limit_req zone=api burst=20 nodelay;
+limit_req_status 429;`,
+    why_it_matters: "Login and password-reset endpoints without a limit allow brute force and credential stuffing at full line rate.",
+    attack_type: "Brute Force / DoS",
+    owasp_mapping: "A07 Identification and Authentication Failures",
+    confidence: "high",
+    detection_logic: "Looks for any limit_req directive.",
+    reference: "CIS NGINX Benchmark — limit_req",
+  },
+
+  {
+    id: "ACC-2",
+    title: "No per-client connection limit",
+    severity: "low",
+    category: "Request Limits",
+    framework: "cis",
+    description: "No limit_conn is applied, so one client can hold an unlimited number of connections.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      return getAllDirectivesDeep(ctx.root, "limit_conn").length ? PASS : fail(ctx.content.map((s) => ref(s)));
+    },
+    remediation: "Define a connection zone in http{} and apply a per-IP limit.",
+    config_fix: `# http {}
+limit_conn_zone $binary_remote_addr zone=perip:10m;
+
+# server {}
+limit_conn perip 20;`,
+    why_it_matters: "Slow clients that open many connections can use up worker_connections and starve real users.",
+    attack_type: "Resource Exhaustion",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Looks for any limit_conn directive.",
+    reference: "CIS NGINX Benchmark — limit_conn",
+  },
+
+  {
+    id: "ACC-3",
+    title: "Client timeouts left at the 60s default",
+    severity: "low",
+    category: "Request Limits",
+    framework: "cis",
+    description: "client_body_timeout and client_header_timeout are not lowered from 60 seconds.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      const bad = ctx.content.filter((s) => ["client_body_timeout", "client_header_timeout"].some((n) => {
+        const d = directivesInScope(s, n)[0];
+        return !d || parseInt(d.values[0] ?? "", 10) > 30;
+      }));
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
+    },
+    remediation: "Lower both timeouts so slow or stalled clients are dropped sooner.",
+    config_fix: `client_body_timeout   10s;
+client_header_timeout 10s;`,
+    why_it_matters: "Slowloris-style attacks keep many connections open by sending headers or body bytes very slowly. Long timeouts make that cheap.",
+    attack_type: "Slow HTTP DoS",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "medium",
+    detection_logic: "Resolves both directives per content server; fails if missing or above 30s.",
+    reference: "CIS NGINX Benchmark — timeouts",
+  },
+
+  {
+    id: "ACC-4",
+    title: "client_max_body_size not set",
+    severity: "low",
+    category: "Request Limits",
+    framework: "cis",
+    description: "Request body size relies on the 1 MB default instead of a value chosen for the application.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      const bad = ctx.content.filter((s) => directivesInScope(s, "client_max_body_size").length === 0);
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
+    },
+    remediation: "Set client_max_body_size to what the application accepts; raise it only on upload locations.",
+    config_fix: `client_max_body_size 1m;
+
+location /upload/ {
+    client_max_body_size 50m;
 }`,
-    why_it_matters: "Without upstream keepalive, each request creates and destroys a TCP connection to the backend. Under sustained load (hundreds of req/s), the Linux kernel's ephemeral port range (typically ~28,000 ports) exhausts. New connections then fail with EADDRINUSE or ETIMEDOUT, producing 502 Bad Gateway responses. This is a latent production incident that only manifests during traffic spikes — exactly when you can least afford it.",
-    attack_type:    "Denial of Service Risk / Resource Exhaustion",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Detects upstream block without keepalive directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §7.1.2",
+    why_it_matters: "An explicit limit documents the intended maximum and keeps large uploads confined to the endpoints that need them.",
+    attack_type: "Resource Exhaustion",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks for client_max_body_size in each content server or inherited from http.",
+    reference: "CIS NGINX Benchmark — client_max_body_size",
   },
 
   {
-    id:             "3.2.3",
-    title:          "Required proxy headers not forwarded",
-    severity:       "medium",
-    category:       "Reverse Proxy",
-    description:    "proxy_pass is present but X-Forwarded-For or X-Forwarded-Proto headers are not forwarded to the upstream.",
-    check:          (c) => {
-      if (!/proxy_pass\s+/i.test(c)) return false;
-      return !(/proxy_set_header\s+X-Forwarded-For\s+/i.test(c)) ||
-             !(/proxy_set_header\s+X-Forwarded-Proto\s+/i.test(c));
+    id: "ACC-5",
+    title: "HTTP methods not restricted",
+    severity: "low",
+    category: "Access Control",
+    framework: "cis",
+    description: "No server limits which HTTP methods it accepts.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      const restricted = (s: NginxBlock) =>
+        getBlocksOfType(s, "limit_except").length > 0 ||
+        getBlocksOfType(s, "if").some((b) => /\$request_method/.test(b.contextLabel) &&
+          getDirectives(b, "return").some((d) => /^(403|405|444)$/.test(d.values[0] ?? "")));
+      const bad = ctx.content.filter((s) => !restricted(s));
+      return bad.length ? fail(bad.map((s) => ref(s))) : PASS;
     },
-    remediation:    "Add all standard proxy headers to every proxy location block.",
+    remediation: "Reject methods the application does not use (TRACE, CONNECT, and often PUT/DELETE on static sites).",
+    config_fix: `if ($request_method !~ ^(GET|HEAD|POST)$) {
+    return 405;
+}`,
+    why_it_matters: "Unused methods widen the attack surface of the backend and of any module that handles them.",
+    attack_type: "Attack Surface",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "medium",
+    detection_logic: "Looks for limit_except, or an if on $request_method that returns 403/405/444, in each content server.",
+    reference: "CIS NGINX Benchmark — approved HTTP methods",
+  },
+
+  // ══ Logging ═══════════════════════════════════════════════════════════════
+
+  {
+    id: "LOG-1",
+    title: "Access logging disabled or not configured",
+    severity: "low",
+    category: "Logging",
+    framework: "cis",
+    description: "access_log is off for a server, or (in a full nginx.conf) never configured.",
+    check: (ctx) => {
+      if (ctx.content.length === 0) return NA;
+      const off = ctx.content.filter((s) => value(effective(s, "access_log")) === "off");
+      if (off.length) return fail(off.map((s) => ref(effective(s, "access_log")!)));
+      if (ctx.full && getAllDirectivesDeep(ctx.root, "access_log").length === 0) return fail([ref(ctx.root, "http {}")]);
+      return PASS;
+    },
+    remediation: "Log every server to a file that is collected, with a format that includes timing.",
+    config_fix: `log_format main '$remote_addr [$time_local] "$request" $status rt=$request_time urt=$upstream_response_time';
+access_log /var/log/nginx/access.log main;`,
+    why_it_matters: "Without access logs there is no record to investigate an incident or abuse.",
+    attack_type: "Detection Gap",
+    owasp_mapping: "A09 Security Logging and Monitoring Failures",
+    confidence: "high",
+    detection_logic: "Fails if the effective access_log of a content server is off, or if a full config has none at all.",
+    reference: "CIS NGINX Benchmark — access logging",
+  },
+
+  {
+    id: "LOG-2",
+    title: "error_log not configured",
+    severity: "low",
+    category: "Logging",
+    framework: "cis",
+    description: "No error_log directive in a full nginx.conf.",
+    check: (ctx) => {
+      if (!ctx.full) return NA;
+      return getAllDirectivesDeep(ctx.root, "error_log").length ? PASS : fail([{ line: 1, label: "main context" }]);
+    },
+    remediation: "Set error_log explicitly at notice or info level.",
+    config_fix: "error_log /var/log/nginx/error.log notice;",
+    why_it_matters: "Errors go to the compiled-in path otherwise, which may not be collected (especially in containers).",
+    attack_type: "Detection Gap",
+    owasp_mapping: "A09 Security Logging and Monitoring Failures",
+    confidence: "high",
+    detection_logic: "Looks for any error_log directive when the input is a full nginx.conf.",
+    reference: "CIS NGINX Benchmark — error logging",
+  },
+
+  // ══ Reverse proxy (best practice) ═════════════════════════════════════════
+
+  {
+    id: "PROXY-1",
+    title: "Client IP and scheme not forwarded to the backend",
+    severity: "medium",
+    category: "Reverse Proxy",
+    framework: "best-practice",
+    description: "A proxied location does not send X-Forwarded-For (or X-Real-IP) and X-Forwarded-Proto.",
+    check: (ctx) => {
+      if (ctx.proxies.length === 0) return NA;
+      const refs: SourceRef[] = [];
+      for (const b of ctx.proxies) {
+        const set = getEffectiveArrayDirectives(b, "proxy_set_header").map(headerName);
+        const missing = [
+          !set.some((h) => h === "x-forwarded-for" || h === "x-real-ip") && "X-Forwarded-For",
+          !set.some((h) => h === "x-forwarded-proto" || h === "forwarded") && "X-Forwarded-Proto",
+        ].filter(Boolean);
+        if (missing.length) refs.push(ref(getDirectives(b, "proxy_pass")[0], `${b.contextLabel}: missing ${missing.join(", ")}`));
+      }
+      return refs.length ? fail(refs) : PASS;
+    },
+    remediation: "Set the forwarding headers at server level. A location with its own proxy_set_header must repeat them.",
     config_fix: `proxy_set_header Host              $host;
 proxy_set_header X-Real-IP         $remote_addr;
 proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;`,
-    why_it_matters: "Without X-Forwarded-For, the backend application sees 127.0.0.1 for every request. All IP-based security controls — rate limiting, geo-blocking, fraud detection, audit logging — silently receive the proxy address instead of the real client. Without X-Forwarded-Proto, the backend cannot distinguish HTTP from HTTPS requests, causing HTTPS-aware redirect loops, insecure cookie generation (missing Secure flag), and CSRF token mismatches.",
-    attack_type:    "Security Control Bypass / IP Spoofing Risk",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for X-Forwarded-For and X-Forwarded-Proto proxy_set_header directives when proxy_pass is present.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §7.1.3",
-  },
-
-  // ══ LOW ═══════════════════════════════════════════════════════════════════
-
-  {
-    id:             "4.1.1",
-    title:          "No rate limiting configured",
-    severity:       "low",
-    category:       "Access Control",
-    description:    "No limit_req_zone or limit_req directives detected. All endpoints accept unlimited requests per client.",
-    check:          (c) => !hasDirective(c, "limit_req_zone") && !hasDirective(c, "limit_req"),
-    remediation:    "Define a rate limit zone in http{} and apply it to authentication and API endpoints. Use burst to allow short spikes without dropping legitimate requests.",
-    config_fix: `# In http{} block:
-limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
-
-# In location:
-location /api/ {
-    limit_req zone=api burst=20 nodelay;
-}`,
-    why_it_matters: "Without rate limiting, your login endpoint accepts 10,000+ password attempts per minute from a single IP. Modern credential stuffing tools like Sentry MBA and OpenBullet can test entire breach databases against unprotected login forms. Password reset endpoints with no rate limit enable account takeover of any user via email token enumeration. A $5/month VPS can sustain 50+ req/s indefinitely.",
-    attack_type:    "Brute Force / Credential Stuffing / DoS",
-    owasp_mapping:  "A07 Identification and Authentication Failures",
-    confidence:     "high",
-    detection_logic: "Checks for complete absence of limit_req_zone and limit_req directives.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §8.1.1",
+    why_it_matters: "The backend otherwise logs and rate-limits on the proxy's address, and cannot tell HTTPS from HTTP when building redirects and Secure cookies.",
+    attack_type: "Security Control Bypass",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Checks the effective proxy_set_header list (with NGINX inheritance) of every block that has proxy_pass.",
+    reference: "NGINX ngx_http_proxy_module — proxy_set_header",
   },
 
   {
-    id:             "4.1.2",
-    title:          "Gzip compression not enabled",
-    severity:       "low",
-    category:       "Performance",
-    description:    "No gzip or brotli compression directive found. All text responses are served uncompressed.",
-    check:          (c) => !hasDirective(c, "gzip") && !/brotli\s+on/i.test(c),
-    remediation:    "Enable gzip in the http block. Set gzip_types to cover text-based content and gzip_min_length to avoid compressing already-small responses.",
+    id: "PROXY-2",
+    title: "Upstream keepalive set but proxy uses HTTP/1.0",
+    severity: "low",
+    category: "Reverse Proxy",
+    framework: "best-practice",
+    description: "An upstream has keepalive, but a location proxying to it does not set proxy_http_version 1.1 and an empty Connection header.",
+    check: (ctx) => {
+      const users = ctx.proxies.filter((b) => {
+        const u = findUsedUpstream(ctx.root, getDirectives(b, "proxy_pass")[0].rawValue);
+        return u && getDirectives(u, "keepalive").length > 0;
+      });
+      if (users.length === 0) return NA;
+      const bad = users.filter((b) =>
+        value(findInheritedDirective(b, "proxy_http_version")) !== "1.1" ||
+        !getEffectiveArrayDirectives(b, "proxy_set_header").some((d) => headerName(d) === "connection"));
+      return bad.length ? fail(bad.map((b) => ref(getDirectives(b, "proxy_pass")[0]))) : PASS;
+    },
+    remediation: "Use HTTP/1.1 and clear the Connection header so upstream connections can be reused.",
+    config_fix: `proxy_http_version 1.1;
+proxy_set_header   Connection "";`,
+    why_it_matters: "With HTTP/1.0 every request opens a new upstream connection, so the keepalive pool is never used and ephemeral ports can run out under load.",
+    attack_type: "Availability Risk",
+    owasp_mapping: "A05 Security Misconfiguration",
+    confidence: "high",
+    detection_logic: "Only applies to locations whose proxy_pass targets an upstream{} with keepalive.",
+    reference: "NGINX ngx_http_upstream_module — keepalive",
+  },
+
+  // ══ Performance (best practice) ═══════════════════════════════════════════
+
+  {
+    id: "PERF-1",
+    title: "Response compression not enabled",
+    severity: "low",
+    category: "Performance",
+    framework: "best-practice",
+    description: "gzip (or brotli) is not turned on for the http context.",
+    check: (ctx) => {
+      if (!ctx.full) return NA;
+      const http = getBlocksOfType(ctx.root, "http");
+      const bad = http.filter((h) => ![...getDirectives(h, "gzip"), ...getAllDirectivesDeep(h, "brotli")].some((d) => value(d) === "on"));
+      return bad.length ? fail(bad.map((h) => ref(h, "http {}"))) : PASS;
+    },
+    remediation: "Enable gzip for text responses in http{}.",
     config_fix: `gzip            on;
 gzip_vary       on;
 gzip_min_length 1024;
-gzip_types      text/plain text/css application/json application/javascript
-                text/xml application/xml image/svg+xml;`,
-    why_it_matters: "Uncompressed JavaScript bundles average 300–800KB. With gzip, the same files compress to 60–150KB — a 5–8x reduction. For mobile users on constrained connections, uncompressed responses directly increase page load time and data costs. At scale, the bandwidth cost of uncompressed responses is a significant infrastructure expense. This is not just a performance concern — slow sites have higher abandonment rates and lower conversion.",
-    attack_type:    "Performance Degradation / Availability Risk",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for absence of 'gzip on' or 'brotli on' directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §8.1.2",
+gzip_types      text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;`,
+    why_it_matters: "Text responses shrink several times over with gzip, which cuts transfer time and bandwidth.",
+    attack_type: "Performance",
+    owasp_mapping: "n/a",
+    confidence: "high",
+    detection_logic: "Checks that gzip is on (gzip off counts as disabled) in the http block.",
+    reference: "NGINX ngx_http_gzip_module",
   },
 
   {
-    id:             "4.1.3",
-    title:          "keepalive_timeout not configured or too low",
-    severity:       "low",
-    category:       "Performance",
-    description:    "keepalive_timeout is absent or below 10 seconds. Clients must re-establish TCP connections frequently.",
-    check:          (c) => {
-      const val = getDirectiveValue(c, "keepalive_timeout");
-      if (!val) return true;
-      return parseInt(val) < 10;
+    id: "PERF-2",
+    title: "sendfile not enabled",
+    severity: "low",
+    category: "Performance",
+    framework: "best-practice",
+    description: "sendfile is off, so static files are copied through user space.",
+    check: (ctx) => {
+      if (!ctx.full) return NA;
+      const http = getBlocksOfType(ctx.root, "http");
+      const bad = http.filter((h) => value(getDirectives(h, "sendfile")[0] ?? null) !== "on");
+      return bad.length ? fail(bad.map((h) => ref(h, "http {}"))) : PASS;
     },
-    remediation:    "Set keepalive_timeout to 15–65 seconds based on your traffic profile. Higher values benefit persistent clients; lower values free resources faster for short-lived sessions.",
-    config_fix:     `keepalive_timeout 65;`,
-    why_it_matters: "HTTP/1.1 clients expect to reuse TCP connections across multiple requests. With very short or absent keepalive, every resource on a page (CSS, JS, images, fonts, API calls) requires a new TCP handshake — adding 20–100ms of latency per resource depending on RTT. On a page with 20 resources, this can add 400ms–2s of unnecessary latency. This also increases server load from connection establishment overhead.",
-    attack_type:    "Performance Degradation",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "medium",
-    detection_logic: "Extracts keepalive_timeout value. Flags if absent or integer below 10.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §8.1.3",
-  },
-
-  {
-    id:             "4.1.4",
-    title:          "client_max_body_size not configured",
-    severity:       "low",
-    category:       "Resource Limits",
-    description:    "client_max_body_size is not set. Default is 1MB. File upload endpoints silently return 413 for anything larger.",
-    check:          (c) => !/client_max_body_size/i.test(c),
-    remediation:    "Set client_max_body_size to match your application's maximum upload requirement. Scope tighter limits to specific locations if needed.",
-    config_fix:     `client_max_body_size 50M;`,
-    why_it_matters: "The 1MB default silently rejects file uploads without reaching the application layer — meaning application-level error handling never fires. Users receive a 413 error that the application cannot customize or log. This is consistently reported as a 'bug' by users during production incidents. Equally problematic: an unusually high limit without scoping can expose the server to upload-based resource exhaustion attacks.",
-    attack_type:    "Application Malfunction / Denial of Service Risk",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for absence of client_max_body_size directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §8.1.4",
-  },
-
-  {
-    id:             "4.1.5",
-    title:          "sendfile not enabled",
-    severity:       "low",
-    category:       "Performance",
-    description:    "sendfile on is not configured. Static file responses copy data through userspace buffers.",
-    check:          (c) => !/sendfile\s+on/i.test(c),
-    remediation:    "Enable sendfile, tcp_nopush, and tcp_nodelay together for optimal static file performance.",
-    config_fix: `sendfile    on;
-tcp_nopush  on;
-tcp_nodelay on;`,
-    why_it_matters: "Without sendfile, the kernel copies file data to userspace memory for NGINX to send, then copies it back to kernel socket buffers. The sendfile syscall bypasses this by transferring data directly from the file descriptor to the socket within the kernel — zero-copy I/O. For static file serving at scale, this reduces CPU utilization significantly and increases throughput. tcp_nopush and tcp_nodelay reduce the number of TCP packets needed for the response.",
-    attack_type:    "Performance Degradation",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for absence of 'sendfile on' directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §8.1.5",
-  },
-
-  {
-    id:             "4.1.6",
-    title:          "Permissions-Policy header not configured",
-    severity:       "low",
-    category:       "Security Headers",
-    description:    "No Permissions-Policy header found. Browser features like camera, microphone, and geolocation are unrestricted.",
-    check:          (c) => !hasHeader(c, "Permissions-Policy") && !hasHeader(c, "Feature-Policy"),
-    remediation:    "Add Permissions-Policy disabling browser APIs not used by your application.",
-    config_fix:     `add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()" always;`,
-    why_it_matters: "Without Permissions-Policy, any cross-origin script or iframe on your page can request access to the camera, microphone, or geolocation — prompting the user with a browser permission dialog that appears to come from your site. Malicious third-party scripts (via supply chain attacks, ad injection, or XSS) can silently request these capabilities. This is particularly relevant after supply chain attacks like the Polyfill.io compromise affected hundreds of thousands of sites.",
-    attack_type:    "Browser Feature Abuse / Supply Chain Risk",
-    owasp_mapping:  "A05 Security Misconfiguration",
-    confidence:     "high",
-    detection_logic: "Checks for absence of Permissions-Policy or Feature-Policy header.",
-    reference:      "W3C Permissions Policy Spec",
-  },
-
-  {
-    id:             "4.1.7",
-    title:          "ssl_session_cache not configured",
-    severity:       "low",
-    category:       "Transport Security",
-    description:    "An HTTPS listener was detected but ssl_session_cache is not configured. Each TLS connection requires a full handshake.",
-    check:          (c) => /listen\s+443/i.test(c) && !/ssl_session_cache/i.test(c),
-    remediation:    "Configure a shared TLS session cache to allow session resumption for returning clients.",
-    config_fix: `ssl_session_cache   shared:SSL:10m;
-ssl_session_timeout 1d;
-ssl_session_tickets off;`,
-    why_it_matters: "A full TLS 1.2 handshake adds 1–2 RTT of latency before the first HTTP request. For mobile users with 100–200ms RTT, this is 200–400ms of overhead on every new connection. TLS session caching allows resumption with a single RTT. At scale, the CPU cost of RSA key operations without session reuse becomes significant. Setting ssl_session_tickets off forces use of server-side cache, which can be invalidated on key rotation.",
-    attack_type:    "Performance Degradation",
-    owasp_mapping:  "A02 Cryptographic Failures",
-    confidence:     "medium",
-    detection_logic: "Checks for HTTPS listener without ssl_session_cache directive.",
-    reference:      "CIS NGINX Benchmark v2.1.0 §4.1.6",
+    remediation: "Enable sendfile together with tcp_nopush.",
+    config_fix: `sendfile   on;
+tcp_nopush on;`,
+    why_it_matters: "sendfile serves static files with a kernel zero-copy path, which lowers CPU use.",
+    attack_type: "Performance",
+    owasp_mapping: "n/a",
+    confidence: "high",
+    detection_logic: "Checks that sendfile is on in the http block.",
+    reference: "NGINX ngx_http_core_module — sendfile",
   },
 ];

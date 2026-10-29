@@ -5,6 +5,7 @@ import {
   useTransition, useId,
 } from "react";
 import Link from "next/link";
+import { ConfigEditor, scrollEditorToLine } from "@/components/nginx-tools/ConfigEditor";
 import { parseConfigs } from "@/app/tools/nginx-config-analyzer/v2/parser";
 import { runAnalysis } from "@/app/tools/nginx-config-analyzer/v2/scoring";
 import { simulateRequest } from "@/app/tools/nginx-config-analyzer/v2/simulator";
@@ -60,8 +61,6 @@ const STATUS_CFG: Record<ScoreStatus, { label: string; color: string; ring: stri
   risky:               { label: "Risky",             color: "text-red-400",     ring: "ring-red-500/20" },
 };
 
-const LINE_H = 20; // px — must match leading-5 on the editor and gutter
-
 const BTN = "font-mono text-xs px-3 py-2 rounded-lg border transition-colors";
 const BTN_GHOST = `${BTN} border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100`;
 const LABEL = "font-mono text-[11px] text-zinc-400 uppercase tracking-widest";
@@ -101,36 +100,6 @@ function ScoreRing({ score, status }: { score: number; status: ScoreStatus }) {
     </div>
   );
 }
-
-// ─── Editor with line numbers ─────────────────────────────────────────────────
-
-const ConfigEditor = memo(function ConfigEditor({
-  value, onChange, highlightLine, inputRef,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  highlightLine: number | null;
-  inputRef: React.RefObject<HTMLTextAreaElement>;
-}) {
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const lineCount = value.split("\n").length;
-  return (
-    <div className="flex h-[360px] lg:h-[calc(100vh-17rem)] lg:min-h-[420px] rounded-lg border border-zinc-700 bg-zinc-950/60 overflow-hidden focus-within:border-zinc-500 transition-colors">
-      <div ref={gutterRef} aria-hidden="true"
-        className="flex-shrink-0 overflow-hidden select-none py-3 px-2 min-w-[2.75rem] text-right font-mono text-xs leading-5 text-zinc-500 bg-zinc-900/60 border-r border-zinc-800">
-        {Array.from({ length: lineCount }, (_, i) => (
-          <div key={i} className={i + 1 === highlightLine ? "-mx-2 px-2 bg-amber-500/20 text-amber-200" : undefined}>{i + 1}</div>
-        ))}
-        {/* room for the textarea's horizontal scrollbar so both scroll to the same end */}
-        <div className="h-4" />
-      </div>
-      <textarea ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
-        onScroll={(e) => { if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop; }}
-        wrap="off" spellCheck={false} aria-label="NGINX configuration" placeholder="Paste NGINX configuration here..."
-        className="flex-1 min-w-0 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-500 outline-none whitespace-pre overflow-auto" />
-    </div>
-  );
-});
 
 // ─── Finding card ─────────────────────────────────────────────────────────────
 
@@ -288,16 +257,8 @@ export default function NginxConfigAnalyzerPage() {
 
   // Scroll the editor to the jumped-to line once the right file is shown
   useEffect(() => {
-    const ta = editorRef.current;
-    if (!jump || !ta || jump.fileId !== activeFileId) return;
-    const lines = ta.value.split("\n");
-    const start = lines.slice(0, jump.line - 1).reduce((n, l) => n + l.length + 1, 0);
-    ta.scrollTop = Math.max(0, (jump.line - 1) * LINE_H - ta.clientHeight / 3);
-    // Selecting the line needs focus; skip it on touch screens so the keyboard doesn't open
-    if (window.matchMedia("(pointer: fine)").matches) {
-      ta.focus({ preventScroll: true });
-      ta.setSelectionRange(start, start + (lines[jump.line - 1]?.length ?? 0));
-    }
+    if (!jump || jump.fileId !== activeFileId || !editorRef.current) return;
+    scrollEditorToLine(editorRef.current, jump.line);
     editorBoxRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [jump, activeFileId]);
 
@@ -646,6 +607,7 @@ export default function NginxConfigAnalyzerPage() {
               { text: "Configure upstream keepalive to prevent connection drops", href: "/blog/nginx-upstream-keepalive" },
               { text: "NGINX rate limiting for API and login endpoints",          href: "/blog/nginx-rate-limiting-config" },
               { text: "NGINX production troubleshooting reference",               href: "/blog/nginx-troubleshooting-guide" },
+              { text: "NGINX Hardening Checker (CIS NGINX Benchmark topics)",    href: "/tools/nginx-cis-hardening-checker" },
             ].map(({ text, href }) => (
               <li key={href}><Link href={href} className="font-mono text-sm text-green-400 hover:underline">→ {text}</Link></li>
             ))}

@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 const TOOLS = [
   { href: '/tools/nginx-config-analyzer', title: 'NGINX Config Analyzer', desc: 'Scores an NGINX config for security, performance and reliability.' },
-  { href: '/tools/nginx-cis-hardening-checker', title: 'NGINX CIS Hardening Checker', desc: 'Checks a config against CIS NGINX Benchmark v2.1.0.' },
+  { href: '/tools/nginx-cis-hardening-checker', title: 'NGINX Hardening Checker', desc: 'Checks a config against CIS NGINX Benchmark topics.' },
   { href: '/tools/nginx-cve-checker', title: 'NGINX CVE Checker', desc: 'Lists known CVEs for an NGINX version and its modules.' },
   { href: '/tools/pg-hardening-checker', title: 'PostgreSQL Hardening Checker', desc: 'Audits postgresql.conf and pg_hba.conf.' },
   { href: '/cka', title: 'CKA Study Tracker', desc: 'Tracks practice against the official CKA curriculum, with lab tasks.' },
