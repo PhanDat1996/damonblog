@@ -9,6 +9,7 @@ import { jetbrainsMono } from '@/lib/fonts';
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/blog', label: 'Blog' },
+  { href: '/news', label: 'News' },
   { href: '/tools', label: 'Tools' },
   { href: '/about', label: 'About' },
   { href: '/contact', label: 'Contact' },
@@ -87,7 +88,7 @@ export default function Navbar() {
         id="mobile-menu"
         className={clsx(
           'md:hidden border-t border-zinc-800 bg-zinc-950 px-6 overflow-hidden transition-all duration-200',
-          open ? 'max-h-64 py-4' : 'max-h-0 py-0'
+          open ? 'max-h-96 py-4' : 'max-h-0 py-0'
           // max-h transition instead of conditional render —
           // avoids mount/unmount layout recalculation on each toggle
         )}
