@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { getPostsByCategory } from '@/lib/posts';
+import { getAllPosts } from '@/lib/posts';
 import { CATEGORIES, VALID_CATEGORIES } from '@/lib/categories';
 import type { Category } from '@/types/post';
 import PostCard from '@/components/PostCard';
+import { formatDate } from '@/lib/utils';
 
 export function buildCategoryMetadata(category: Category): Metadata {
   const config = CATEGORIES[category];
@@ -29,48 +30,77 @@ export function buildCategoryMetadata(category: Category): Metadata {
 
 export default function CategoryPage({ category }: { category: Category }) {
   const config = CATEGORIES[category];
-  const posts = getPostsByCategory(category);
+  const allPosts = getAllPosts();
+  const posts = allPosts.filter((p) => p.category === category);
   const others = VALID_CATEGORIES.filter((c) => c !== category);
+  const latest = posts[0];
 
   return (
     <div className="space-y-12">
 
       {/* Breadcrumb */}
-      <nav className="font-mono text-xs text-zinc-500">
+      <nav aria-label="Breadcrumb" className="font-mono text-xs text-zinc-500">
         <Link href="/blog" className="hover:text-zinc-300 transition-colors">~/blog</Link>
-        <span className="mx-1 text-zinc-700">/</span>
-        <span className="text-zinc-400">{category}</span>
+        <span className="mx-1 text-zinc-700" aria-hidden="true">/</span>
+        <span className="text-zinc-400" aria-current="page">{category}</span>
       </nav>
 
       {/* Header + SEO intro */}
-      <div className="space-y-4 border-b border-zinc-800 pb-10">
-        <div className="flex items-center gap-2 font-mono text-xs text-green-400">
-          <span>{config.icon}</span>
-          <span>~/blog/{category}</span>
+      <header className="space-y-5 border-b border-zinc-800 pb-10">
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-zinc-500">
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-green-800/60 bg-green-900/30 px-2 py-0.5 text-green-400">
+              <span aria-hidden="true">{config.icon}</span>
+              {config.label}
+            </span>
+            <span>
+              {posts.length} article{posts.length !== 1 ? 's' : ''}
+            </span>
+            {latest && (
+              <>
+                <span className="text-zinc-700" aria-hidden="true">·</span>
+                <span>
+                  last post <time dateTime={latest.date}>{formatDate(latest.date)}</time>
+                </span>
+              </>
+            )}
+          </div>
+          <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">
+            {config.label} Guides
+          </h1>
         </div>
-        <h1 className="font-display text-4xl font-bold tracking-tight text-white">
-          {config.label} Guides
-        </h1>
         <div className="max-w-2xl space-y-3">
           {config.intro.map((para, i) => (
-            <p key={i} className="font-sans text-zinc-400 leading-relaxed">{para}</p>
+            <p key={i} className="font-sans text-[15px] text-zinc-400 leading-relaxed sm:text-base">{para}</p>
           ))}
         </div>
-        <p className="font-mono text-xs text-zinc-500">
-          {posts.length} article{posts.length !== 1 ? 's' : ''}
-        </p>
-      </div>
+      </header>
 
       {/* Posts */}
-      {posts.length > 0 ? (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {posts.map((post) => (
-            <PostCard key={post.slug} post={post} />
-          ))}
+      <section aria-labelledby="category-posts-heading" className="space-y-5">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="category-posts-heading" className="font-mono text-sm font-semibold text-zinc-300">
+            All {config.label.toLowerCase()} articles
+          </h2>
+          {posts.length > 1 && (
+            <span className="font-mono text-xs text-zinc-500">newest first</span>
+          )}
         </div>
-      ) : (
-        <p className="font-mono text-sm text-zinc-500">No posts in this category yet.</p>
-      )}
+        {posts.length > 0 ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {posts.map((post) => (
+              <PostCard key={post.slug} post={post} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-8 py-16 text-center">
+            <p className="font-mono text-sm text-zinc-500">No posts in this category yet.</p>
+            <Link href="/blog" className="mt-4 inline-block font-mono text-xs text-green-400 hover:underline">
+              ← All posts
+            </Link>
+          </div>
+        )}
+      </section>
 
       {/* Recommended articles — nginx pillar internal linking */}
       {category === 'nginx' && (
@@ -118,24 +148,27 @@ export default function CategoryPage({ category }: { category: Category }) {
       )}
 
       {/* Cross-category links */}
-      <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-6 space-y-3">
-        <h2 className="font-mono text-sm font-semibold text-zinc-300">Other topics</h2>
+      <nav aria-labelledby="other-topics-heading" className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-5 sm:p-6 space-y-4">
+        <h2 id="other-topics-heading" className="font-mono text-sm font-semibold text-zinc-300">Other topics</h2>
         <div className="flex flex-wrap gap-2">
           {others.map((cat) => {
             const c = CATEGORIES[cat];
+            const count = allPosts.filter((p) => p.category === cat).length;
             return (
               <Link key={cat} href={`/blog/${cat}`}
-                className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 rounded-lg hover:border-zinc-500 hover:text-white transition-all">
-                {c.icon} {c.label}
+                className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 rounded-lg hover:border-zinc-500 hover:text-white transition-all">
+                <span aria-hidden="true">{c.icon}</span>
+                {c.label}
+                <span className="text-zinc-600">{count}</span>
               </Link>
             );
           })}
           <Link href="/blog"
-            className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-1.5 rounded-lg hover:border-zinc-500 hover:text-white transition-all">
+            className="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-400 border border-zinc-700/60 bg-zinc-800/40 px-3 py-2 rounded-lg hover:border-zinc-500 hover:text-white transition-all">
             ← All posts
           </Link>
         </div>
-      </section>
+      </nav>
 
     </div>
   );
