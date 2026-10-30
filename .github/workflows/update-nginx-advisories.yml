@@ -1,0 +1,69 @@
+# Keeps the NGINX CVE checker (/tools/nginx-cve-checker) in sync with nginx.org.
+# Weekly, or on demand: Actions → "Update NGINX advisories" → Run workflow,
+# or `gh workflow run update-nginx-advisories.yml`.
+#
+# Opens/updates a PR from chore/nginx-advisories only when the advisory list or the
+# latest stable/mainline versions change; a date-only refresh is discarded.
+name: Update NGINX advisories
+
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-nginx-advisories
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22 # Vercel's default; tests need native TS type stripping (22.18+)
+          cache: npm
+
+      - run: npm ci
+
+      - name: Snapshot current data
+        run: cp src/lib/nginx-cve/advisories.ts "$RUNNER_TEMP/advisories.old.ts"
+
+      - name: Regenerate from nginx.org
+        run: npm run update:nginx-advisories
+
+      - name: Compare (ignoring ADVISORIES_UPDATED)
+        id: diff
+        run: |
+          node scripts/diff-nginx-advisories.mjs \
+            "$RUNNER_TEMP/advisories.old.ts" src/lib/nginx-cve/advisories.ts \
+            "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_OUTPUT"
+          if grep -q '^changed=false$' "$GITHUB_OUTPUT"; then
+            # Only the date moved: keep the committed file untouched.
+            git checkout -- src/lib/nginx-cve/advisories.ts
+            echo "No advisory or version changes — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - run: npm test
+
+      - name: Open or update PR
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/nginx-advisories
+          base: main
+          add-paths: src/lib/nginx-cve/advisories.ts
+          commit-message: 'chore: refresh NGINX advisories from nginx.org'
+          title: 'chore: refresh NGINX CVE checker advisories'
+          body-path: ${{ runner.temp }}/pr-body.md
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          delete-branch: true
