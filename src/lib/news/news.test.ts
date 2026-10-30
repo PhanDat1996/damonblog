@@ -84,9 +84,11 @@ test('groupByDay keeps order and splits on UTC day', () => {
   assert.deepEqual(groups.map((g) => [g.day, g.items.length]), [['2026-10-30', 2], ['2026-10-29', 1]]);
 });
 
-test('every hand-written note has a title and a valid date', () => {
+test('every hand-written note has a URL-safe slug, a title and a valid date', () => {
   const dir = join(process.cwd(), 'news');
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.md'))) {
+    // The slug becomes /news/<slug>; the loader rejects anything else
+    assert.match(file, /^[a-z0-9-]+\.md$/, `${file}: slug`);
     const head = readFileSync(join(dir, file), 'utf8').split('---')[1] ?? '';
     assert.match(head, /^title: .+/m, `${file}: title`);
     assert.match(head, /^date: \d{4}-\d{2}-\d{2}$/m, `${file}: date`);

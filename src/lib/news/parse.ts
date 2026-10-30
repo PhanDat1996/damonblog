@@ -17,6 +17,9 @@ export interface NewsItem {
   ransomware?: boolean;
   /** Hand-written notes only: body rendered from our own markdown */
   html?: string;
+  /** Hand-written notes only: page slug under /news and the cited source */
+  slug?: string;
+  sourceUrl?: string;
 }
 
 export interface KevEntry {
