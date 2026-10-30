@@ -1,6 +1,7 @@
 import { MetadataRoute } from 'next';
 import { getAllPosts } from '@/lib/posts';
 import { VALID_CATEGORIES } from '@/lib/categories';
+import { getNotes } from '@/lib/news';
 
 const BASE_URL = 'https://www.damonsec.com';
 
@@ -11,8 +12,9 @@ const TOOL_SLUGS = [
   'pg-hardening-checker',
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const posts = getAllPosts();
+  const notes = await getNotes();
 
   const postEntries: MetadataRoute.Sitemap = posts
     .filter((post) => !post.noindex)
@@ -87,5 +89,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.3,
     },
     ...postEntries,
+    ...notes.map((note) => ({
+      url: `${BASE_URL}${note.url}`,
+      lastModified: new Date(note.date),
+      changeFrequency: 'monthly' as const,
+      priority: 0.6,
+    })),
   ];
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import clsx from 'clsx';
 import { getNewsFeed, getNotes, groupByDay, NEWS_SOURCES, type NewsItem } from '@/lib/news';
 import { formatDate } from '@/lib/utils';
@@ -40,29 +41,24 @@ function dayLabel(day: string, today: string): string {
 
 function NoteCard({ note }: { note: NewsItem }) {
   return (
-    <article className="flex flex-col gap-3 rounded-xl border border-green-900/50 bg-zinc-900/40 p-5">
+    <Link
+      href={note.url}
+      className="group flex h-full flex-col gap-3 rounded-xl border border-green-900/50 bg-zinc-900/40 p-5 transition-all duration-200 hover:border-green-700/60 hover:bg-zinc-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/50"
+    >
       <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-zinc-400">
         <span className={clsx('rounded border px-1.5 py-0.5 uppercase tracking-wider', KIND_BADGE.note.className)}>
           {KIND_BADGE.note.label}
         </span>
         <time dateTime={note.date}>{formatDate(note.date)}</time>
       </div>
-      <h3 className="font-display text-base font-bold leading-snug text-white">{note.title}</h3>
-      <div
-        className="space-y-2 font-sans text-sm leading-relaxed text-zinc-400 [&_a]:text-green-400 [&_a:hover]:underline [&_code]:font-mono [&_code]:text-green-400 [&_strong]:text-zinc-200"
-        dangerouslySetInnerHTML={{ __html: note.html ?? '' }}
-      />
-      {note.url && (
-        <a
-          href={note.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-auto font-mono text-xs text-green-400 hover:underline"
-        >
-          Source: {new URL(note.url).hostname.replace(/^www\./, '')} ↗
-        </a>
-      )}
-    </article>
+      <h3 className="font-display text-base font-bold leading-snug text-white group-hover:text-green-400 transition-colors duration-200">
+        {note.title}
+      </h3>
+      <p className="font-sans text-sm leading-relaxed text-zinc-400 line-clamp-3">{note.summary}</p>
+      <span className="mt-auto pt-1 font-mono text-xs text-green-400">
+        Read note <span className="inline-block transition-transform group-hover:translate-x-0.5" aria-hidden="true">→</span>
+      </span>
+    </Link>
   );
 }
 

@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import { remark } from 'remark';
 import remarkHtml from 'remark-html';
 import remarkGfm from 'remark-gfm';
-import { parseRss, kevToItems, mergeNews, isHttpUrl, type NewsItem, type KevEntry } from './parse.ts';
+import { parseRss, kevToItems, mergeNews, isHttpUrl, truncate, type NewsItem, type KevEntry } from './parse.ts';
 
 export type { NewsItem } from './parse.ts';
 export { groupByDay } from './parse.ts';
@@ -71,31 +71,54 @@ async function getRssItems(now: Date): Promise<NewsItem[][]> {
   );
 }
 
-/** Hand-written notes in news/*.md. Frontmatter: title, date, source? (URL). */
-export async function getNotes(): Promise<NewsItem[]> {
+/** Plain-text excerpt: frontmatter `excerpt`, else the first paragraph. */
+function noteExcerpt(data: Record<string, unknown>, content: string): string {
+  if (typeof data.excerpt === 'string' && data.excerpt.trim()) return data.excerpt.trim();
+  const first = content.trim().split(/\n\s*\n/)[0] ?? '';
+  const plain = first
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return truncate(plain, 160);
+}
+
+export function getAllNoteSlugs(): string[] {
   if (!fs.existsSync(newsDirectory)) return [];
-  const files = fs.readdirSync(newsDirectory).filter((f) => f.endsWith('.md'));
-  const notes = await Promise.all(
-    files.map(async (file) => {
-      const { data, content } = matter(fs.readFileSync(path.join(newsDirectory, file), 'utf8'));
-      const slug = file.replace(/\.md$/, '');
-      const date = data.date instanceof Date ? data.date.toISOString() : String(data.date ?? '');
-      const source = typeof data.source === 'string' && isHttpUrl(data.source) ? data.source : undefined;
-      const html = (await remark().use(remarkGfm).use(remarkHtml).process(content)).toString();
-      return {
-        id: `note:${slug}`,
-        kind: 'note' as const,
-        source: 'damonsec',
-        title: String(data.title ?? slug),
-        url: source ?? '',
-        date,
-        summary: '',
-        html,
-      };
-    })
-  );
+  return fs
+    .readdirSync(newsDirectory)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.replace(/\.md$/, ''));
+}
+
+/** A hand-written note from news/<slug>.md. Frontmatter: title, date, source? (URL), excerpt?. */
+export async function getNoteBySlug(slug: string): Promise<NewsItem | null> {
+  const file = path.join(newsDirectory, `${slug}.md`);
+  if (!/^[a-z0-9-]+$/.test(slug) || !fs.existsSync(file)) return null;
+  const { data, content } = matter(fs.readFileSync(file, 'utf8'));
+  const date = data.date instanceof Date ? data.date.toISOString() : String(data.date ?? '');
+  if (Number.isNaN(new Date(date).getTime())) return null;
+  const source = typeof data.source === 'string' && isHttpUrl(data.source) ? data.source : undefined;
+  const html = (await remark().use(remarkGfm).use(remarkHtml).process(content)).toString();
+  return {
+    id: `note:${slug}`,
+    kind: 'note',
+    source: 'damonsec',
+    title: String(data.title ?? slug),
+    url: `/news/${slug}`,
+    sourceUrl: source,
+    date,
+    summary: noteExcerpt(data, content),
+    html,
+    slug,
+  };
+}
+
+/** All hand-written notes, newest first. */
+export async function getNotes(): Promise<NewsItem[]> {
+  const notes = await Promise.all(getAllNoteSlugs().map(getNoteBySlug));
   return notes
-    .filter((n) => !Number.isNaN(new Date(n.date).getTime()))
+    .filter((n): n is NewsItem => n !== null)
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
