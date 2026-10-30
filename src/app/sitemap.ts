@@ -45,6 +45,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
     ...categoryEntries,
     {
+      url: `${BASE_URL}/news`,
+      lastModified: new Date(),
+      changeFrequency: 'hourly',
+      priority: 0.8,
+    },
+    {
       url: `${BASE_URL}/tools`,
       lastModified: new Date(),
       changeFrequency: 'monthly',
