@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "PostgreSQL Hardening Checker — damonsec.com",
     description:
-      "CIS-style PostgreSQL security audit. Covers network exposure, authentication, encryption, logging, and access control. Scored report with exact config fixes.",
+      "PostgreSQL hardening audit for postgresql.conf and pg_hba.conf: network exposure, authentication, SSL, logging and resource limits. Findings link to config lines with fixes.",
     url: "https://www.damonsec.com/tools/pg-hardening-checker",
     type: "website",
     siteName: "damonsec.com",
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary",
     title: "PostgreSQL Hardening Checker — damonsec.com",
-    description: "Paste postgresql.conf + pg_hba.conf → security score + CIS-style findings with exact fixes. Runs in browser.",
+    description: "Paste postgresql.conf + pg_hba.conf → hardening score and findings with config fixes. Runs in the browser.",
   },
 };
 

@@ -72,13 +72,13 @@ const WEB_TOOLS: WebTool[] = [
     slug: 'pg-hardening-checker',
     title: 'PostgreSQL Hardening Checker',
     glyph: 'PG',
-    tagline: 'CIS-style security audit for postgresql.conf and pg_hba.conf.',
+    tagline: 'Hardening checks for postgresql.conf and pg_hba.conf, resolved the way PostgreSQL reads them.',
     input: 'postgresql.conf, pg_hba.conf',
     checks: [
       'Network exposure and pg_hba auth methods',
-      'SSL/TLS, password hashing, audit logging',
-      'Exact config fix for each finding',
-      'Generates a hardened baseline for both files',
+      'SSL, password hashing, audit logging',
+      'Each finding links to its config line',
+      'Hardened baseline for both files that passes every check',
     ],
   },
 ];

@@ -1,38 +1,44 @@
 // lib/pg-hardening/analyzer.ts
 
-import { PG_RULES, type PGResult, type Severity } from "./rules";
+import { parseHBA, parsePGConf } from "./parse.ts";
+import { PG_RULES, type PGContext, type PGResult, type Severity } from "./rules.ts";
 
-export type ScanStatus = "PASS" | "PARTIAL" | "FAIL";
-export type RiskLabel  = "Excellent" | "Good" | "Needs Improvement" | "High Risk";
+export type ScanStatus = "PASS" | "PARTIAL" | "FAIL" | "EMPTY";
+export type RiskLabel  = "Excellent" | "Good" | "Needs Improvement" | "High Risk" | "No config";
 
 export interface ScoreBreakdown {
-  high: number; medium: number; low: number; passed: number;
+  high: number; medium: number; low: number; passed: number; notApplicable: number;
 }
 
 export interface PGScanResult {
   results:    PGResult[];
-  counts:     Record<Severity | "passed", number>;
+  counts:     Record<Severity | "passed" | "notApplicable", number>;
   score:      number;
   status:     ScanStatus;
   riskLabel:  RiskLabel;
   message:    string;
   breakdown:  ScoreBreakdown;
   byCategory: Record<string, PGResult[]>;
+  /** Which files were provided */
+  hasPG:      boolean;
+  hasHBA:     boolean;
 }
 
-const PENALTY: Record<Severity, number> = { high: 10, medium: 5, low: 2 };
+export const PENALTY: Record<Severity, number> = { high: 10, medium: 5, low: 2 };
 
 const STATUS_MESSAGES: Record<ScanStatus, string> = {
-  FAIL:    "This configuration contains high-risk issues that should be fixed immediately.",
-  PARTIAL: "This configuration is partially hardened but still has security gaps.",
-  PASS:    "This configuration follows most PostgreSQL security best practices.",
+  FAIL:    "High-severity issues found. Fix these first.",
+  PARTIAL: "No high-severity issues, but some hardening gaps remain.",
+  PASS:    "No high or medium issues found by these checks.",
+  EMPTY:   "Paste postgresql.conf and/or pg_hba.conf to scan them.",
 };
 
 function computeScore(b: ScoreBreakdown): number {
-  let score = 100 - b.high * 10 - b.medium * 5 - b.low * 2;
-  if      (b.high >= 3) score = Math.min(score, 40);
-  else if (b.high === 2) score = Math.min(score, 50);
-  else if (b.high === 1) score = Math.min(score, 70);
+  let score = 100 - b.high * PENALTY.high - b.medium * PENALTY.medium - b.low * PENALTY.low;
+  // Caps sit just below a label boundary, so any high issue rules out "Good"
+  if      (b.high >= 3) score = Math.min(score, 39);
+  else if (b.high === 2) score = Math.min(score, 49);
+  else if (b.high === 1) score = Math.min(score, 69);
   return Math.max(0, score);
 }
 
@@ -49,140 +55,118 @@ function computeRiskLabel(score: number): RiskLabel {
   return "High Risk";
 }
 
+export function buildContext(pgConf: string, hbaConf: string): PGContext {
+  const settings = parsePGConf(pgConf);
+  const hba = parseHBA(hbaConf);
+  return { hasPG: settings.size > 0, hasHBA: hba.length > 0, settings, hba };
+}
+
 export function scanConfigs(pgConf: string, hbaConf: string): PGScanResult {
+  const ctx = buildContext(pgConf, hbaConf);
+
   const results: PGResult[] = PG_RULES.map((rule) => {
-    let passed = true;
-    try { passed = !rule.check(pgConf, hbaConf); } catch { /* skip */ }
-    return { rule, passed };
+    let outcome: ReturnType<typeof rule.check> = { status: "n/a" };
+    try { outcome = rule.check(ctx); } catch { /* rule error — treat as not applicable */ }
+    return { rule, status: outcome.status, passed: outcome.status !== "fail", refs: outcome.refs ?? [], evidence: outcome.evidence };
   });
 
-  const counts: Record<Severity | "passed", number> = { high: 0, medium: 0, low: 0, passed: 0 };
+  const counts = { high: 0, medium: 0, low: 0, passed: 0, notApplicable: 0 };
   const byCategory: Record<string, PGResult[]> = {};
-
   for (const r of results) {
-    r.passed ? counts.passed++ : counts[r.rule.severity]++;
+    if (r.status === "fail") counts[r.rule.severity]++;
+    else if (r.status === "pass") counts.passed++;
+    else counts.notApplicable++;
     (byCategory[r.rule.category] ??= []).push(r);
   }
 
-  const breakdown: ScoreBreakdown = {
-    high: counts.high, medium: counts.medium, low: counts.low, passed: counts.passed,
-  };
-  const score     = computeScore(breakdown);
-  const status    = computeStatus(breakdown);
+  const empty = !ctx.hasPG && !ctx.hasHBA;
+  const breakdown: ScoreBreakdown = { ...counts };
+  const score  = empty ? 0 : computeScore(breakdown);
+  const status = empty ? "EMPTY" : computeStatus(breakdown);
 
   return {
     results, counts, score, status,
-    riskLabel: computeRiskLabel(score),
+    riskLabel: empty ? "No config" : computeRiskLabel(score),
     message:   STATUS_MESSAGES[status],
     breakdown, byCategory,
+    hasPG: ctx.hasPG, hasHBA: ctx.hasHBA,
   };
 }
 
 export function generateQuickFix(results: PGResult[]): string {
+  const order: Severity[] = ["high", "medium", "low"];
   const fixes = results
-    .filter((r) => !r.passed)
-    .sort((a, b) => {
-      const order: Severity[] = ["high", "medium", "low"];
-      return order.indexOf(a.rule.severity) - order.indexOf(b.rule.severity);
+    .filter((r) => r.status === "fail")
+    .sort((a, b) => order.indexOf(a.rule.severity) - order.indexOf(b.rule.severity))
+    .map((r) => {
+      const where = r.refs.slice(0, 3).map((x) => `${x.file}:${x.line}`).join(", ");
+      return `# [${r.rule.id}] ${r.rule.title}${where ? ` (${where})` : ""}\n${r.rule.config_fix}`;
     })
-    .map((r) => `# Fix [${r.rule.id}] ${r.rule.title}\n${r.rule.config_fix}`)
     .join("\n\n");
   return fixes || "# No issues found — no fixes needed.";
 }
 
 export function generateHardenedPGConf(): string {
-  return `# ═══════════════════════════════════════════════════════════
-# Hardened postgresql.conf — CIS-style PostgreSQL Security
-# Generated by PostgreSQL Hardening Checker — damonsec.com
-# Validate by restarting PostgreSQL and checking logs
-# ═══════════════════════════════════════════════════════════
+  return `# Hardened postgresql.conf baseline — damonsec.com PostgreSQL Hardening Checker
+# Merge into your existing file; reload or restart PostgreSQL and check the log.
 
-# ── Connections ──────────────────────────────────────────
-listen_addresses = 'localhost'          # 1.1 — no wildcard binding
+# Connections
+listen_addresses = 'localhost'      # add the internal IP if applications connect over TCP
 port             = 5432
-max_connections  = 100                  # 2.3 — prevent connection exhaustion
+max_connections  = 200
 
-# ── Authentication ───────────────────────────────────────
-password_encryption = 'scram-sha-256'  # 2.1 — strong password hashing
+# Authentication
+password_encryption = 'scram-sha-256'
 
-# ── SSL/TLS ──────────────────────────────────────────────
-ssl                     = on                    # 1.3
-ssl_cert_file           = '/etc/postgresql/server.crt'
-ssl_key_file            = '/etc/postgresql/server.key'
-ssl_ca_file             = '/etc/postgresql/root.crt'
-ssl_min_protocol_version = 'TLSv1.2'           # 2.6 — no legacy TLS
-ssl_ciphers             = 'HIGH:MEDIUM:+3DES:!aNULL'
+# SSL
+ssl                      = on
+ssl_cert_file            = 'server.crt'
+ssl_key_file             = 'server.key'
+ssl_min_protocol_version = 'TLSv1.2'
+ssl_ciphers              = 'HIGH:!aNULL:!MD5:!3DES'
 
-# ── Memory ───────────────────────────────────────────────
-shared_buffers      = 256MB    # 3.1 — 25% of RAM, adjust to your system
-effective_cache_size = 1GB     # 50–75% of RAM
-work_mem            = 4MB
+# Timeouts
+idle_in_transaction_session_timeout = '60s'
+lock_timeout                        = '10s'
 
-# ── Timeouts ─────────────────────────────────────────────
-idle_in_transaction_session_timeout = 60000   # 3.6 — 60s idle tx timeout
-statement_timeout                   = 30000   # 30s query timeout
-lock_timeout                        = 10000   # 10s lock wait timeout
+# Logging
+logging_collector  = on
+log_directory      = 'log'
+log_filename       = 'postgresql-%Y-%m-%d.log'
+log_rotation_age   = 1d
+log_line_prefix    = '%m [%p] %q%u@%d %r '
+log_connections    = on
+log_disconnections = on
+log_statement      = 'ddl'
+log_lock_waits     = on
 
-# ── Logging ──────────────────────────────────────────────
-logging_collector          = on                # 2.2
-log_directory              = 'pg_log'
-log_filename               = 'postgresql-%Y-%m-%d_%H%M%S.log'
-log_rotation_age           = 1d
-log_rotation_size          = 100MB
-log_min_duration_statement = 1000              # 2.5 — log slow queries (>1s)
-log_checkpoints            = on
-log_connections            = on                # 3.3
-log_disconnections         = on
-log_lock_waits             = on
-log_statement              = 'ddl'             # 3.2 — log all DDL
-log_replication_commands   = on
-log_line_prefix            = '%m [%p] %q%u@%d '  # 3.5 — structured prefix
-log_timezone               = 'UTC'
+# Auditing (requires the pgaudit package and CREATE EXTENSION pgaudit)
+shared_preload_libraries = 'pgaudit'
+pgaudit.log              = 'ddl, role'
 
-# ── Security ─────────────────────────────────────────────
-# Prevent functions from running OS commands unless explicitly needed
-#row_security = on  # Enable row-level security globally
-
-# Track query activity
-track_activities    = on
-track_counts        = on
-track_io_timing     = on`;
+# Memory (size for your server)
+shared_buffers       = 1GB
+effective_cache_size = 3GB`;
 }
 
 export function generateHardenedHBAConf(): string {
-  return `# ═══════════════════════════════════════════════════════════
-# Hardened pg_hba.conf — CIS-style PostgreSQL Access Control
-# Generated by PostgreSQL Hardening Checker — damonsec.com
-# ═══════════════════════════════════════════════════════════
+  return `# Hardened pg_hba.conf baseline — damonsec.com PostgreSQL Hardening Checker
+# First matching line wins. Replace appdb, appuser and the CIDR range.
 #
-# FORMAT: type  database  user  address  method
-#
-# Auth methods (strongest to weakest):
-#   scram-sha-256  — recommended for all network connections
-#   peer           — maps OS user to DB user (local socket only)
-#   reject         — explicitly deny
-#   md5            — deprecated, avoid
-#   trust          — NEVER use in production
+# TYPE     DATABASE  USER      ADDRESS        METHOD
 
-# ── Local socket connections ─────────────────────────────
-# OS users mapped to DB users via peer authentication
-local  all             postgres                 peer    # 1.4 — superuser local only
-local  all             all                      peer    # standard local access
+# Local socket: OS user must match the database role
+local      all       postgres                 peer
+local      all       all                      peer
 
-# ── IPv4 localhost ───────────────────────────────────────
-host   all             all       127.0.0.1/32   scram-sha-256
+# Loopback
+host       all       all       127.0.0.1/32   scram-sha-256
+host       all       all       ::1/128        scram-sha-256
 
-# ── IPv6 localhost ───────────────────────────────────────
-host   all             all       ::1/128         scram-sha-256
+# Application servers: SSL required, one role, one database
+hostssl    appdb     appuser   10.0.1.0/24    scram-sha-256
 
-# ── Application server connections ──────────────────────
-# Replace with your actual app server IP range:
-host   mydb            appuser   10.0.1.0/24    scram-sha-256  # 1.5 — no 0.0.0.0/0
-
-# ── Replication (if needed) ──────────────────────────────
-# host   replication     replicator  10.0.0.2/32  scram-sha-256
-
-# ── Reject everything else ───────────────────────────────
-host   all             all       0.0.0.0/0      reject
-host   all             all       ::/0           reject`;
+# Everything else is rejected
+host       all       all       0.0.0.0/0      reject
+host       all       all       ::/0           reject`;
 }
