@@ -6,6 +6,7 @@ import { formatDate } from '@/lib/utils';
 import TagBadge from '@/components/TagBadge';
 import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
 import { CATEGORIES } from '@/lib/categories';
+import { toolsForPost } from '@/lib/tools';
 import ReadingProgress from '@/components/ReadingProgressLazy';
 
 const BASE_URL = 'https://www.damonsec.com';
@@ -65,6 +66,7 @@ export default async function BlogPostPage({ params }: Props) {
   const prev = currentIndex < allPosts.length - 1 ? allPosts[currentIndex + 1] : null;
   const next = currentIndex > 0 ? allPosts[currentIndex - 1] : null;
   const related = getRelatedPosts(post);
+  const tools = toolsForPost(post.slug);
 
   // Fix #3: extract FAQ items and word count for schema
   const faqItems = post.content ? extractFaqFromHtml(post.content) : [];
@@ -130,6 +132,26 @@ export default async function BlogPostPage({ params }: Props) {
           className="prose"
           dangerouslySetInnerHTML={{ __html: post.content ?? '' }}
         />
+
+        {/* Tools that apply what the post covers to the reader's own config */}
+        {tools.length > 0 && (
+          <aside className="mt-12 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5" aria-labelledby="tools-heading">
+            <h2 id="tools-heading" className="font-mono text-xs text-zinc-500 uppercase tracking-widest mb-3">
+              Check your own config
+            </h2>
+            <ul className="space-y-3">
+              {tools.map((t) => (
+                <li key={t.slug}>
+                  <Link href={`/tools/${t.slug}`} className="group block">
+                    <span className="font-mono text-sm text-green-400 group-hover:underline">{t.title} →</span>
+                    <span className="mt-0.5 block text-sm text-zinc-400">{t.pitch}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 font-mono text-[11px] text-zinc-500">Free, runs in your browser, nothing is uploaded.</p>
+          </aside>
+        )}
 
         {/* Related posts — shared tags first, keeps readers on-site */}
         {related.length > 0 && (
