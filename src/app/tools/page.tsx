@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-
-const BASE_URL = 'https://www.damonsec.com';
+import { BASE_URL, WEB_TOOLS } from '@/lib/tools';
 
 export const metadata: Metadata = {
   title: 'Free NGINX & PostgreSQL Security Tools',
@@ -10,78 +9,12 @@ export const metadata: Metadata = {
   alternates: { canonical: '/tools' },
 };
 
-interface WebTool {
-  slug: string;
-  title: string;
-  glyph: string;
-  tagline: string;
-  input: string;
-  checks: string[];
-  note?: string;
-}
-
 interface CliTool {
   name: string;
   tagline: string;
   language: string;
   href: string;
 }
-
-// Browser tools — all analysis runs client-side; no config leaves the page.
-const WEB_TOOLS: WebTool[] = [
-  {
-    slug: 'nginx-config-analyzer',
-    title: 'NGINX Config Analyzer',
-    glyph: '{ }',
-    tagline: 'Scored security, performance and reliability audit of any NGINX config.',
-    input: 'nginx.conf, server blocks, multiple files',
-    checks: [
-      '40+ context-aware rules',
-      'Resolves include across multiple files',
-      'Request flow simulator',
-      'Export findings as JSON',
-    ],
-  },
-  {
-    slug: 'nginx-cis-hardening-checker',
-    title: 'NGINX Hardening Checker',
-    glyph: 'CIS',
-    tagline: 'Check an NGINX config against CIS NGINX Benchmark topics and common hardening practice.',
-    input: 'nginx.conf',
-    checks: [
-      'TLS, security headers, request limits, logging',
-      'Each finding links to its config line',
-      'Config fix snippet per finding',
-      'Hardened baseline that passes every check',
-    ],
-  },
-  {
-    slug: 'nginx-cve-checker',
-    title: 'NGINX CVE Checker',
-    glyph: 'CVE',
-    tagline: 'See which known CVEs affect your NGINX version and enabled modules.',
-    input: 'nginx -v output or version number',
-    checks: [
-      'Accepts nginx/1.24.0 or plain 1.24.0',
-      'Optional nginx.conf for module-aware matching',
-      'Separates conditional and unconditional CVEs',
-    ],
-    note: 'Advisory database last updated Apr 28, 2026',
-  },
-  {
-    slug: 'pg-hardening-checker',
-    title: 'PostgreSQL Hardening Checker',
-    glyph: 'PG',
-    tagline: 'Hardening checks for postgresql.conf and pg_hba.conf, resolved the way PostgreSQL reads them.',
-    input: 'postgresql.conf, pg_hba.conf',
-    checks: [
-      'Network exposure and pg_hba auth methods',
-      'SSL, password hashing, audit logging',
-      'Each finding links to its config line',
-      'Hardened baseline for both files that passes every check',
-    ],
-  },
-];
 
 const CLI_TOOLS: CliTool[] = [
   {
