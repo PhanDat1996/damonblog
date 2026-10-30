@@ -19,17 +19,21 @@ export function scrollEditorToLine(ta: HTMLTextAreaElement, line: number): void 
 /** Monospace textarea with a synced line-number gutter */
 export const ConfigEditor = memo(function ConfigEditor({
   value, onChange, highlightLine, inputRef, label = "NGINX configuration",
+  placeholder = "Paste NGINX configuration here...",
+  heightClass = "h-[360px] lg:h-[calc(100vh-17rem)] lg:min-h-[420px]",
 }: {
   value: string;
   onChange: (value: string) => void;
   highlightLine: number | null;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   label?: string;
+  placeholder?: string;
+  heightClass?: string;
 }) {
   const gutterRef = useRef<HTMLDivElement>(null);
   const lineCount = value.split("\n").length;
   return (
-    <div className="flex h-[360px] lg:h-[calc(100vh-17rem)] lg:min-h-[420px] rounded-lg border border-zinc-700 bg-zinc-950/60 overflow-hidden focus-within:border-zinc-500 transition-colors">
+    <div className={`flex ${heightClass} rounded-lg border border-zinc-700 bg-zinc-950/60 overflow-hidden focus-within:border-zinc-500 transition-colors`}>
       <div ref={gutterRef} aria-hidden="true"
         className="flex-shrink-0 overflow-hidden select-none py-3 px-2 min-w-[2.75rem] text-right font-mono text-xs leading-5 text-zinc-500 bg-zinc-900/60 border-r border-zinc-800">
         {Array.from({ length: lineCount }, (_, i) => (
@@ -40,7 +44,7 @@ export const ConfigEditor = memo(function ConfigEditor({
       </div>
       <textarea ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
         onScroll={(e) => { if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop; }}
-        wrap="off" spellCheck={false} aria-label={label} placeholder="Paste NGINX configuration here..."
+        wrap="off" spellCheck={false} aria-label={label} placeholder={placeholder}
         className="flex-1 min-w-0 resize-none bg-transparent px-3 py-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-500 outline-none whitespace-pre overflow-auto" />
     </div>
   );
