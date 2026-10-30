@@ -214,7 +214,7 @@ export default function NginxCategoryPage() {
       <section className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-7 space-y-3">
         <div className="font-mono text-xs text-zinc-500 uppercase tracking-widest">Tool</div>
         <Link
-          href="/tools/nginx-config-analyzer/"
+          href="/tools/nginx-config-analyzer"
           className="font-display text-lg font-bold text-zinc-100 hover:text-green-400 transition-colors block"
         >
           NGINX Config Analyzer →

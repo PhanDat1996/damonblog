@@ -6,7 +6,8 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: '*',
         allow: '/',
-        disallow: ['/api/', '/_next/'],
+        // /_next/ holds the CSS/JS Googlebot needs to render pages, so it stays crawlable
+        disallow: ['/api/'],
       },
     ],
     sitemap: 'https://www.damonsec.com/sitemap.xml',
