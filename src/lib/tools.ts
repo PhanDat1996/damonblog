@@ -2,6 +2,7 @@
 // index, each tool's metadata, JSON-LD, OG image, and links from posts.
 
 import type { Metadata } from 'next';
+import { ADVISORIES_UPDATED } from './nginx-cve/advisories.ts';
 
 export const BASE_URL = 'https://www.damonsec.com';
 
@@ -77,11 +78,12 @@ export const WEB_TOOLS: WebTool[] = [
     tagline: 'See which known CVEs affect your NGINX version and enabled modules.',
     input: 'nginx -v output or version number',
     checks: [
-      'Accepts nginx/1.24.0 or plain 1.24.0',
-      'Optional nginx.conf for module-aware matching',
-      'Separates conditional and unconditional CVEs',
+      'Every advisory published on nginx.org, with per-branch fixes',
+      'Accepts nginx -v output or a plain version',
+      'Optional config to rule out feature-specific CVEs',
+      'Flags distro packages that may carry backported fixes',
     ],
-    note: 'Advisory database last updated Apr 28, 2026',
+    note: `Advisories from nginx.org, updated ${ADVISORIES_UPDATED}`,
     seoTitle: 'NGINX CVE Checker — Known Vulnerabilities by Version',
     description:
       'Enter an NGINX version to see which security advisories affect it. Add your config to tell apart CVEs that need HTTP/2, QUIC, mp4 or the resolver. Runs in your browser.',

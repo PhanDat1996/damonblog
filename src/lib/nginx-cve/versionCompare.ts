@@ -96,16 +96,3 @@ export function isValidNginxVersion(version: string): boolean {
   if (parts[1] > 99) return false;
   return true;
 }
-
-/**
- * Get the "branch" of an NGINX version: mainline (odd minor) or stable (even minor)
- */
-export function getNginxBranch(version: string): "mainline" | "stable" | "legacy" {
-  const parts = parseVersion(version);
-  if (parts.length < 2) return "legacy";
-  const minor = parts[1];
-  // NGINX 1.x: odd minor = mainline, even minor = stable
-  // Starting from 1.25.x, mainline moves faster
-  if (minor >= 25) return minor % 2 === 1 ? "mainline" : "stable";
-  return minor % 2 === 1 ? "mainline" : "stable";
-}

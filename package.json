@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test \"src/**/*.test.ts\""
+    "test": "node --test \"src/**/*.test.ts\"",
+    "update:nginx-advisories": "node scripts/update-nginx-advisories.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
