@@ -146,7 +146,7 @@ Access log for the same requests (`ups=$upstream_status`, `len=$request_length`)
 | Error log | `client intended to send too large body` | Nothing |
 | Response body | NGINX HTML page with `nginx/<version>` | The app's own message |
 
-If the backend returned the 413, raising `client_max_body_size` further does nothing. Look for the app's own limit: framework settings, PHP's `upload_max_filesize` / `post_max_size`, or another proxy between NGINX and the app.
+If the backend returned the 413, raising `client_max_body_size` further does nothing. Look for the app's own limit: framework settings, PHP's `upload_max_filesize` / `post_max_size`, or another proxy between NGINX and the app. If PHP sits behind this NGINX, also check it's patched for the two critical 2026 PHP bugs, one of which uses large multipart bodies: [PHP CVE-2026-109618/109619 on NGINX + PHP-FPM](/blog/php-cve-2026-109618-109619-nginx-fpm).
 
 ---
 

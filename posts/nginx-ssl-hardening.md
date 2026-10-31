@@ -66,6 +66,8 @@ nginx -t && systemctl reload nginx
 
 This matches the "intermediate" profile of the [Mozilla SSL Configuration Generator](https://ssl-config.mozilla.org/), minus the DHE suites (see below). Use the generator as the reference when your NGINX or OpenSSL version differs.
 
+If you also enable HTTP/3 with `listen 443 quic`, NGINX opens UDP sockets with their own set of 2026 advisories. How to check that and turn QUIC off cleanly: [NGINX HTTP/3 CVEs](/blog/nginx-cve-2026-42530-http3-quic).
+
 ---
 
 ## What drives the SSL Labs grade
