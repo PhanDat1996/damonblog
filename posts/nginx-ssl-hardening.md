@@ -198,7 +198,7 @@ For the public grade, run [SSL Labs](https://www.ssllabs.com/ssltest/). If the s
 
 ## Beyond TLS: the rest of the hardening
 
-TLS settings are one part of an NGINX security baseline. The [NGINX CIS Hardening Checker](/tools/nginx-cis-hardening-checker) audits a pasted config against the CIS benchmark items: `server_tokens`, request size limits, missing headers, and the TLS settings above. Since TLS bugs in NGINX itself also matter, check your installed version (`nginx -v`) against known vulnerabilities with the [NGINX CVE Checker](/tools/nginx-cve-checker). The host underneath needs the same treatment; [CIS Level 1 hardening for Ubuntu](/blog/cis-level1-ubuntu-hardening) covers the OS side.
+TLS settings are one part of an NGINX security baseline. The [NGINX CIS Hardening Checker](/tools/nginx-cis-hardening-checker) audits a pasted config against the CIS benchmark items: `server_tokens`, request size limits, missing headers, and the TLS settings above. Since TLS bugs in NGINX itself also matter, check your installed version (`nginx -v`) against known vulnerabilities with the [NGINX CVE Checker](/tools/nginx-cve-checker). On a distro package, confirm each result in the package changelog, because fixes are usually backported without a version change: [Is my NGINX vulnerable? Version vs distro backports](/blog/check-nginx-version-vulnerable-backports). The host underneath needs the same treatment; [CIS Level 1 hardening for Ubuntu](/blog/cis-level1-ubuntu-hardening) covers the OS side.
 
 ---
 

@@ -180,7 +180,7 @@ sysctl --system      # loads all sysctl.d files, reports errors
 A CIS-clean OS running a web server with TLS 1.0 enabled and a database listening on `0.0.0.0` is still an easy target. Once the OS baseline is in place, check the services on top:
 
 - NGINX: [NGINX CIS hardening checker](/tools/nginx-cis-hardening-checker) and [NGINX config analyzer](/tools/nginx-config-analyzer), plus [NGINX SSL hardening](/blog/nginx-ssl-hardening) for the TLS side.
-- Known vulnerabilities in your NGINX version: [NGINX CVE checker](/tools/nginx-cve-checker).
+- Known vulnerabilities in your NGINX version: [NGINX CVE checker](/tools/nginx-cve-checker). Some need a config audit as well as a patch, for example [CVE-2026-42533 in regex maps](/blog/nginx-cve-2026-42533-map-regex).
 - PostgreSQL: [PostgreSQL hardening checker](/tools/pg-hardening-checker).
 
 ---
