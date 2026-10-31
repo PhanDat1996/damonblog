@@ -57,6 +57,14 @@ const APPROACH = [
     en: 'Prefer the option that fixes the root cause over one that fixes a single instance or adds a compensating control.',
     vi: 'Ưu tiên lựa chọn xử lý nguyên nhân gốc hơn lựa chọn chỉ sửa một trường hợp hoặc thêm biện pháp bù trừ.',
   },
+  {
+    en: 'Use only the facts in the question. If it does not mention a regulation, a budget or a tool, do not assume one.',
+    vi: 'Chỉ dùng dữ kiện có trong câu hỏi. Nếu đề không nhắc đến quy định, ngân sách hay công cụ nào thì đừng tự giả định.',
+  },
+  {
+    en: 'When every option is true, pick the broadest one: the answer that includes or enables the others.',
+    vi: 'Khi mọi lựa chọn đều đúng, chọn lựa chọn bao quát nhất: đáp án bao hàm hoặc tạo điều kiện cho các đáp án còn lại.',
+  },
 ];
 
 const LINK = 'text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400';

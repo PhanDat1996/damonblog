@@ -2,6 +2,7 @@
 // Every scenario has four options, one answer, and a reason for each option in English and Vietnamese.
 
 import type { Bi, DomainId } from './domains.ts';
+import { MORE_SCENARIOS } from './scenarios-more.ts';
 
 export type OptionId = 'A' | 'B' | 'C' | 'D';
 
@@ -26,7 +27,7 @@ export interface Scenario {
   concepts: string[];
 }
 
-export const SCENARIOS: Scenario[] = [
+const CORE_SCENARIOS: Scenario[] = [
   // ── Domain 1: Security and Risk Management ───────────────────────────────
   {
     id: 'new-ciso-first-step',
@@ -1387,6 +1388,9 @@ export const SCENARIOS: Scenario[] = [
     concepts: ['SCA', 'SBOM', 'supply chain'],
   },
 ];
+
+/** All scenarios, grouped by domain (sort is stable, so order within a domain is kept). */
+export const SCENARIOS: Scenario[] = [...CORE_SCENARIOS, ...MORE_SCENARIOS].sort((a, b) => a.domainId.localeCompare(b.domainId));
 
 export function getScenario(id: string): Scenario | undefined {
   return SCENARIOS.find((s) => s.id === id);
