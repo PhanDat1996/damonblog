@@ -21,7 +21,7 @@ function readVoted(): Set<string> {
   }
 }
 
-/** Anonymous comments for one scenario. Loaded on click; every comment is shown only after moderation. */
+/** Anonymous comments for one scenario. Loaded on click; new comments show immediately and can be removed at /cissp/admin. */
 export function CisspComments({ scenarioId, mode }: { scenarioId: string; mode: LangMode }) {
   const t = useCallback((en: string, vi: string) => (mode === 'vi' ? vi : mode === 'en' ? en : `${en} / ${vi}`), [mode]);
   const [open, setOpen] = useState(false);
@@ -81,8 +81,10 @@ export function CisspComments({ scenarioId, mode }: { scenarioId: string; mode: 
         body: JSON.stringify({ scenarioId, name, body, website }),
       });
       if (res.ok) {
+        const { comment } = await res.json();
         setBody('');
-        setNotice({ ok: true, text: t('Thanks! Your comment will appear after review.', 'Cảm ơn bạn! Bình luận sẽ hiện sau khi được duyệt.') });
+        if (comment) setComments((list) => [...(list ?? []), comment]);
+        setNotice({ ok: true, text: t('Posted. Thanks!', 'Đã đăng. Cảm ơn bạn!') });
       } else {
         const msg = (await res.json().catch(() => null))?.error;
         setNotice({ ok: false, text: res.status === 429 ? t('Too many comments, try again later.', 'Gửi nhiều quá, thử lại sau nhé.') : msg ?? t('Could not send.', 'Chưa gửi được.') });
@@ -186,8 +188,8 @@ export function CisspComments({ scenarioId, mode }: { scenarioId: string; mode: 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[11px] text-zinc-500">
               {t(
-                'Plain text. Reviewed before it appears. Do not post personal information.',
-                'Chỉ chữ thuần. Được duyệt trước khi hiện. Đừng ghi thông tin cá nhân.',
+                'Plain text, shown publicly right away. Do not post personal information.',
+                'Chỉ chữ thuần, hiện công khai ngay. Đừng ghi thông tin cá nhân.',
               )}{' '}
               <span className="font-mono">{body.length}/{BODY_MAX}</span>
             </p>

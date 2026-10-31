@@ -55,21 +55,20 @@ test('HTML is kept as inert text, never stripped into markup', () => {
 
 // ── Flow ────────────────────────────────────────────────────────────────────
 
-test('comments stay hidden until approved, then show sorted by votes', async () => {
+test('comments show immediately, sorted by votes; admin can delete', async () => {
   const store = createMemoryStore();
-  assert.equal((await post(store, { scenarioId: SCENARIO, body: 'first comment', name: 'An' })).status, 201);
+  const r1 = await post(store, { scenarioId: SCENARIO, body: 'first comment', name: 'An' });
+  assert.equal(r1.status, 201);
+  const posted = await r1.json();
+  assert.equal(posted.status, 'published');
+  assert.deepEqual(Object.keys(posted.comment).sort(), ['body', 'createdAt', 'id', 'name', 'votes']);
   assert.equal((await post(store, { scenarioId: SCENARIO, body: 'second comment' }, { ip: '198.51.100.2' })).status, 201);
 
   let list = await (await listComments(req(`/api/cissp/comments?scenario=${SCENARIO}`), store)).json();
-  assert.equal(list.comments.length, 0, 'pending comments are not public');
+  assert.equal(list.comments.length, 2, 'no review step');
+  assert.equal(list.comments[1].name, ANONYMOUS);
 
-  const admin = await (await adminList(req('/api/cissp/admin/comments', { token: ENV.ADMIN_TOKEN }), store, ENV)).json();
-  assert.equal(admin.pending.length, 2);
-  for (const c of admin.pending) {
-    const r = await adminAction(req(`/api/cissp/admin/comments/${c.id}`, { body: { action: 'approve' }, token: ENV.ADMIN_TOKEN }), c.id, store, ENV);
-    assert.equal(r.status, 200);
-  }
-  const second = admin.pending.find((c: { body: string }) => c.body === 'second comment');
+  const second = list.comments.find((c: { body: string }) => c.body === 'second comment');
   const v1 = await voteComment(req(`/api/cissp/comments/${second.id}/vote`, { body: {} }), second.id, store, ENV);
   assert.deepEqual(await v1.json(), { votes: 1, already: false });
   const v2 = await voteComment(req(`/api/cissp/comments/${second.id}/vote`, { body: {} }), second.id, store, ENV);
@@ -78,13 +77,22 @@ test('comments stay hidden until approved, then show sorted by votes', async () 
   list = await (await listComments(req(`/api/cissp/comments?scenario=${SCENARIO}`), store)).json();
   assert.deepEqual(list.comments.map((c: { body: string }) => c.body), ['second comment', 'first comment']);
   assert.deepEqual(Object.keys(list.comments[0]).sort(), ['body', 'createdAt', 'id', 'name', 'votes'], 'no status or IP leaks');
+
+  const admin = await (await adminList(req('/api/cissp/admin/comments', { token: ENV.ADMIN_TOKEN }), store, ENV)).json();
+  assert.equal(admin.approved.length, 2);
+  const del = await adminAction(req(`/x/${second.id}`, { body: { action: 'delete' }, token: ENV.ADMIN_TOKEN }), second.id, store, ENV);
+  assert.equal(del.status, 200);
+  list = await (await listComments(req(`/api/cissp/comments?scenario=${SCENARIO}`), store)).json();
+  assert.deepEqual(list.comments.map((c: { body: string }) => c.body), ['first comment']);
 });
 
-test('votes on pending or unknown comments are refused', async () => {
+test('comments stored as pending (older data) stay hidden until approved', async () => {
   const store = createMemoryStore();
-  await post(store, { scenarioId: SCENARIO, body: 'pending one' });
-  const [p] = await store.listPending();
-  assert.equal((await voteComment(req('/x', { body: {} }), p.id, store, ENV)).status, 404);
+  const c = await store.add({ scenarioId: SCENARIO, name: 'Old', body: 'held comment' }, 'pending');
+  assert.equal((await store.listApproved(SCENARIO)).length, 0);
+  assert.equal((await voteComment(req('/x', { body: {} }), c.id, store, ENV)).status, 404, 'no votes while pending');
+  assert.equal((await adminAction(req('/x', { body: { action: 'approve' }, token: ENV.ADMIN_TOKEN }), c.id, store, ENV)).status, 200);
+  assert.equal((await store.listApproved(SCENARIO)).length, 1);
   assert.equal((await voteComment(req('/x', { body: {} }), 'not-a-uuid', store, ENV)).status, 404);
 });
 

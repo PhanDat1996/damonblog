@@ -87,7 +87,7 @@ export async function postComment(req: Request, store: CommentStore | null, env:
   const raw = await readJson(req);
   if (raw instanceof Response) return raw;
   const v = validateComment(raw);
-  if (!v.ok) return v.silent ? json({ status: 'pending' }) : json({ error: v.error }, v.status);
+  if (!v.ok) return v.silent ? json({ status: 'published' }, 201) : json({ error: v.error }, v.status);
 
   const ip = clientKey(req, s);
   if (!(await store.hit(`post:${ip}`, LIMITS.postPerIp.limit, LIMITS.postPerIp.window))) {
@@ -96,8 +96,8 @@ export async function postComment(req: Request, store: CommentStore | null, env:
   if (!(await store.hit('post:all', LIMITS.postGlobal.limit, LIMITS.postGlobal.window))) {
     return json({ error: 'Comments are paused, try again later' }, 429);
   }
-  await store.add(v.value);
-  return json({ status: 'pending' }, 201);
+  const c = await store.add(v.value);
+  return json({ status: 'published', comment: toPublic(c) }, 201);
 }
 
 export async function voteComment(req: Request, id: string, store: CommentStore | null, env: Env): Promise<Response> {
@@ -130,7 +130,7 @@ async function adminGate(req: Request, store: CommentStore | null, env: Env): Pr
 export async function adminList(req: Request, store: CommentStore | null, env: Env): Promise<Response> {
   const denied = await adminGate(req, store, env);
   if (denied) return denied;
-  const [pending, approved] = await Promise.all([store!.listPending(), store!.listRecentApproved(50)]);
+  const [pending, approved] = await Promise.all([store!.listPending(), store!.listRecentApproved(200)]);
   const shape = (c: (typeof pending)[number]) => ({ ...toPublic(c), scenarioId: c.scenarioId, status: c.status });
   return json({ pending: pending.map(shape), approved: approved.map(shape) });
 }

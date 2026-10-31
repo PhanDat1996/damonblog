@@ -27,7 +27,8 @@ export interface VoteResult {
 }
 
 export interface CommentStore {
-  add(input: CommentInput): Promise<StoredComment>;
+  /** Comments are published immediately by default; 'pending' keeps one out of view. */
+  add(input: CommentInput, status?: CommentStatus): Promise<StoredComment>;
   listApproved(scenarioId: string): Promise<PublicComment[]>;
   listPending(): Promise<StoredComment[]>;
   listRecentApproved(limit: number): Promise<StoredComment[]>;
@@ -49,8 +50,8 @@ export function sortForDisplay<T extends { votes: number; createdAt: string }>(l
   return [...list].sort((a, b) => b.votes - a.votes || a.createdAt.localeCompare(b.createdAt));
 }
 
-function newComment(input: CommentInput, now = new Date()): StoredComment {
-  return { id: crypto.randomUUID(), ...input, createdAt: now.toISOString(), status: 'pending', votes: 0 };
+function newComment(input: CommentInput, status: CommentStatus, now = new Date()): StoredComment {
+  return { id: crypto.randomUUID(), ...input, createdAt: now.toISOString(), status, votes: 0 };
 }
 
 // ── In-memory ───────────────────────────────────────────────────────────────
@@ -61,8 +62,8 @@ export function createMemoryStore(): CommentStore {
   const counters = new Map<string, { n: number; resetAt: number }>();
 
   return {
-    async add(input) {
-      const c = newComment(input);
+    async add(input, status = 'approved') {
+      const c = newComment(input, status);
       comments.set(c.id, c);
       return { ...c };
     },
@@ -150,13 +151,16 @@ export function createUpstashStore(url: string, token: string): CommentStore {
   const get = async (id: string) => fromHash(await redis.hgetall<Record<string, string>>(K.comment(id)));
 
   return {
-    async add(input) {
-      const c = newComment(input);
-      await redis
-        .pipeline()
-        .hset(K.comment(c.id), { ...c, votes: String(c.votes) })
-        .zadd(K.pending, { score: Date.parse(c.createdAt), member: c.id })
-        .exec();
+    async add(input, status = 'approved') {
+      const c = newComment(input, status);
+      const score = Date.parse(c.createdAt);
+      const p = redis.pipeline().hset(K.comment(c.id), { ...c, votes: String(c.votes) });
+      if (status === 'approved') {
+        p.zadd(K.approved(c.scenarioId), { score, member: c.id }).zadd(K.approvedAll, { score, member: c.id });
+      } else {
+        p.zadd(K.pending, { score, member: c.id });
+      }
+      await p.exec();
       return c;
     },
     async listApproved(scenarioId) {
