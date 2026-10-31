@@ -37,6 +37,8 @@ const nextConfig = {
       { source: '/blog/check-listening-ports-linux',       destination: '/blog/check-open-ports-linux', permanent: true },
       { source: '/blog/linux-check-listening-ports-ss',    destination: '/blog/check-open-ports-linux', permanent: true },
       { source: '/blog/linux-check-disk-usage-by-folder-du', destination: '/blog/check-disk-usage-linux-du-df', permanent: true },
+      // Broken internal link before the 2026-10-28 rewrite; Google still reports it as 404
+      { source: '/blog/find-large-files-linux-guide',      destination: '/blog/find-large-files-linux', permanent: true },
     ];
   },
 
