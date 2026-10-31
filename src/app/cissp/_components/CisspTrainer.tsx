@@ -8,6 +8,7 @@ import { SCENARIOS } from '@/lib/cissp/scenarios.ts';
 import type { OptionId } from '@/lib/cissp/scenarios.ts';
 import { LANG_MODES, LETTERS, STORAGE_KEY, displayOptions, emptyState, letterFor, parseStored, reportLinks, score } from '@/lib/cissp/trainer.ts';
 import type { LangMode, TrainerState } from '@/lib/cissp/trainer.ts';
+import { CisspComments } from './CisspComments';
 
 const FOCUS_RING =
   'focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950';
@@ -369,6 +370,11 @@ export function CisspTrainer() {
             {mode === 'vi' ? 'Gửi email' : 'Email'}
           </a>
         </p>
+
+        <section aria-label="Comments" className="border-t border-zinc-800 pt-5">
+          {/* key resets to the closed state when the scenario changes */}
+          <CisspComments key={scenario.id} scenarioId={scenario.id} mode={mode} />
+        </section>
       </article>
 
       {overall.answered > 0 && (

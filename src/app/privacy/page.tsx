@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/privacy' },
 };
 
-const LAST_UPDATED = '2026-10-28';
+const LAST_UPDATED = '2026-10-31';
 
 const SECTIONS = [
   {
@@ -28,6 +28,13 @@ const SECTIONS = [
     heading: 'Online tools',
     body: [
       'The tools under /tools (for example the NGINX config analyzer and hardening checkers) process the configuration you paste directly in your browser. That content is not stored on this site.',
+    ],
+  },
+  {
+    heading: 'CISSP practice and comments',
+    body: [
+      'Your answers and language choice on /cissp are saved in your browser (localStorage) and are not sent to this site.',
+      'Comments under CISSP scenarios are provided by giscus and stored in GitHub Discussions on the public damonblog repository. They load only after you click "Show comments". To post, you sign in with GitHub through giscus; this site never receives your GitHub token or account details. Comments are public and subject to GitHub\'s privacy statement (https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).',
     ],
   },
   {
