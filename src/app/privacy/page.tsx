@@ -34,7 +34,7 @@ const SECTIONS = [
     heading: 'CISSP practice and comments',
     body: [
       'Your answers and language choice on /cissp are saved in your browser (localStorage) and are not sent to this site.',
-      'You can leave a comment under a CISSP scenario without an account. We store the name you type (or "Ẩn danh"), the comment text and the time, on Upstash Redis through Vercel. Comments are reviewed before they appear and are then public. Please do not post personal information.',
+      'You can leave a comment under a CISSP scenario without an account. We store the name you type (or "Ẩn danh"), the comment text and the time, on Upstash Redis through Vercel. Comments are public as soon as they are posted and may be removed by the site owner. Please do not post personal information.',
       'To limit spam and allow one vote per person, your IP address is turned into a keyed hash and only that hash is stored; rate-limit counters expire within minutes. To have a comment removed, use the contact details below.',
     ],
   },

@@ -121,7 +121,7 @@ export function CommentModeration() {
             {list(data.pending, true)}
           </section>
           <section className="space-y-3">
-            <h2 className="font-display text-xl font-bold text-white">Recently approved</h2>
+            <h2 className="font-display text-xl font-bold text-white">Published comments</h2>
             {list(data.approved, false)}
           </section>
         </>
