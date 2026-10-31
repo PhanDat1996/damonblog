@@ -9,10 +9,13 @@ import { formatDate } from '@/lib/utils';
 export function buildCategoryMetadata(category: Category): Metadata {
   const config = CATEGORIES[category];
   const BASE_URL = 'https://www.damonsec.com';
+  // A category with no indexable posts is an empty listing; keep it out of the index
+  const hasIndexablePosts = getAllPosts().some((p) => p.category === category && !p.noindex);
   return {
     title: config.metaTitle,
     description: config.metaDescription,
     alternates: { canonical: `${BASE_URL}/blog/${category}` },
+    ...(hasIndexablePosts ? {} : { robots: { index: false, follow: true } }),
     openGraph: {
       title: config.metaTitle,
       description: config.metaDescription,

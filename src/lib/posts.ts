@@ -93,10 +93,11 @@ export async function getPostWithHtml(slug: string): Promise<Post | null> {
 }
 
 // Ranks by shared tags (+1 each) and same category (+1); ties keep newest first.
-export function getRelatedPosts(current: Post, limit = 3): Post[] {
+export function getRelatedPosts(current: Post, limit = 4): Post[] {
   const tags = new Set(current.tags.map((t) => t.toLowerCase()));
+  // noindex posts are excluded so these internal links go to pages Google can index
   return getAllPosts()
-    .filter((p) => p.slug !== current.slug)
+    .filter((p) => p.slug !== current.slug && !p.noindex)
     .map((p) => ({
       post: p,
       score:
@@ -104,7 +105,7 @@ export function getRelatedPosts(current: Post, limit = 3): Post[] {
         (p.category === current.category ? 1 : 0),
     }))
     .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || ((b.post.updated ?? b.post.date) > (a.post.updated ?? a.post.date) ? 1 : -1))
     .slice(0, limit)
     .map((r) => r.post);
 }
