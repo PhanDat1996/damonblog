@@ -15,6 +15,7 @@ const TOOLS = [
   { href: '/tools/nginx-cve-checker', title: 'NGINX CVE Checker', desc: 'Lists known CVEs for an NGINX version and its modules.' },
   { href: '/tools/pg-hardening-checker', title: 'PostgreSQL Hardening Checker', desc: 'Audits postgresql.conf and pg_hba.conf.' },
   { href: '/cka', title: 'CKA Study Tracker', desc: 'Tracks practice against the official CKA curriculum, with lab tasks.' },
+  { href: '/cissp', title: 'CISSP Scenario Training', desc: 'Exam-style scenarios for all 8 domains, explained in English and Vietnamese.' },
 ];
 
 function shortDate(date: string): string {

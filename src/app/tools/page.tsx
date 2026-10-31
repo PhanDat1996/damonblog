@@ -163,6 +163,23 @@ export default function ToolsPage() {
             Open tracker →
           </span>
         </Link>
+        <Link
+          href="/cissp"
+          className="group flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 transition-all hover:border-green-500/40 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-green-400 sm:flex-row sm:items-center sm:gap-6"
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="font-display text-lg font-bold text-white group-hover:text-green-400 transition-colors">
+              CISSP Scenario Training
+            </h3>
+            <p className="mt-1 text-sm text-zinc-400 leading-snug">
+              Exam-style scenarios across all eight CISSP domains. Each answer comes with an explanation for every option,
+              in English and Vietnamese.
+            </p>
+          </div>
+          <span className="inline-flex flex-shrink-0 items-center gap-1 self-start rounded-lg bg-green-400 px-3 py-1.5 font-mono text-xs font-semibold text-zinc-950 group-hover:bg-green-300 transition-colors sm:self-center">
+            Start practice →
+          </span>
+        </Link>
       </section>
 
       {/* CLI tools */}
