@@ -11,6 +11,8 @@ const NAV_LINKS = [
   { href: '/blog', label: 'Blog' },
   { href: '/news', label: 'News' },
   { href: '/tools', label: 'Tools' },
+  { href: '/cissp', label: 'CISSP' },
+  { href: '/cka', label: 'CKA' },
   { href: '/about', label: 'About' },
   { href: '/contact', label: 'Contact' },
 ];
@@ -47,7 +49,7 @@ export default function Navbar() {
                 <Link
                   href={href}
                   className={clsx(
-                    'px-4 py-2 rounded-md font-mono text-sm transition-colors duration-150',
+                    'px-3 lg:px-4 py-2 rounded-md font-mono text-sm transition-colors duration-150',
                     active
                       ? 'text-green-400 bg-green-400/10'
                       : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
@@ -88,7 +90,7 @@ export default function Navbar() {
         id="mobile-menu"
         className={clsx(
           'md:hidden border-t border-zinc-800 bg-zinc-950 px-6 overflow-hidden transition-all duration-200',
-          open ? 'max-h-96 py-4' : 'max-h-0 py-0'
+          open ? 'max-h-[32rem] py-4' : 'max-h-0 py-0'
           // max-h transition instead of conditional render —
           // avoids mount/unmount layout recalculation on each toggle
         )}
