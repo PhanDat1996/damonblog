@@ -6,8 +6,8 @@ import { DOMAINS, getDomain } from '@/lib/cissp/domains.ts';
 import type { Bi, DomainId } from '@/lib/cissp/domains.ts';
 import { SCENARIOS } from '@/lib/cissp/scenarios.ts';
 import type { OptionId } from '@/lib/cissp/scenarios.ts';
-import { LANG_MODES, LETTERS, STORAGE_KEY, displayOptions, emptyState, letterFor, parseStored, reportLinks, score } from '@/lib/cissp/trainer.ts';
-import type { LangMode, TrainerState } from '@/lib/cissp/trainer.ts';
+import { LANG_MODES, LETTERS, LEVELS, STORAGE_KEY, displayOptions, emptyState, filterScenarios, letterFor, parseStored, reportLinks, score } from '@/lib/cissp/trainer.ts';
+import type { LangMode, Level, TrainerState } from '@/lib/cissp/trainer.ts';
 import { CisspComments } from './CisspComments';
 
 const FOCUS_RING =
@@ -45,6 +45,7 @@ export function CisspTrainer() {
   const [state, setState] = useState<TrainerState>(emptyState);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
+  const [level, setLevel] = useState<Level>('all');
   const [currentId, setCurrentId] = useState(SCENARIOS[0].id);
   const [selected, setSelected] = useState<OptionId | null>(null);
   const cardRef = useRef<HTMLElement>(null);
@@ -64,6 +65,7 @@ export function CisspTrainer() {
       const id = decodeURIComponent(window.location.hash.slice(1));
       if (!SCENARIOS.some((s) => s.id === id)) return;
       setFilter('all');
+      setLevel('all');
       setCurrentId(id);
       setSelected(null);
       cardRef.current?.scrollIntoView({ block: 'start' });
@@ -83,12 +85,13 @@ export function CisspTrainer() {
   }, [state, loaded]);
 
   const mode = state.lang;
-  const visible = useMemo(() => (filter === 'all' ? SCENARIOS : SCENARIOS.filter((s) => s.domainId === filter)), [filter]);
+  const visible = useMemo(() => filterScenarios(SCENARIOS, filter, level), [filter, level]);
   const index = Math.max(0, visible.findIndex((s) => s.id === currentId));
   const scenario = visible[index];
   const result = state.results[scenario.id];
   const options = displayOptions(scenario);
   const domain = getDomain(scenario.domainId);
+  const domainTags = [scenario.domainId, ...(scenario.alsoDomains ?? [])].map((d) => `D${getDomain(d).number}`).join(' + ');
   const overall = score(state.results, SCENARIOS);
   const inFilter = score(state.results, visible);
   const report = reportLinks(scenario);
@@ -101,10 +104,11 @@ export function CisspTrainer() {
     cardRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }, []);
 
-  const changeFilter = (f: Filter) => {
+  const changeFilter = (f: Filter, lv: Level = level) => {
     setFilter(f);
-    const list = f === 'all' ? SCENARIOS : SCENARIOS.filter((s) => s.domainId === f);
-    if (!list.some((s) => s.id === currentId)) {
+    setLevel(lv);
+    const list = filterScenarios(SCENARIOS, f, lv);
+    if (list.length && !list.some((s) => s.id === currentId)) {
       setCurrentId(list[0].id);
       setSelected(null);
       history.replaceState(null, '', `#${list[0].id}`);
@@ -170,7 +174,7 @@ export function CisspTrainer() {
           <div className={LABEL}>Domain</div>
           <div className="flex flex-wrap gap-2">
             {(['all', ...DOMAINS.map((d) => d.id)] as Filter[]).map((f) => {
-              const list = f === 'all' ? SCENARIOS : SCENARIOS.filter((s) => s.domainId === f);
+              const list = filterScenarios(SCENARIOS, f, level);
               const sc = score(state.results, list);
               const d = f === 'all' ? null : getDomain(f);
               return (
@@ -198,6 +202,42 @@ export function CisspTrainer() {
           )}
         </div>
 
+        <div className="space-y-2">
+          <div className={LABEL}>{mode === 'vi' ? 'Mức độ' : 'Level'}</div>
+          <div className="flex flex-wrap gap-2">
+            {LEVELS.map((lv) => {
+              const sc = score(state.results, filterScenarios(SCENARIOS, filter, lv.id));
+              return (
+                <button
+                  key={lv.id}
+                  type="button"
+                  aria-pressed={level === lv.id}
+                  onClick={() => changeFilter(filter, lv.id)}
+                  className={clsx(
+                    'rounded-md border px-2.5 py-1 font-mono text-xs transition-colors',
+                    FOCUS_RING,
+                    level === lv.id
+                      ? lv.id === 'hard' ? 'border-amber-500/50 bg-amber-400/10 text-amber-300' : 'border-green-500/50 bg-green-400/10 text-green-300'
+                      : 'border-zinc-700 text-zinc-300 hover:border-zinc-500',
+                  )}
+                >
+                  {mode === 'vi' ? lv.vi : mode === 'en' ? lv.label : `${lv.label} / ${lv.vi}`}{' '}
+                  <span className="text-zinc-500">{sc.answered}/{sc.total}</span>
+                </button>
+              );
+            })}
+          </div>
+          {level === 'hard' && (
+            <p className="text-xs text-zinc-400">
+              {mode === 'en'
+                ? 'All four options are reasonable. The word in capitals decides.'
+                : mode === 'vi'
+                  ? 'Cả 4 phương án đều nghe hợp lý. Chữ viết hoa trong câu hỏi mới là thứ quyết định.'
+                  : 'All four options are reasonable. The word in capitals decides. / Cả 4 phương án đều nghe hợp lý. Chữ viết hoa trong câu hỏi mới là thứ quyết định.'}
+            </p>
+          )}
+        </div>
+
         <nav aria-label="Scenarios" className="space-y-2">
           <div className={LABEL}>
             Scenarios {inFilter.answered > 0 && <span className="normal-case tracking-normal">· {inFilter.correct}/{inFilter.answered} correct</span>}
@@ -211,9 +251,9 @@ export function CisspTrainer() {
                     type="button"
                     onClick={() => go(s.id, false)}
                     aria-current={s.id === scenario.id ? 'true' : undefined}
-                    aria-label={`${i + 1}. ${s.title.en}${r ? (r.correct ? ' (correct)' : ' (incorrect)') : ''}`}
+                    aria-label={`${i + 1}. ${s.title.en}${s.level === 'hard' ? ' (hard)' : ''}${r ? (r.correct ? ' (correct)' : ' (incorrect)') : ''}`}
                     className={clsx(
-                      'h-8 w-8 rounded-md border font-mono text-xs transition-colors',
+                      'relative h-8 w-8 rounded-md border font-mono text-xs transition-colors',
                       FOCUS_RING,
                       s.id === scenario.id && 'ring-1 ring-zinc-300',
                       r?.correct && 'border-green-500/50 bg-green-400/10 text-green-300',
@@ -222,6 +262,7 @@ export function CisspTrainer() {
                     )}
                   >
                     {i + 1}
+                    {s.level === 'hard' && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />}
                   </button>
                 </li>
               );
@@ -243,8 +284,13 @@ export function CisspTrainer() {
               {index + 1}/{visible.length}
             </span>
             <span>
-              D{domain.number} · {pick(domain.name, mode)}
+              {domainTags} · {pick(domain.name, mode)}
             </span>
+            {scenario.level === 'hard' && (
+              <span className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                {mode === 'vi' ? 'Khó' : mode === 'en' ? 'Hard' : 'Hard · Khó'}
+              </span>
+            )}
           </div>
           <h2 id="scenario-title" className="font-display text-xl font-bold text-white md:text-2xl">
             {mode === 'vi' ? scenario.title.vi : scenario.title.en}

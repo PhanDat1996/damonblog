@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { DOMAINS } from './domains.ts';
 import { SCENARIOS } from './scenarios.ts';
-import { displayOptions, letterFor, parseStored, reportLinks, score } from './trainer.ts';
+import { displayOptions, filterScenarios, letterFor, parseStored, reportLinks, score } from './trainer.ts';
 
 test('domains: eight domains, weights sum to 100', () => {
   assert.equal(DOMAINS.length, 8);
@@ -85,4 +85,27 @@ test('reportLinks: prefilled issue and email point at the scenario', () => {
     assert.ok(decodeURIComponent(link).includes(`https://www.damonsec.com/cissp#${s.id}`), link);
     assert.ok(!link.includes(' '), 'spaces are encoded');
   }
+});
+
+test('hard mode: two per domain, valid cross-domain tags, no untranslated text', () => {
+  const hard = SCENARIOS.filter((s) => s.level === 'hard');
+  assert.equal(hard.length, 16);
+  for (const d of DOMAINS) assert.equal(hard.filter((s) => s.domainId === d.id).length, 2, d.id);
+  for (const s of hard) {
+    for (const d of s.alsoDomains ?? []) {
+      assert.ok(DOMAINS.some((x) => x.id === d), `${s.id}: ${d}`);
+      assert.notEqual(d, s.domainId, `${s.id}: alsoDomains repeats the primary domain`);
+    }
+  }
+  assert.ok(hard.filter((s) => s.alsoDomains?.length).length >= 8, 'at least half are cross-domain');
+  assert.ok(!JSON.stringify(SCENARIOS).includes('"TODO"'), 'placeholder text left');
+});
+
+test('filterScenarios: domain includes cross-domain scenarios; level splits core and hard', () => {
+  const all = filterScenarios(SCENARIOS, 'all', 'all');
+  assert.equal(all.length, SCENARIOS.length);
+  assert.equal(filterScenarios(SCENARIOS, 'all', 'hard').length + filterScenarios(SCENARIOS, 'all', 'core').length, SCENARIOS.length);
+  const d6 = filterScenarios(SCENARIOS, 'd6', 'hard').map((s) => s.id);
+  assert.ok(d6.includes('hard-acquisition-first-step'), 'D1 scenario tagged with D6 shows under D6');
+  for (const s of filterScenarios(SCENARIOS, 'd3', 'core')) assert.notEqual(s.level, 'hard');
 });
