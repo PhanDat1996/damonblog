@@ -7,7 +7,7 @@ const CISSP_CSP = [
   "img-src 'self' data:",
   "font-src 'self' data:",
   `connect-src 'self'${isDev ? ' ws:' : ''}`,
-  'frame-src https://giscus.app',
+  "frame-src 'none'",
   "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -72,8 +72,8 @@ const nextConfig = {
         ],
       },
       {
-        // The CISSP page embeds giscus comments. Lock it down: the only frame allowed
-        // is giscus.app, no third-party scripts, no plugins, and it cannot be framed.
+        // The CISSP page takes anonymous comments. Lock it down: first-party only,
+        // no frames, no third-party scripts, no plugins, and it cannot be framed.
         // 'unsafe-inline' is needed for Next's inline hydration data and JSON-LD.
         source: '/cissp/:path*',
         headers: [{ key: 'Content-Security-Policy', value: CISSP_CSP }],
