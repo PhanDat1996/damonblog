@@ -1,266 +1,263 @@
 ---
 title: "NGINX Upstream Keepalive: Stop Port Exhaustion 502s"
 date: "2024-11-28"
-updated: "2026-10-28"
-excerpt: "Configured keepalive in your NGINX upstream but still see TIME_WAIT pile up? The two lines it needs, the timeout trap, and how to verify reuse works."
+updated: "2026-10-31"
+excerpt: "Lab-tested NGINX upstream keepalive: why keepalive alone still churns connections, the 502s a half config hides behind retries, and how to verify reuse."
 tags: ["nginx", "infrastructure", "production", "networking", "troubleshooting"]
 featured: true
 category: "nginx"
+lab: true
 ---
 
-You added `keepalive 64;` to your upstream block, reloaded NGINX, and ran the load test again. `ss` still shows thousands of sockets in `TIME_WAIT` to the backend, and the 502s with `99: Cannot assign requested address` are still there.
+You added `keepalive 64;` to an upstream block and reloaded NGINX, but `ss` still shows thousands of sockets in `TIME_WAIT` to the backend. Under heavier load, the error log fills with `99: Cannot assign requested address` and clients get 502s.
 
-That's the classic outcome, because on most NGINX installs `keepalive` alone does nothing. It needs two more lines in the `location`, and one timeout has to line up with the backend's. This post explains what each piece does, so you can tell from the config whether connection reuse is really happening.
+On NGINX before 1.29.7, `keepalive` on its own doesn't reuse anything. It needs two more lines in every proxying `location`. This post shows what each piece changes, measured on a lab VM, including one failure mode the usual advice doesn't mention.
+
+> **Lab environment:** Ubuntu 26.04 LTS, kernel `7.0.0-42-generic`, 4 vCPU, NGINX `1.28.3 (Ubuntu)`, wrk 4.1.0, Python 3.14 HTTP/1.1 test backends, everything on `127.0.0.1`. Default `ip_local_port_range` `32768 60999`, `tcp_tw_reuse=2`. Changing sysctls needed root and was rolled back after each test. NGINX 1.29.7's new defaults couldn't be tested on this version.
 
 ---
 
-## TL;DR
+## Quick answer
 
 ```nginx
 upstream app_backend {
     server 127.0.0.1:8080;
-    keepalive 64;              # idle connections cached per worker
-    keepalive_timeout 50s;     # lower than the backend's own idle timeout
+    keepalive 16;              # idle connections cached per worker
+    keepalive_timeout 50s;     # keep this below the backend's idle timeout
 }
 
 server {
     location / {
         proxy_pass http://app_backend;
-        proxy_http_version 1.1;          # required before NGINX 1.29.7
-        proxy_set_header Connection "";  # required before NGINX 1.29.7
+        proxy_http_version 1.1;          # needed before NGINX 1.29.7
+        proxy_set_header Connection "";  # needed before NGINX 1.29.7
     }
 }
 ```
 
-Check your version with `nginx -v`. **NGINX 1.29.7 changed the defaults**: upstream keepalive is on (32 connections per worker), and HTTP/1.1 is the default proxy protocol. Most distro packages are older, so for them all three pieces above are mandatory. On newer versions, setting them explicitly is harmless and keeps the config portable.
+In the lab, with all three pieces, the same 10-second load test used **64 backend connections instead of about 15,600**, ran about **3x faster**, and left 35 sockets in `TIME_WAIT` instead of 10,708.
+
+Check your version with `nginx -v`. NGINX 1.29.7 turned upstream keepalive on by default and made HTTP/1.1 the default proxy protocol. Most distro packages are older. On newer versions, setting the lines explicitly is harmless.
 
 ---
 
-## Why one connection per request hurts
+## The test: four upstreams, one load
 
-Without keepalive, NGINX opens a fresh TCP connection to the backend for every proxied request and closes it afterwards:
+Four identical backends, each behind a location with a different amount of keepalive config:
 
-```
-NGINX                         Backend
-  | --- SYN ------------------> |
-  | <-- SYN-ACK --------------- |   handshake: one extra round trip
-  | --- ACK + HTTP request ---> |
-  | <-- HTTP response --------- |
-  | --- FIN ------------------> |   teardown
-  | <-- FIN / ACK ------------- |
-  |                             |
-  [socket sits in TIME_WAIT for 60s on the side that closed first]
-```
+| Location | `keepalive 16` | `proxy_http_version 1.1` | `Connection ""` |
+|---|---|---|---|
+| `/none/` | no | no | no |
+| `/only/` | yes | no | no |
+| `/http11/` | yes | yes | no |
+| `/full/` | yes | yes | yes |
 
-With keepalive, the handshake happens once and later requests reuse the open connection:
+Load: `wrk -t2 -c20 -d10s` per location. Each backend counts the TCP connections it accepted. TIME_WAIT was counted with `ss` right after each run.
 
 ```
-NGINX                         Backend
-  | --- SYN / SYN-ACK / ACK --> |   once
-  | --- request 1 ------------> |
-  | <-- response 1 ------------ |
-  | --- request 2 ------------> |   same connection
-  | <-- response 2 ------------ |
-  |          ...                |
+Requests/sec:   1552.52
+  none: TIME_WAIT=10708 backend conns=15557 reqs=15557 errors=0 retried=0
+Requests/sec:   1561.87
+  only: TIME_WAIT=10897 backend conns=15662 reqs=15662 errors=0 retried=0
+Requests/sec:   1580.72
+  http11: TIME_WAIT=10711 backend conns=15841 reqs=15841 errors=0 retried=0
+Requests/sec:   4798.18
+  full: TIME_WAIT=35 backend conns=64 reqs=48038 errors=0 retried=0
 ```
 
-The handshake costs latency and backend CPU on every request, but the bigger problem at scale is `TIME_WAIT`.
+| Location | Req/s | Backend connections | Requests per connection | TIME_WAIT after |
+|---|---|---|---|---|
+| `/none/` | 1,552 | 15,557 | 1 | 10,708 |
+| `/only/` | 1,561 | 15,662 | 1 | 10,897 |
+| `/http11/` | 1,580 | 15,841 | 1 | 10,711 |
+| `/full/` | 4,798 | 64 | ~750 | 35 |
 
-### The port math
+`keepalive 16` alone and `keepalive` + HTTP/1.1 behaved exactly like no keepalive: one connection per request. Only the full config reused connections.
 
-Each outgoing connection from NGINX to one backend IP:port needs its own local ephemeral port:
-
-```bash
-cat /proc/sys/net/ipv4/ip_local_port_range
-# 32768   60999
-```
-
-That's about 28,000 ports. On Linux a closed socket stays in `TIME_WAIT` for 60 seconds, and while it does, that port can't be reused for the same destination (unless `tcp_tw_reuse` allows it).
-
-- 200 req/s with no reuse = 200 new connections per second
-- 200 × 60 s = **12,000** sockets in TIME_WAIT at steady state
-- At about 470 req/s you exceed **28,000**, and the pool is gone
-
-When it's gone, `connect()` fails with `EADDRNOTAVAIL` and NGINX logs:
-
-```
-connect() to 127.0.0.1:8080 failed (99: Cannot assign requested address) while connecting to upstream
-```
-
-The app is fine. NGINX is fine. The NGINX host ran out of local ports. Whether TIME_WAIT lands on the NGINX host or the backend depends on which side closes first, but with a backend on the same host, it's the same box either way. [Linux TIME_WAIT Explained](/blog/linux-time-wait-explained) goes deeper on the state itself.
-
-Watch it happen:
-
-```bash
-watch -n 1 "ss -Htan state time-wait '( dport = :8080 )' | wc -l"
-```
+The reason is in what NGINX sends upstream. By default it uses HTTP/1.0 and sets its own `Connection: close` header. HTTP/1.1 alone doesn't help, because NGINX still sends `Connection: close` and the backend hangs up after the response. `proxy_set_header Connection ""` removes that header.
 
 ---
 
-## Why keepalive needs two extra lines
+## Where the lab disagreed: a half config can cause hidden errors
 
-When NGINX proxies a request, it's an HTTP client talking to your backend. Before 1.29.7, two defaults sabotage connection reuse:
+The common explanation is that `keepalive` without the two headers "does nothing, no error, no warning". That held for backends that answer `Connection: close` with a `Connection: close` response header of their own (the run above).
 
-1. **`proxy_http_version` defaults to 1.0.** HTTP/1.0 has no persistent connections by default.
-2. **NGINX sends `Connection: close` to the upstream.** It doesn't forward the client's `Connection` header. It sets its own, and the default is `close`. That tells the backend to hang up after the response.
+The first run used a backend that closed the connection after each response **without** saying so in a header. NGINX then treated the connection as reusable, cached it, and wrote the next request into a socket the backend had already closed:
 
-So you need:
-
-```nginx
-proxy_http_version 1.1;          # speak HTTP/1.1, where connections persist by default
-proxy_set_header Connection "";  # replace the default "close" with nothing
+```
+2026/10/30 15:35:01 [error] 19196#19196: *32813 upstream prematurely closed connection while reading response header from upstream, client: 127.0.0.1, server: , request: "GET /http11/x HTTP/1.1", upstream: "http://127.0.0.1:9403/http11/x", host: "127.0.0.1:8401"
 ```
 
-Without both, `keepalive` in the upstream block allocates a cache that never gets anything put into it. You get no error and no warning.
+| Location (silent-close backend) | Requests | "prematurely closed" errors |
+|---|---|---|
+| `/only/` | 16,141 | 8,448 |
+| `/http11/` | 16,135 | 8,683 |
 
-**WebSockets:** if the same location proxies WebSocket upgrades, you can't hardcode `Connection ""`. Use a `map` instead:
+wrk reported **no** failed requests. wrk only sends GET, and NGINX retried each failure on a fresh connection (`proxy_next_upstream error` is the default), so the access log showed `ups=502, 200` and the client got a 200. With POST, or with `proxy_next_upstream off`, those would have been client-visible 502s. A half-finished keepalive config isn't always harmless. Either finish it or remove `keepalive`.
+
+---
+
+## Port exhaustion, reproduced
+
+Every new upstream connection needs a local ephemeral port, and a closed socket keeps its port in `TIME_WAIT` for 60 seconds. To reproduce exhaustion without huge load, the lab narrowed the range to 500 ports, with an automatic timed rollback:
+
+```
+net.ipv4.ip_local_port_range = 40000	40499
+net.ipv4.tcp_tw_reuse = 2
+--- loopback, no keepalive, 500 local ports
+  Non-2xx or 3xx responses: 86034
+Requests/sec:   9632.72
+  TIME_WAIT=560 errors99=86050
+  10315 200
+  86050 502
+```
+
+The high req/s is fake: most responses were instant 502s. The error log line:
+
+```
+2026/10/30 15:39:04 [crit] 19198#19198: *96268 connect() to 127.0.0.1:9401 failed (99: Cannot assign requested address) while connecting to upstream, client: 127.0.0.1, server: , request: "GET /none/x HTTP/1.1", upstream: "http://127.0.0.1:9401/none/x", host: "127.0.0.1:8401"
+```
+
+Two things worth knowing from this run:
+
+- The message is logged at **`[crit]`**, not `[error]`. Alerting or a grep that only matches `[error]` misses it.
+- **`tcp_tw_reuse=2` (the default) didn't prevent it**, even though all traffic was on loopback, where that setting is supposed to allow reuse. Don't rely on the sysctl instead of keepalive.
+
+Same 500-port range with the full keepalive config:
+
+```
+--- loopback, full keepalive, 500 local ports
+Requests/sec:   4784.61
+  TIME_WAIT=38 errors99=0 backend conns=130 reqs=95936
+  47893 200
+      4 499
+```
+
+Zero port errors, 130 connections for about 96,000 requests. (The 4 × 499 are wrk closing connections at the end of the run.)
+
+The math for a default range: about 28,000 ports, 60 s in TIME_WAIT, so roughly 470 new connections per second to one backend `ip:port` is the ceiling. [Linux TIME_WAIT Explained](/blog/linux-time-wait-explained) covers the state itself.
+
+---
+
+## keepalive N is not a connection limit
+
+`keepalive 16` caps the **idle** connections each worker keeps, not the active ones. With `wrk -c200` against `/full/`:
+
+```
+--- keepalive is not a connection cap: 200 concurrent clients
+  ESTABLISHED nginx->backend during load: 200
+Requests/sec:   4129.57
+  ESTABLISHED after load: 64  TIME_WAIT: 74
+```
+
+200 connections to the backend while 200 clients were active, then 64 left (16 × 4 workers) once load stopped. Size the backend for the active peak, and expect `keepalive × worker_processes` idle connections afterwards. To actually cap connections per backend, use `max_conns` on the `server` line.
+
+| Directive | Context | Meaning |
+|---|---|---|
+| `keepalive N` | upstream | Max idle connections cached per worker |
+| `keepalive_requests` | upstream | Requests per connection before NGINX closes it (default 1000) |
+| `keepalive_timeout` | upstream | How long an idle cached connection is kept (default 60s) |
+
+On versions before 1.29.7, put balancing methods like `least_conn` or `ip_hash` **before** `keepalive` in the block.
+
+---
+
+## The slow /full/ run: Nagle and delayed ACK
+
+The very first `/full/` run was slower than no keepalive at all:
+
+```
+Requests/sec:    486.34
+  full: TIME_WAIT=0 ESTABLISHED(nginx->backend)=4 backend conns=21 reqs=4885
+```
+
+Connections were reused (21 connections), but each request averaged about 40 ms upstream. The test backend wrote headers and body in separate small writes without `TCP_NODELAY`. On a reused connection, Nagle's algorithm held the second write until the first was ACKed, and the ACK was delayed. Setting `TCP_NODELAY` on the backend took the same config to 4,798 req/s.
+
+Most production app servers set `TCP_NODELAY` already. If enabling keepalive makes latency jump to a steady ~40 ms, check the backend's socket options before blaming NGINX.
+
+---
+
+## The timeout mismatch: didn't reproduce in the lab
+
+The usual advice says NGINX's upstream `keepalive_timeout` must be shorter than the backend's idle timeout. Otherwise NGINX reuses a connection the backend just closed, and you get rare `upstream prematurely closed connection` or `104: Connection reset by peer` 502s.
+
+The lab tried to trigger it. Two upstreams pointed at backends that close idle connections after 1 second: one with NGINX's default 60s `keepalive_timeout`, one with `500ms`. 20 clients each sent a request roughly every second (jittered ±50 ms), so many requests landed right around the backend's close:
+
+```
+POST /idle/x gap~1.0s: 200:1188
+POST /idleshort/x gap~1.0s: 200:1188
+GET /idle/x gap~1.0s: 200:806
+GET /idle/x gap~0.98s: 200:821
+GET /idleshort/x gap~1.0s: 200:805
+GET /idleshort/x gap~0.98s: 200:821
+```
+
+Zero errors and zero retries with either timeout. (Each POST run also had 20 `404`s from requests sent while the test config was still reloading. They're unrelated and left out above.)
+
+The reason: when the backend closes an idle connection, it sends a FIN, and NGINX watches its cached idle connections for exactly that and drops them. The race only exists in the small window where NGINX picks a connection and writes to it while the FIN is still in flight. On loopback that window is microseconds. Over a real network, or with a backend that resets connections instead of closing them, it's wider.
+
+Keeping NGINX's timeout below the backend's is still the cheap, correct setting, because it removes the race entirely:
+
+| Backend | Idle keepalive default to check |
+|---|---|
+| Node.js `http.Server` | `keepAliveTimeout` (5 s) |
+| Gunicorn | `--keep-alive` (2 s) |
+| Apache httpd | `KeepAliveTimeout` (5 s) |
+
+Defaults change between versions, so check yours. Just don't expect this to explain frequent 502s. If you see many `prematurely closed` errors, the silent-close behaviour above or a crashing backend is more likely.
+
+---
+
+## Verify reuse on your own system
+
+Compare ESTABLISHED and TIME_WAIT to the backend port during load:
+
+```bash
+ss -Htan state established '( dport = :8080 )' | wc -l
+ss -Htan state time-wait   '( dport = :8080 )' | wc -l
+```
+
+Reuse working: ESTABLISHED stays roughly flat, TIME_WAIT stays low. Not working: TIME_WAIT climbs with request rate, as in the 10,000+ numbers above.
+
+Check every location that proxies to a keepalive upstream:
+
+```bash
+nginx -T 2>/dev/null | grep -nE "upstream|keepalive|proxy_http_version|Connection"
+```
+
+The [NGINX Config Analyzer](/tools/nginx-config-analyzer) does this from `nginx -T` output and lists locations missing the headers.
+
+`stub_status` won't help here: its `Waiting` counter is idle **client** connections, not upstream ones.
+
+For WebSocket locations, don't hardcode `Connection ""`. Use a map so upgrade requests still work:
 
 ```nginx
 map $http_upgrade $connection_upgrade {
     default upgrade;
     ''      '';
 }
-
-location /ws/ {
-    proxy_pass http://app_backend;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $connection_upgrade;
-}
 ```
 
-Requests without an `Upgrade` header get an empty `Connection` and stay eligible for keepalive.
+and `proxy_set_header Connection $connection_upgrade;`.
 
 ---
 
-## What each directive actually controls
+## When keepalive isn't the problem
 
-```nginx
-upstream app_backend {
-    server 127.0.0.1:8080;
-    keepalive 64;
-    keepalive_requests 1000;
-    keepalive_timeout 50s;
-}
-```
-
-| Directive | Context | Default | Meaning |
-|---|---|---|---|
-| `keepalive N` | upstream | off before 1.29.7; 32 since | Max **idle** connections cached **per worker process** |
-| `keepalive_requests` | upstream | 1000 (100 before 1.19.10) | Requests per connection before NGINX closes it, which frees per-connection memory |
-| `keepalive_timeout` | upstream | 60s | How long an idle cached connection is kept |
-
-**`keepalive 64` is not a connection limit.** Under load NGINX can have far more than 64 active connections to the backend. The number only caps how many *idle* connections each worker keeps after requests finish. If a request arrives and no idle connection is available, NGINX opens a new one. When a request finishes and the worker already holds 64 idle connections, the least recently used one is closed.
-
-Rough sizing: total idle connections = `keepalive` × `worker_processes`. Make sure the backend can hold that many open connections. For thread-per-connection backends, each idle connection can pin a thread.
-
-To limit concurrent connections to a server, use `max_conns` on the `server` line. That's a separate setting.
-
-**Order matters on older versions.** Before 1.29.7, a balancing method like `least_conn` or `ip_hash` must appear **before** `keepalive` in the block.
-
----
-
-## The timeout trap: random 502s after enabling keepalive
-
-Keepalive fixed the TIME_WAIT pile-up, but now you see a few 502s per hour, never reproducible:
-
-```
-upstream prematurely closed connection while reading response header from upstream
-recv() failed (104: Connection reset by peer) while reading response header from upstream
-```
-
-Cause: the backend closes idle connections **sooner** than NGINX does. NGINX picks a cached connection that looks open and writes a request. The backend had already closed that connection, so the request fails.
-
-Rule: **NGINX's upstream `keepalive_timeout` must be shorter than the backend's idle timeout.** The NGINX default is 60 seconds, which is longer than many app servers:
-
-| Backend | Idle keepalive timeout default |
-|---|---|
-| Node.js `http.Server` | `keepAliveTimeout` 5 s |
-| Gunicorn | `--keep-alive` 2 s |
-| Apache httpd | `KeepAliveTimeout` 5 s |
-
-Defaults change between versions, so check the docs for yours. Either lower NGINX's side:
-
-```nginx
-keepalive_timeout 4s;   # under Node's 5s
-```
-
-Or raise the backend's. For example, in Node.js:
-
-```javascript
-server.keepAliveTimeout = 65000;  // 65 s
-server.headersTimeout   = 66000;  // keep this above keepAliveTimeout
-```
-
-and set NGINX below it (`keepalive_timeout 60s;`).
-
-NGINX retries many of these failures automatically for idempotent requests (`proxy_next_upstream error` is on by default), which is why the errors look rare and random. POST and PATCH requests aren't retried once sent, so those are the ones that surface as 502s.
-
----
-
-## Verify reuse is actually happening
-
-Don't trust the config. Measure.
-
-### Count connection churn
-
-```bash
-# Run load (against a system you own), then compare:
-ss -Htan state established '( dport = :8080 )' | wc -l
-ss -Htan state time-wait   '( dport = :8080 )' | wc -l
-```
-
-- **Reuse working:** ESTABLISHED stays roughly stable and TIME_WAIT stays low.
-- **Not working:** TIME_WAIT climbs in step with request rate.
-
-### Watch `connect()` calls on a worker
-
-```bash
-pgrep -f "nginx: worker" | head -1
-strace -f -e trace=connect -p <worker_pid> 2>&1 | head -20
-```
-
-With reuse, `connect()` calls to the backend are rare. Without it, you see one per request. `strace` slows the process, so keep it short on production.
-
-**What doesn't work:** `stub_status`. Its `Waiting` counter counts idle **client** keepalive connections, not upstream connections. It tells you nothing about the upstream pool.
-
-### Check the config itself
-
-```bash
-nginx -T 2>/dev/null | grep -nE "upstream|keepalive|proxy_http_version|Connection"
-```
-
-Every upstream with `keepalive` should have matching `proxy_http_version 1.1` and `Connection ""` in **every** location that proxies to it. It's easy to fix one location and miss another. The [NGINX Config Analyzer](/tools/nginx-config-analyzer) checks this for you: paste the `nginx -T` output and it lists upstreams whose locations are missing the headers.
-
----
-
-## When keepalive isn't enough
-
-Keepalive solves connection churn. If 502s continue after it's verified working, the bottleneck is elsewhere:
-
-- **Backend capacity:** accept-queue overflow, killed workers, `pm.max_children` in PHP-FPM. See [NGINX 502 Bad Gateway Under Load](/blog/nginx-502-under-load).
-- **NGINX limits:** `worker_connections` and open files. See [Too Many Open Files on Linux](/blog/too-many-open-files-linux-fix).
-- **Specific error messages:** look them up in the [NGINX 502 error-log table](/blog/nginx-502-bad-gateway-fix-linux).
-
----
-
-## Checklist
-
-1. `nginx -v`: before 1.29.7, `keepalive` needs `proxy_http_version 1.1` and `proxy_set_header Connection ""`.
-2. Add both to every location that proxies to the upstream. Use the `map` pattern for WebSockets.
-3. On older versions, put `least_conn`/`ip_hash` before `keepalive`.
-4. Set upstream `keepalive_timeout` below the backend's idle timeout.
-5. Verify with `ss`: stable ESTABLISHED, low TIME_WAIT.
+If 502s continue with reuse verified, look at backend capacity ([NGINX 502 under load](/blog/nginx-502-under-load)), the specific error message ([502 error-log table](/blog/nginx-502-bad-gateway-fix-linux)), or NGINX's own limits ([too many open files](/blog/too-many-open-files-linux-fix)).
 
 ---
 
 ## FAQ
 
-**Does `keepalive_timeout` in the upstream block affect clients?**
-No. Inside `upstream` it controls idle connections to the backend. The `keepalive_timeout` in `http`/`server` context is a different directive that controls client connections.
+**Does keepalive_timeout in the upstream block affect clients?**
+No. Inside `upstream` it controls idle connections to the backend. The `keepalive_timeout` in `http` or `server` context is a different directive for client connections.
 
-**How big should `keepalive` be?**
-Start around 16–64 per worker and watch TIME_WAIT under realistic load. If it still climbs, raise it. Remember the total is per worker, so 8 workers × 64 = up to 512 idle connections the backend must tolerate.
+**How big should keepalive be?**
+The lab used 16 per worker and reused connections fine at 4,800 req/s. Raise it if TIME_WAIT still climbs under realistic load, and remember the total idle count is per worker.
+
+**Does tcp_tw_reuse make keepalive unnecessary?**
+No. In the lab, port exhaustion still happened with `tcp_tw_reuse=2` on loopback.
 
 **Does upstream keepalive work with HTTPS backends?**
-Yes. Cached connections keep their TLS session, which saves even more than with plain HTTP, because each new connection would otherwise need a TLS handshake too.
+Yes. Reused connections also skip the TLS handshake, which saves more than with plain HTTP. HTTPS upstreams weren't part of this lab.
