@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ANONYMOUS, BODY_MAX, cleanText, validateComment } from './validate.ts';
-import { createMemoryStore, getStore, sortForDisplay } from './store.ts';
+import { createMemoryStore, fromHash, getStore, sortForDisplay } from './store.ts';
 import { adminAction, adminList, listComments, postComment, voteComment } from './handlers.ts';
 
 const ENV = { ADMIN_TOKEN: 'test-admin-token-0123456789abcdef' };
@@ -141,4 +141,16 @@ test('sortForDisplay: votes desc, then oldest first', () => {
     { votes: 1, createdAt: '2026-01-01' },
   ]);
   assert.deepEqual(s.map((x) => x.createdAt), ['2026-01-03', '2026-01-01', '2026-01-02']);
+});
+
+test('fromHash: reads the raw HGETALL reply Upstash returns with deserialization off', () => {
+  const flat = ['id', 'abc', 'scenarioId', SCENARIO, 'name', 'An', 'body', '123', 'createdAt', '2026-10-31T09:00:00.000Z', 'status', 'approved', 'votes', '2'];
+  const c = fromHash(flat);
+  assert.ok(c);
+  assert.equal(c!.body, '123', 'numeric-looking body stays a string');
+  assert.equal(c!.votes, 2);
+  assert.equal(c!.status, 'approved');
+  assert.deepEqual(fromHash(Object.fromEntries([['id', 'abc'], ['status', 'approved'], ['votes', 1]])) !== null, true, 'object form still works');
+  assert.equal(fromHash([]), null, 'missing key');
+  assert.equal(fromHash(null), null);
 });

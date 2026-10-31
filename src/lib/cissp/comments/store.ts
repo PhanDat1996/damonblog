@@ -124,7 +124,28 @@ const K = {
   rate: (key: string) => `cissp:rl:${key}`,
 };
 
-function fromHash(h: Record<string, string> | null): StoredComment | null {
+/**
+ * HGETALL result as a record. With automaticDeserialization off, Upstash returns the raw
+ * Redis reply: a flat [field, value, field, value, ...] array, not an object.
+ */
+export function hashToRecord(raw: unknown): Record<string, string> | null {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
+    const out: Record<string, string> = {};
+    for (let i = 0; i + 1 < raw.length; i += 2) out[String(raw[i])] = String(raw[i + 1]);
+    return out;
+  }
+  if (typeof raw === 'object') {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) out[k] = typeof v === 'string' ? v : String(v);
+    return out;
+  }
+  return null;
+}
+
+export function fromHash(raw: unknown): StoredComment | null {
+  const h = hashToRecord(raw);
   if (!h || !h.id) return null;
   return {
     id: h.id,
@@ -145,10 +166,10 @@ export function createUpstashStore(url: string, token: string): CommentStore {
     if (ids.length === 0) return [];
     const p = redis.pipeline();
     for (const id of ids) p.hgetall(K.comment(id));
-    const rows = (await p.exec()) as (Record<string, string> | null)[];
+    const rows = (await p.exec()) as unknown[];
     return rows.map(fromHash).filter((c): c is StoredComment => c !== null);
   };
-  const get = async (id: string) => fromHash(await redis.hgetall<Record<string, string>>(K.comment(id)));
+  const get = async (id: string) => fromHash(await redis.hgetall(K.comment(id)));
 
   return {
     async add(input, status = 'approved') {
