@@ -1,3 +1,19 @@
+const isDev = process.env.NODE_ENV !== 'production';
+
+const CISSP_CSP = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  `connect-src 'self'${isDev ? ' ws:' : ''}`,
+  "frame-src 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
@@ -54,6 +70,17 @@ const nextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
         ],
+      },
+      {
+        // The CISSP page takes anonymous comments. Lock it down: first-party only,
+        // no frames, no third-party scripts, no plugins, and it cannot be framed.
+        // 'unsafe-inline' is needed for Next's inline hydration data and JSON-LD.
+        source: '/cissp/:path*',
+        headers: [{ key: 'Content-Security-Policy', value: CISSP_CSP }],
+      },
+      {
+        source: '/cissp',
+        headers: [{ key: 'Content-Security-Policy', value: CISSP_CSP }],
       },
       {
         source: '/(.*)\\.(svg|ico|png|jpg|jpeg|webp|woff|woff2)',
