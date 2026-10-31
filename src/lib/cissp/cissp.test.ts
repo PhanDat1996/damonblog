@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { DOMAINS } from './domains.ts';
 import { SCENARIOS } from './scenarios.ts';
-import { displayOptions, letterFor, parseStored, score } from './trainer.ts';
+import { displayOptions, letterFor, parseStored, reportLinks, score } from './trainer.ts';
 
 test('domains: eight domains, weights sum to 100', () => {
   assert.equal(DOMAINS.length, 8);
@@ -74,4 +74,15 @@ test('parseStored: tolerates junk and recomputes correctness', () => {
   assert.equal(state.results[SCENARIOS[1].id], undefined);
   assert.equal(state.results.unknown, undefined);
   assert.equal(score(state.results, SCENARIOS).answered, 2);
+});
+
+test('reportLinks: prefilled issue and email point at the scenario', () => {
+  const s = SCENARIOS[0];
+  const { github, email } = reportLinks(s);
+  assert.ok(github.startsWith('https://github.com/PhanDat1996/damonblog/issues/new?title='));
+  assert.ok(email.startsWith('mailto:ptdat653@gmail.com?subject='));
+  for (const link of [github, email]) {
+    assert.ok(decodeURIComponent(link).includes(`https://www.damonsec.com/cissp#${s.id}`), link);
+    assert.ok(!link.includes(' '), 'spaces are encoded');
+  }
 });

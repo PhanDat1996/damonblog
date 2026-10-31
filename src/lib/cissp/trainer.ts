@@ -88,3 +88,26 @@ export function score(results: Record<string, Result>, scenarios: Scenario[]) {
   const answered = scenarios.filter((s) => results[s.id]);
   return { answered: answered.length, correct: answered.filter((s) => results[s.id].correct).length, total: scenarios.length };
 }
+
+const ISSUES_URL = 'https://github.com/PhanDat1996/damonblog/issues/new';
+const REPORT_EMAIL = 'ptdat653@gmail.com';
+const PAGE_URL = 'https://www.damonsec.com/cissp';
+
+/** Prefilled GitHub issue and email links for reporting a mistake in one scenario. */
+export function reportLinks(scenario: Scenario): { github: string; email: string } {
+  const url = `${PAGE_URL}#${scenario.id}`;
+  const title = `CISSP: ${scenario.title.en} (${scenario.id})`;
+  const body = [
+    `Scenario: ${scenario.title.en} / ${scenario.title.vi}`,
+    `Link: ${url}`,
+    '',
+    'What is wrong or unclear? / Câu này sai hoặc chưa rõ ở đâu?',
+    '',
+  ].join('\n');
+  const q = (params: Record<string, string>) =>
+    Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  return {
+    github: `${ISSUES_URL}?${q({ title, body })}`,
+    email: `mailto:${REPORT_EMAIL}?${q({ subject: title, body })}`,
+  };
+}

@@ -6,7 +6,7 @@ import { DOMAINS, getDomain } from '@/lib/cissp/domains.ts';
 import type { Bi, DomainId } from '@/lib/cissp/domains.ts';
 import { SCENARIOS } from '@/lib/cissp/scenarios.ts';
 import type { OptionId } from '@/lib/cissp/scenarios.ts';
-import { LANG_MODES, LETTERS, STORAGE_KEY, displayOptions, emptyState, letterFor, parseStored, score } from '@/lib/cissp/trainer.ts';
+import { LANG_MODES, LETTERS, STORAGE_KEY, displayOptions, emptyState, letterFor, parseStored, reportLinks, score } from '@/lib/cissp/trainer.ts';
 import type { LangMode, TrainerState } from '@/lib/cissp/trainer.ts';
 
 const FOCUS_RING =
@@ -90,6 +90,7 @@ export function CisspTrainer() {
   const domain = getDomain(scenario.domainId);
   const overall = score(state.results, SCENARIOS);
   const inFilter = score(state.results, visible);
+  const report = reportLinks(scenario);
 
   const go = useCallback((id: string, focus = true) => {
     setCurrentId(id);
@@ -357,6 +358,17 @@ export function CisspTrainer() {
             <span className="font-mono text-xs text-zinc-500">All done in this set / Đã làm hết</span>
           )}
         </footer>
+
+        <p className="text-xs text-zinc-500">
+          {mode === 'vi' ? 'Thấy câu này sai hoặc chưa rõ?' : mode === 'en' ? 'Spotted a mistake or something unclear?' : 'Spotted a mistake? / Thấy câu này sai hoặc chưa rõ?'}{' '}
+          <a href={report.github} target="_blank" rel="noopener noreferrer" className="text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400">
+            {mode === 'vi' ? 'Báo qua GitHub' : 'Report on GitHub'} ↗
+          </a>
+          <span className="text-zinc-600"> · </span>
+          <a href={report.email} className="text-zinc-300 underline decoration-zinc-600 underline-offset-2 hover:text-green-400">
+            {mode === 'vi' ? 'Gửi email' : 'Email'}
+          </a>
+        </p>
       </article>
 
       {overall.answered > 0 && (
