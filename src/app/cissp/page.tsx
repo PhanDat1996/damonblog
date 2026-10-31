@@ -43,27 +43,27 @@ const jsonLd = {
 const APPROACH = [
   {
     en: 'Read the last sentence first. Words like FIRST, BEST, MOST and NEXT decide the answer; several options are often correct but only one fits the qualifier.',
-    vi: 'Đọc câu cuối trước. Các từ như ĐẦU TIÊN, TỐT NHẤT, NHIỀU NHẤT, TIẾP THEO quyết định đáp án; thường có nhiều lựa chọn đúng nhưng chỉ một lựa chọn khớp với từ hạn định.',
+    vi: 'Đọc câu hỏi ở cuối trước. Mấy chữ như TRƯỚC TIÊN, TỐT NHẤT, NHIỀU NHẤT, TIẾP THEO mới là thứ quyết định đáp án: thường có vài phương án nghe đều đúng, nhưng chỉ một cái khớp với chữ đó.',
   },
   {
     en: 'Think like a manager or adviser, not a technician. Governance, process and business impact usually come before tools.',
-    vi: 'Suy nghĩ như nhà quản lý hoặc cố vấn, không phải kỹ thuật viên. Quản trị, quy trình và tác động kinh doanh thường đi trước công cụ.',
+    vi: 'Nghĩ như manager hoặc advisor, đừng nghĩ như người ngồi gõ lệnh. Governance, quy trình và ảnh hưởng tới business thường đi trước công cụ.',
   },
   {
     en: 'Human safety always comes first. Any option that puts people at risk is wrong.',
-    vi: 'An toàn con người luôn đứng đầu. Lựa chọn nào gây nguy hiểm cho con người đều sai.',
+    vi: 'An toàn con người luôn đứng đầu. Phương án nào đẩy người vào nguy hiểm thì loại ngay.',
   },
   {
     en: 'Prefer the option that fixes the root cause over one that fixes a single instance or adds a compensating control.',
-    vi: 'Ưu tiên lựa chọn xử lý nguyên nhân gốc hơn lựa chọn chỉ sửa một trường hợp hoặc thêm biện pháp bù trừ.',
+    vi: 'Ưu tiên phương án sửa tận gốc, hơn là chỉ vá một trường hợp hay thêm compensating control.',
   },
   {
     en: 'Use only the facts in the question. If it does not mention a regulation, a budget or a tool, do not assume one.',
-    vi: 'Chỉ dùng dữ kiện có trong câu hỏi. Nếu đề không nhắc đến quy định, ngân sách hay công cụ nào thì đừng tự giả định.',
+    vi: 'Chỉ dùng dữ kiện có trong đề. Đề không nhắc tới quy định, ngân sách hay công cụ nào thì đừng tự thêm vào.',
   },
   {
     en: 'When every option is true, pick the broadest one: the answer that includes or enables the others.',
-    vi: 'Khi mọi lựa chọn đều đúng, chọn lựa chọn bao quát nhất: đáp án bao hàm hoặc tạo điều kiện cho các đáp án còn lại.',
+    vi: 'Khi phương án nào cũng đúng, chọn cái bao quát nhất: cái bao luôn hoặc mở đường cho mấy cái còn lại.',
   },
 ];
 
@@ -83,8 +83,8 @@ export default function CisspPage() {
             and the rule to remember for similar exam questions.
           </p>
           <p lang="vi" className="text-zinc-400">
-            Luyện tập qua các tình huống thực tế thuộc cả tám domain của CISSP. Chọn đáp án, sau đó đọc giải thích vì sao từng lựa chọn đúng
-            hoặc sai, và quy tắc cần nhớ cho các câu hỏi tương tự trong đề thi.
+            Luyện CISSP qua các tình huống thực tế, đủ cả 8 domain. Chọn đáp án xong, bạn sẽ thấy vì sao từng phương án đúng hay sai,
+            kèm một mẹo ngắn để lần sau gặp dạng tương tự trong đề là nhận ra ngay.
           </p>
         </div>
         <ul className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs text-zinc-400">
@@ -110,7 +110,7 @@ export default function CisspPage() {
       <section id="approach" aria-labelledby="approach-heading" className="scroll-mt-24 space-y-4">
         <h2 id="approach-heading" className="font-display text-2xl font-bold text-white">
           How to approach CISSP questions
-          <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">Cách tiếp cận câu hỏi CISSP</span>
+          <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">Cách làm câu hỏi CISSP</span>
         </h2>
         <ol className="max-w-3xl list-decimal space-y-3 pl-5 text-sm leading-relaxed">
           {APPROACH.map((a) => (
@@ -125,7 +125,7 @@ export default function CisspPage() {
       <section id="all-scenarios" aria-labelledby="all-heading" className="scroll-mt-24 space-y-6">
         <h2 id="all-heading" className="font-display text-2xl font-bold text-white">
           All scenarios
-          <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">Danh sách tình huống</span>
+          <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">Toàn bộ tình huống</span>
         </h2>
         <div className="grid gap-8 md:grid-cols-2">
           {DOMAINS.map((d) => (

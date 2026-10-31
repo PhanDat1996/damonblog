@@ -127,7 +127,7 @@ export function CisspTrainer() {
   };
 
   const resetAll = () => {
-    if (!window.confirm('Clear all your answers? / Xóa toàn bộ kết quả đã làm?')) return;
+    if (!window.confirm('Clear all your answers? / Xóa hết kết quả đã làm?')) return;
     setState((s) => ({ ...s, results: {} }));
     setSelected(null);
   };
@@ -317,7 +317,7 @@ export function CisspTrainer() {
             <p className={clsx('font-mono text-sm font-semibold', result.correct ? 'text-green-300' : 'text-red-300')}>
               {result.correct
                 ? 'Correct / Chính xác'
-                : `Not quite. The answer is ${letterFor(scenario, scenario.answer)}. / Chưa đúng. Đáp án là ${letterFor(scenario, scenario.answer)}.`}
+                : `Not quite. The answer is ${letterFor(scenario, scenario.answer)}. / Chưa đúng rồi. Đáp án là ${letterFor(scenario, scenario.answer)}.`}
             </p>
             <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/50 p-5">
               <div className={LABEL}>Explanation / Giải thích</div>
@@ -351,7 +351,7 @@ export function CisspTrainer() {
           </div>
           {nextUnanswered ? (
             <button type="button" className={BTN_SECONDARY} onClick={() => go(nextUnanswered.id)}>
-              Next unanswered / Câu chưa làm
+              Next unanswered / Câu tiếp chưa làm
             </button>
           ) : (
             <span className="font-mono text-xs text-zinc-500">All done in this set / Đã làm hết</span>
