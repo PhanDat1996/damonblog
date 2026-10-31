@@ -6,8 +6,9 @@ import { CisspTrainer } from './_components/CisspTrainer';
 
 const PAGE_URL = 'https://www.damonsec.com/cissp';
 const TITLE = 'CISSP Scenario Training';
+const HARD_COUNT = SCENARIOS.filter((s) => s.level === 'hard').length;
 const DESCRIPTION =
-  `${SCENARIOS.length} CISSP practice scenarios across all 8 domains, each with a detailed explanation of why every option is right or wrong, in English and Vietnamese.`;
+  `${SCENARIOS.length} CISSP practice scenarios across all 8 domains, ${HARD_COUNT} of them in hard mode, each with a detailed explanation of why every option is right or wrong, in English and Vietnamese.`;
 
 export const metadata: Metadata = {
   title: `${TITLE}: practice questions with explanations (EN/VI)`,
@@ -88,7 +89,7 @@ export default function CisspPage() {
           </p>
         </div>
         <ul className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs text-zinc-400">
-          <li>{SCENARIOS.length} scenarios · 8 domains</li>
+          <li>{SCENARIOS.length} scenarios · 8 domains · {HARD_COUNT} hard</li>
           <li>English + Tiếng Việt</li>
           <li>Answers stay in this browser</li>
         </ul>
