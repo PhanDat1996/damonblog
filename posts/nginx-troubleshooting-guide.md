@@ -121,7 +121,7 @@ restorecon -Rv /srv/site
 
 More on fixing permissions without `chmod 777`: [Permission denied on Linux](/blog/permission-denied-linux-fix-chmod-chown).
 
-**`directory index ... is forbidden`**: the URL maps to a directory with no `index` file, and `autoindex` is off. Usually the wrong `root`, or the build didn't produce `index.html`.
+**`directory index ... is forbidden`**: the URL maps to a directory with no `index` file, and `autoindex` is off. Usually the wrong `root`, or the build didn't produce `index.html`. A lab walkthrough of every 403 log line, including why `try_files $uri $uri/ =404` still returns 403, is in [NGINX 403 Forbidden](/blog/nginx-403-forbidden-fix).
 
 **`access forbidden by rule`**: an `allow`/`deny` matched. Search `nginx -T` for `deny`.
 
@@ -170,7 +170,7 @@ If the 413 persists after raising it, the request probably matched a regex locat
 
 499 is NGINX-specific: **the client closed the connection** before NGINX sent a response. NGINX didn't fail. Something upstream of it (a browser, a mobile app, a load balancer, a health checker) gave up waiting.
 
-Many 499s on one endpoint mean that endpoint is slower than its callers' timeouts. Compare `$request_time` in the access log with the client or load balancer timeout. The fix is on the slow backend, or in aligning timeouts so the outer layer waits longer than the inner one.
+Many 499s on one endpoint mean that endpoint is slower than its callers' timeouts. Compare `$request_time` in the access log with the client or load balancer timeout. The fix is on the slow backend, or in aligning timeouts so the outer layer waits longer than the inner one. The [NGINX 499 lab](/blog/nginx-499-client-closed-request) shows the backend keeps working after the client leaves, and what `proxy_ignore_client_abort` does to the access log.
 
 ---
 
