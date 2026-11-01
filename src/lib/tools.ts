@@ -108,6 +108,25 @@ export const WEB_TOOLS: WebTool[] = [
     pitch: 'postgresql.conf and pg_hba.conf, checked the way PostgreSQL reads them.',
     relatedPosts: [],
   },
+  {
+    slug: 'sni-split-proxy',
+    title: 'SNI Split Proxy',
+    glyph: 'SNI',
+    tagline: 'Local proxy that splits the TLS Client Hello so an SNI filter can\'t read the hostname.',
+    input: 'blocked domains, port, split size',
+    checks: [
+      'Python script, standard library only',
+      'Run, browser and curl commands for your settings',
+      'PAC file that sends only blocked domains through it',
+      'Tested against a real ISP SNI filter',
+    ],
+    note: 'The page builds commands; the proxy runs on your machine',
+    seoTitle: 'SNI Split Proxy — Get Past SNI Filtering Resets',
+    description:
+      'HTTPS reset right after Client Hello? Download a small Python proxy that splits the Client Hello, and get the run, browser and PAC config for your domains.',
+    pitch: 'Split the Client Hello locally so an SNI filter can\'t read the hostname.',
+    relatedPosts: ['python-sni-split-proxy', 'tls-connection-reset-sni-blocking'],
+  },
 ];
 
 export function getTool(slug: string): WebTool {
