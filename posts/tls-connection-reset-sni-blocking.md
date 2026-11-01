@@ -253,7 +253,7 @@ The 127.0.0.1 DNS answer and the SNI reset are two separate controls. Fixing the
 |---|---|
 | DNS on your own router (parental control, AdGuard/Pi-hole) | Remove the rule in the router, or point clients at another resolver |
 | DNS on the ISP resolver | Use another resolver or DoH; this fixes name resolution only |
-| SNI/Host reset inside the ISP | Not fixable from DNS. Use a different network (mobile data), a VPN, or ask the ISP |
+| SNI/Host reset inside the ISP | Not fixable from DNS. Use a different network (mobile data), a VPN, or ask the ISP. If the filter doesn't reassemble TCP, a [local proxy that splits the Client Hello](/blog/python-sni-split-proxy) also works |
 | Corporate firewall or proxy | It's policy. Talk to IT; don't tunnel around it |
 
 Things that won't help against an on-path SNI filter: changing DNS, switching IPv4/IPv6, flushing caches, or trying another browser. Encrypted Client Hello (ECH) hides the SNI, but only when both the browser and the site's CDN support it, so it is not something you can turn on for one blocked site.
