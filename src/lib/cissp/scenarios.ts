@@ -3,6 +3,7 @@
 
 import type { Bi, DomainId } from './domains.ts';
 import { MORE_SCENARIOS } from './scenarios-more.ts';
+import { HARD_SCENARIOS } from './scenarios-hard.ts';
 
 export type OptionId = 'A' | 'B' | 'C' | 'D';
 
@@ -25,6 +26,10 @@ export interface Scenario {
   /** One-line rule to remember for similar exam questions. */
   takeaway: Bi;
   concepts: string[];
+  /** 'hard': every option is plausible; the qualifier in the question decides. */
+  level?: 'hard';
+  /** Other domains a cross-domain scenario also tests. */
+  alsoDomains?: DomainId[];
 }
 
 const CORE_SCENARIOS: Scenario[] = [
@@ -1390,7 +1395,7 @@ const CORE_SCENARIOS: Scenario[] = [
 ];
 
 /** All scenarios, grouped by domain (sort is stable, so order within a domain is kept). */
-export const SCENARIOS: Scenario[] = [...CORE_SCENARIOS, ...MORE_SCENARIOS].sort((a, b) => a.domainId.localeCompare(b.domainId));
+export const SCENARIOS: Scenario[] = [...CORE_SCENARIOS, ...MORE_SCENARIOS, ...HARD_SCENARIOS].sort((a, b) => a.domainId.localeCompare(b.domainId));
 
 export function getScenario(id: string): Scenario | undefined {
   return SCENARIOS.find((s) => s.id === id);

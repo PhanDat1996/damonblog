@@ -111,3 +111,19 @@ export function reportLinks(scenario: Scenario): { github: string; email: string
     email: `mailto:${REPORT_EMAIL}?${q({ subject: title, body })}`,
   };
 }
+
+export type Level = 'all' | 'core' | 'hard';
+export const LEVELS: { id: Level; label: string; vi: string }[] = [
+  { id: 'all', label: 'All levels', vi: 'Tất cả' },
+  { id: 'core', label: 'Core', vi: 'Cơ bản' },
+  { id: 'hard', label: 'Hard', vi: 'Khó' },
+];
+
+/** Scenarios matching a domain (primary or cross-domain) and a level. */
+export function filterScenarios(list: Scenario[], domain: string, level: Level): Scenario[] {
+  return list.filter(
+    (s) =>
+      (domain === 'all' || s.domainId === domain || (s.alsoDomains ?? []).includes(domain as Scenario['domainId'])) &&
+      (level === 'all' || (level === 'hard') === (s.level === 'hard')),
+  );
+}
