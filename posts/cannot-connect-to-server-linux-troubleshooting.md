@@ -29,6 +29,7 @@ curl -sv --connect-timeout 3 http://10.0.1.50:8080/health
 | `Connection refused` | The server host (or a firewall) actively rejected with RST/ICMP | Step 3 |
 | `Connection timed out` / hangs | Packets are silently dropped somewhere | Step 4 |
 | `No route to host` | ICMP host-unreachable: firewalld's default reject, or ARP failing | Step 4 |
+| `Connection reset by peer` right after the TLS `Client hello` | Something on the path read the hostname and reset the flow; see [proving SNI blocking](/blog/tls-connection-reset-sni-blocking) | — |
 
 ---
 
