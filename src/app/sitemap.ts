@@ -11,6 +11,7 @@ const TOOL_SLUGS = [
   'nginx-cis-hardening-checker',
   'nginx-cve-checker',
   'pg-hardening-checker',
+  'sni-split-proxy',
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
