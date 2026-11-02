@@ -91,6 +91,7 @@ export default function CisspPage() {
         </div>
         <ul className="flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs text-zinc-400">
           <li>{SCENARIOS.length} scenarios · 8 domains · {HARD_COUNT} hard · {EXPERT_COUNT} expert</li>
+          <li>Random tests: 5, 10, 20 or 50 questions</li>
           <li>English + Tiếng Việt</li>
           <li>Answers stay in this browser</li>
         </ul>

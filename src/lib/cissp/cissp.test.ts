@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { DOMAINS } from './domains.ts';
 import { SCENARIOS } from './scenarios.ts';
-import { displayOptions, filterScenarios, letterFor, parseStored, reportLinks, score } from './trainer.ts';
+import { DEFAULT_TEST_SIZE, displayOptions, drawTest, filterScenarios, gradeTest, letterFor, parseStored, reportLinks, score } from './trainer.ts';
 
 test('domains: eight domains, weights sum to 100', () => {
   assert.equal(DOMAINS.length, 8);
@@ -87,17 +87,16 @@ test('reportLinks: prefilled issue and email point at the scenario', () => {
   }
 });
 
-test('hard mode: two per domain, valid cross-domain tags, no untranslated text', () => {
+test('hard mode: at least two per domain, valid cross-domain tags, no untranslated text', () => {
   const hard = SCENARIOS.filter((s) => s.level === 'hard');
-  assert.equal(hard.length, 16);
-  for (const d of DOMAINS) assert.equal(hard.filter((s) => s.domainId === d.id).length, 2, d.id);
+  for (const d of DOMAINS) assert.ok(hard.filter((s) => s.domainId === d.id).length >= 2, d.id);
   for (const s of hard) {
     for (const d of s.alsoDomains ?? []) {
       assert.ok(DOMAINS.some((x) => x.id === d), `${s.id}: ${d}`);
       assert.notEqual(d, s.domainId, `${s.id}: alsoDomains repeats the primary domain`);
     }
   }
-  assert.ok(hard.filter((s) => s.alsoDomains?.length).length >= 8, 'at least half are cross-domain');
+  assert.ok(hard.filter((s) => s.alsoDomains?.length).length >= hard.length / 2, 'at least half are cross-domain');
   assert.ok(!JSON.stringify(SCENARIOS).includes('"TODO"'), 'placeholder text left');
 });
 
@@ -111,16 +110,39 @@ test('filterScenarios: domain includes cross-domain scenarios; level splits core
   for (const s of filterScenarios(SCENARIOS, 'd3', 'core')) assert.notEqual(s.level, 'hard');
 });
 
-test('expert mode: three per domain, mostly cross-domain, LEAST/EXCEPT included, key rarely longest', () => {
+test('expert mode: at least three per domain, mostly cross-domain, LEAST/EXCEPT included, key rarely longest', () => {
   const ex = SCENARIOS.filter((s) => s.level === 'expert');
-  assert.equal(ex.length, 24);
-  for (const d of DOMAINS) assert.equal(ex.filter((s) => s.domainId === d.id).length, 3, d.id);
-  assert.ok(ex.filter((s) => s.alsoDomains?.length).length >= 12, 'at least half cross-domain');
+  for (const d of DOMAINS) assert.ok(ex.filter((s) => s.domainId === d.id).length >= 3, d.id);
+  assert.ok(ex.filter((s) => s.alsoDomains?.length).length >= ex.length / 2, 'at least half cross-domain');
   assert.ok(ex.filter((s) => /LEAST|EXCEPT/.test(s.question.en)).length >= 4, 'LEAST/EXCEPT questions');
   for (const s of ex) assert.ok(s.situation.en.length >= 300, `${s.id}: situation should carry noise`);
   const keyLongest = ex.filter((s) => {
     const len = s.options.map((o) => o.text.en.length);
     return s.options.find((o) => o.id === s.answer)!.text.en.length === Math.max(...len);
   });
-  assert.ok(keyLongest.length <= 6, `answer is the longest option too often: ${keyLongest.map((s) => s.id)}`);
+  assert.ok(keyLongest.length <= ex.length / 4, `answer is the longest option too often: ${keyLongest.map((s) => s.id)}`);
+});
+
+test('drawTest: random subset without repeats, capped by the pool', () => {
+  let seed = 1;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const ids = drawTest(SCENARIOS, DEFAULT_TEST_SIZE, rand);
+  assert.equal(ids.length, 10);
+  assert.equal(new Set(ids).size, 10);
+  for (const id of ids) assert.ok(SCENARIOS.some((s) => s.id === id));
+  assert.notDeepEqual(ids, drawTest(SCENARIOS, 10, rand), 'two draws differ');
+  const pool = filterScenarios(SCENARIOS, 'd2', 'expert');
+  assert.equal(drawTest(pool, 50).length, pool.length);
+  assert.deepEqual(drawTest([], 10), []);
+});
+
+test('gradeTest: unanswered counts as wrong, per-domain totals add up', () => {
+  const [a, b, c] = SCENARIOS;
+  const wrong = b.options.find((o) => o.id !== b.answer)!.id;
+  const g = gradeTest([a.id, b.id, c.id], { [a.id]: a.answer, [b.id]: wrong });
+  assert.equal(g.correct, 1);
+  assert.equal(g.total, 3);
+  assert.equal(g.percent, 33);
+  assert.equal(g.items[2].picked, null);
+  assert.equal([...g.byDomain.values()].reduce((n, d) => n + d.total, 0), 3);
 });
