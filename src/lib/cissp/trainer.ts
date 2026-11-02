@@ -128,3 +128,33 @@ export function filterScenarios(list: Scenario[], domain: string, level: Level):
       (level === 'all' || (level === 'core' ? !s.level : s.level === level)),
   );
 }
+
+export const TEST_SIZES = [5, 10, 20, 50] as const;
+export const DEFAULT_TEST_SIZE = 10;
+
+/** Random draw of up to `size` scenario ids from the pool (Fisher–Yates, no repeats). */
+export function drawTest(pool: Scenario[], size: number, rand: () => number = Math.random): string[] {
+  const ids = pool.map((s) => s.id);
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  return ids.slice(0, Math.max(0, Math.min(size, ids.length)));
+}
+
+/** Score of a finished test, overall and per primary domain. Unanswered questions count as wrong. */
+export function gradeTest(ids: string[], answers: Record<string, OptionId>) {
+  const items = ids.map((id) => {
+    const s = SCENARIOS.find((x) => x.id === id)!;
+    return { scenario: s, picked: answers[id] ?? null, correct: answers[id] === s.answer };
+  });
+  const byDomain = new Map<Scenario['domainId'], { correct: number; total: number }>();
+  for (const it of items) {
+    const d = byDomain.get(it.scenario.domainId) ?? { correct: 0, total: 0 };
+    d.total += 1;
+    if (it.correct) d.correct += 1;
+    byDomain.set(it.scenario.domainId, d);
+  }
+  const correct = items.filter((it) => it.correct).length;
+  return { items, correct, total: items.length, percent: items.length ? Math.round((correct / items.length) * 100) : 0, byDomain };
+}
