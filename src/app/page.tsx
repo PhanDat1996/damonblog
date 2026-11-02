@@ -120,18 +120,19 @@ export default function HomePage() {
           <div className="space-y-6">
             <p className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3 py-1 font-mono text-xs text-zinc-400">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
-              L3 support engineer · Ho Chi Minh City
+              L3 support · 8 yrs in prod · Saigon
             </p>
             <h1 className="font-display text-4xl font-extrabold tracking-tight text-white sm:text-5xl">
-              Notes from fixing Linux and NGINX{' '}
+              The obvious fix didn&apos;t work.{' '}
               <span className="bg-gradient-to-r from-green-400 to-emerald-300 bg-clip-text text-transparent">
-                in production
+                Here&apos;s what did.
               </span>
             </h1>
             <p className="max-w-xl font-sans text-lg leading-relaxed text-zinc-400">
-              I&apos;m Damon, an L3 support engineer at OPSWAT. Before that I ran servers at
-              Vietnix, an Anti-DDoS hosting company. This is where I write down how I debugged
-              things: mostly Linux, NGINX and security hardening.
+              I&apos;m Damon, the L3 engineer a ticket reaches after the first two fixes
+              failed. I started out running Anti-DDoS hosting at Vietnix and now do escalations at
+              OPSWAT. These are my notes on what was actually going on: mostly Linux, NGINX and
+              security hardening.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Link
