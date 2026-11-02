@@ -229,7 +229,7 @@ grep -E "Accepted|sudo:" /var/log/auth.log            # new logins or sudo after
 ps -eo user,pid,ppid,lstart,cmd | grep -E "^www-data|^nginx|^apache"   # shells or downloaders running as the web user
 ```
 
-A shell, `curl`, `wget` or `python` process owned by the web server user, with the web server as its parent, is a strong sign of code execution. On Linux, [last and lastb](/blog/linux-check-last-login-users) show logins that followed.
+A shell, `curl`, `wget` or `python` process owned by the web server user, with the web server as its parent, is a strong sign of code execution. On Linux, [last and lastb](/blog/linux-log-analysis-guide) show logins that followed.
 
 ---
 
@@ -270,4 +270,4 @@ No. Neither NGINX nor Apache log request bodies by default. You see the method, 
 
 ---
 
-*Related: [grep for log searching](/blog/search-text-in-files-linux-grep), [CIS Windows Server Level 1 hardening](/blog/cis-windows-server-level1-hardening) for enabling the audit policies above, and the [Cyber Kill Chain](/blog/cyber-kill-chain) for mapping what you find to attack stages.*
+*Related: [grep for log searching](/blog/linux-find-file-by-name-and-size), [CIS Windows Server Level 1 hardening](/blog/cis-windows-server-level1-hardening) for enabling the audit policies above, and the [Cyber Kill Chain](/blog/cyber-kill-chain) for mapping what you find to attack stages.*

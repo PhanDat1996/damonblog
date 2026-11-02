@@ -1,9 +1,9 @@
 ---
-title: "Linux Log Analysis: Read System Logs to Find Root Cause"
+title: "Linux Log Analysis: System Logs, Root Cause and Last Logins"
 date: "2026-04-21"
-updated: "2026-10-28"
-excerpt: "Where Linux logs live, what each field in a syslog, journald and kernel line means, and the log patterns behind OOM kills, disk errors and failed units."
-tags: ["linux", "logs", "troubleshooting", "debugging", "monitoring"]
+updated: "2026-11-02"
+excerpt: "Where Linux logs live, how to read syslog, journald and kernel lines, the patterns behind OOM kills and failed units, and who logged in with last and lastb."
+tags: ["linux", "logs", "troubleshooting", "debugging", "monitoring", "security"]
 featured: false
 category: "linux"
 ---
@@ -51,7 +51,7 @@ On any systemd distribution, two logging paths usually run side by side:
 Two traps:
 
 - **No rsyslog, no text files.** Debian 12 and many minimal cloud images don't install rsyslog, so `/var/log/syslog` and `auth.log` simply don't exist. Everything is in the journal.
-- **Volatile journal.** If `/var/log/journal/` doesn't exist, journald usually keeps logs only in `/run/log/journal/` (RAM) and they're lost on reboot. Check this *before* you need logs from a crash. The [journalctl time-range guide](/blog/journalctl-filter-time-range) covers making it persistent.
+- **Volatile journal.** If `/var/log/journal/` doesn't exist, journald usually keeps logs only in `/run/log/journal/` (RAM) and they're lost on reboot. Check this *before* you need logs from a crash. The [journalctl time-range guide](/blog/monitor-real-time-logs-linux) covers making it persistent.
 
 ---
 
@@ -128,7 +128,7 @@ These are the lines worth searching for first, because each one points at a spec
 | `INFO: task <name>:<pid> blocked for more than 120 seconds` | kernel | A task was stuck in D state (uninterruptible I/O) for 2 minutes. Usually slow or dead storage, or a hung NFS mount. |
 | `<unit>: Main process exited, code=exited, status=1/FAILURE` | systemd | The service's own process exited with code 1. The reason is in the lines just **before** this one. |
 | `<unit>: Main process exited, code=killed, status=9/KILL` | systemd | Something sent SIGKILL: the OOM killer, a stop timeout, or a person. Check the kernel log at the same second. |
-| `<unit>: Start request repeated too quickly.` | systemd | The unit hit its start rate limit and systemd stopped trying. See [restart failures](/blog/systemctl-restart-service-not-working). |
+| `<unit>: Start request repeated too quickly.` | systemd | The unit hit its start rate limit and systemd stopped trying. See [restart failures](/blog/systemctl-service-not-starting-fix). |
 | `Failed password for <user> from <ip>` | sshd | Wrong password. `invalid user` in the line means the account doesn't exist at all. |
 | `Accepted publickey for <user> from <ip>` | sshd | Successful login. This is the line that matters after a burst of failures. |
 
@@ -228,7 +228,94 @@ journalctl -b -p err -o json --no-pager | jq -r '._SYSTEMD_UNIT // .SYSLOG_IDENT
 grep "Failed password" /var/log/auth.log | grep -oE "from [0-9.]+" | sort | uniq -c | sort -rn | head
 ```
 
-More grep patterns, including context lines and searching compressed logs, are in [grep for log searching](/blog/search-text-in-files-linux-grep).
+More grep patterns, including context lines and searching compressed logs, are in [grep for log searching](/blog/linux-find-file-by-name-and-size).
+
+---
+
+## Check last logins: last, lastb, lastlog, who
+
+Something changed on the server overnight and nobody admits to it, or you saw a login alert from an IP you don't recognize. First question: who logged in, from where, and when?
+
+```bash
+last -Fi | head -20      # recent logins and logouts, full timestamps, IPs   (/var/log/wtmp)
+sudo lastb -Fi | head    # recent FAILED login attempts, root needed       (/var/log/btmp)
+lastlog                  # most recent login per account                   (/var/log/lastlog)
+who                      # who is logged in right now
+w                        # ... and what they're running
+```
+
+### `last`: login and logout history
+
+```
+deploy   pts/1        198.51.100.23    Tue Oct 28 03:12:44 2026 - Tue Oct 28 03:19:02 2026  (00:06)
+damon    pts/0        10.0.1.42        Mon Oct 27 09:15:10 2026   still logged in
+ops      pts/1        10.0.1.50        Sun Oct 26 14:00:12 2026 - crash                     (03:10)
+reboot   system boot  0.0.0.0          Sun Oct 26 17:11:30 2026   still running
+
+wtmp begins Wed Oct  1 00:00:04 2026
+```
+
+`pts/N` is SSH or a terminal emulator, `tty1` the local console, `0.0.0.0` a local or boot record. `reboot` lines are boots, not users. The end column matters:
+
+| Shows | Meaning |
+|---|---|
+| `still logged in` | Session is open now |
+| `- 03:19 (00:06)` | Normal logout |
+| `gone - no logout` | Session ended without a logout record (connection dropped, process killed) |
+| `down` | System was shut down while the user was logged in |
+| `crash` | No clean shutdown was recorded before the next boot |
+
+```bash
+last deploy                                       # one user
+last -x reboot shutdown                           # boots and shutdowns
+last -i -s "2026-10-27" -t "2026-10-28 06:00"     # time window
+last -f /var/log/wtmp.1                           # the previous (rotated) file
+```
+
+`wtmp begins ...` is how far back the file goes. It's usually rotated monthly, keeping one old copy, so `last` alone covers roughly one to two months.
+
+### `lastb`: failed logins and brute force
+
+`ssh:notty` in `lastb` output means the attempt came over SSH and never got a terminal, which is normal for failed SSH logins.
+
+```bash
+sudo lastb -i | awk 'NF > 3 {print $3}' | sort | uniq -c | sort -rn | head    # by source IP
+sudo lastb    | awk 'NF > 3 {print $1}' | sort | uniq -c | sort -rn | head    # by username
+
+IP=203.0.113.45
+sudo lastb -i | grep -c "$IP"         # failed attempts
+last -i | grep "$IP"                  # any success from the same address?
+```
+
+Hundreds of failures against `root`, `admin`, `test` are background noise on any server with port 22 open. They matter when the usernames are **your** real account names, or when a failure burst is followed by a **successful** login from the same IP.
+
+### `lastlog`, `who` and `w`
+
+```bash
+lastlog -t 7          # accounts that logged in during the last 7 days
+lastlog -b 90         # accounts with no login in the last 90 days (candidates to lock)
+who -b                # time of last boot
+w                     # idle time, load, and the command each session is running
+```
+
+A service account like `postgres` or `www-data` with a recent login is a red flag: those accounts shouldn't have interactive sessions. `/var/log/lastlog` is a sparse file indexed by UID; `ls -l` can show it as gigabytes, `du -h` shows its real size. Don't delete it.
+
+### What these tools don't show
+
+- **`su` and `sudo` aren't logins.** They don't appear in `last`. They're in the auth log or the journal.
+- **Not every SSH session creates a wtmp entry.** Commands run over SSH without a terminal may not show up in `last`.
+- **root can edit these files.** Compare with the journal or a remote log copy before trusting `last` as evidence.
+
+The authoritative record of SSH authentication is sshd's own log:
+
+```bash
+grep -E "Accepted|Failed password|Invalid user" /var/log/auth.log | tail -50    # /var/log/secure on RHEL
+journalctl -u ssh -u sshd --since "7 days ago" --grep "Accepted|Failed|Invalid user" --no-pager
+```
+
+`Accepted publickey for deploy ... ED25519 SHA256:Qm9v...` tells you more than `last` does: the **method** and the key fingerprint, which you can match against `~deploy/.ssh/authorized_keys` with `ssh-keygen -lf`.
+
+Newer distributions are replacing wtmp and lastlog (32-bit timestamps, overflow in 2038) with `wtmpdb` (read with `wtmpdb last`) and `lastlog2`. If `last` or `lastlog` is missing or empty on a recent system, check for those. The sshd log in the journal works the same everywhere.
 
 ---
 
@@ -240,7 +327,8 @@ More grep patterns, including context lines and searching compressed logs, are i
 4. Compare against the same window on a normal day; chase what's new.
 5. Read the lines right before each `Failed`/`exited` line. That's where the cause is.
 6. Check rotated `.1` and `.gz` files if the event is older than the current log.
+7. Unexplained change? `last -Fi`, `sudo lastb` and the sshd log: who was on the box, and how.
 
 ---
 
-*Related: [journalctl time filters](/blog/journalctl-filter-time-range) for precise windows, [real-time log monitoring](/blog/monitor-real-time-logs-linux) to watch a problem as it happens, and [disk full cleanup](/blog/disk-full-linux-cleanup) when logs themselves are what filled the disk.*
+*Related: [Monitor Linux logs](/blog/monitor-real-time-logs-linux) for precise journalctl time windows and watching a problem as it happens, and [disk full cleanup](/blog/check-disk-usage-linux-du-df) when logs themselves are what filled the disk.*

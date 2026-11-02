@@ -406,4 +406,4 @@ The filter only reads the start of the flow. Splitting later packets adds latenc
 No. Here 5 worked and 100 didn't. Different DPI products parse differently, so run the one-packet probe with a few split points first.
 
 **Why does it need DoH?**
-On this network the router's resolver returned `127.0.0.1` for the blocked domain. Without an honest resolver, the proxy would connect to localhost. See [How to Check Which DNS Server Linux Is Using](/blog/how-to-check-dns-server-linux) for finding which resolver is answering.
+On this network the router's resolver returned `127.0.0.1` for the blocked domain. Without an honest resolver, the proxy would connect to localhost. See [How to Check Which DNS Server Linux Is Using](/blog/dns-not-resolving-linux-fix) for finding which resolver is answering.

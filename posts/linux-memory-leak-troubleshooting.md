@@ -1,8 +1,8 @@
 ---
 title: "Linux Memory Leak Troubleshooting: Prove It, Then Find It"
 date: "2026-04-21"
-updated: "2026-10-28"
-excerpt: "Service gets OOM-killed every few days? Use RSS, PSS and smaps to tell a real memory leak from cache and allocator growth, then find which process leaks."
+updated: "2026-11-02"
+excerpt: "Read free and top memory correctly, then use RSS, PSS and smaps to tell a real memory leak from cache and allocator growth, and find which process leaks."
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
 category: "linux"
@@ -12,7 +12,7 @@ The service restarts every three days. Nobody touched it. In the kernel log ther
 
 That looks like a leak. Sometimes it is. Sometimes it's a cache with no size limit, an allocator that doesn't return memory to the OS, or a container limit set lower than the application's normal working set. Each one has a different fix, so the first job is to prove which one you have.
 
-If you just need to know how much memory the box has free, see [Check Memory Usage in Linux](/blog/linux-check-memory-usage-free-top). This post is about a process whose memory keeps growing.
+If you just need to know how much memory the box has free, start with **Check memory usage: reading free and top** below. The rest of this post is about a process whose memory keeps growing.
 
 ---
 
@@ -26,6 +26,85 @@ grep -E '^(Rss|Pss|Anonymous|Swap):' /proc/<PID>/smaps_rollup
 ```
 
 A leak is **anonymous memory that keeps growing even when load is flat**, and does not come back down. Everything below is about measuring that properly.
+
+---
+
+## Check memory usage: reading free and top
+
+`free -h` says you have 213 MB free on a 16 GB server. The monitoring dashboard says memory is fine. Neither is wrong. Linux puts idle RAM to work as disk cache, so the `free` column is almost always small on a healthy server. The number that answers "am I running out of memory?" is `available`. Check this before you go leak hunting.
+
+```bash
+free -h                                         # system overview: read "available"
+ps -eo pid,user,rss,comm --sort=-rss | head     # biggest processes by resident memory
+top                                             # live view, press M to sort by memory
+```
+
+```
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       8.4Gi       213Mi       1.2Gi       6.6Gi       4.4Gi
+Swap:          4.0Gi       128Mi       3.9Gi
+```
+
+| Column | What it is | Should you worry? |
+|---|---|---|
+| `total` | RAM visible to the kernel | — |
+| `used` | Memory in use (see note below) | Only together with `available` |
+| `free` | Pages holding nothing at all | Almost never. Low is normal |
+| `shared` | Mostly tmpfs and shared memory (`/dev/shm`) | If it keeps growing, check tmpfs mounts |
+| `buff/cache` | Page cache, buffers, reclaimable kernel slab | It's mostly borrowable |
+| `available` | Kernel's **estimate** of what new programs can get without swapping | **This is the one** |
+
+So the server above has 4.4 GB of headroom, not 213 MB. In `top`, the same figure is `avail Mem` at the end of the swap line.
+
+Not everything in `buff/cache` can be dropped. tmpfs and shared memory are counted there and can't be freed by the cache shrinker, and dirty pages must be written to disk first. `available` (from `MemAvailable` in `/proc/meminfo`, kernel 3.14+) already accounts for that, which is why it's smaller than `free + buff/cache`.
+
+A note on `used`: older procps versions computed it as `total - free - buffers - cache`. procps-ng 4.0.1 and later compute it as `total - available`. Same server, different `used` depending on the distro release, so don't compare it across machines. Compare `available`.
+
+Memory is actually low when `available` is a small fraction of `total` and **falling**, swap is being actively written (not just "used"), or the OOM killer has fired (Step 1 below).
+
+### Swap: "used" is history, `si`/`so` is now
+
+```bash
+vmstat 1 5
+```
+
+```
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 131072 218112 239104 6684160    0    0     4    22  410  780  5  2 93  0  0
+ 1  0 131072 217900 239104 6684200    0    0     0    16  398  765  4  1 95  0  0
+```
+
+128 MB of swap used with `si` and `so` at zero means something was swapped out at some point and hasn't been needed since. That's harmless. Sustained non-zero `si`/`so` means the system is moving pages in and out **right now**, and that's when latency suffers.
+
+Which processes have pages in swap:
+
+```bash
+for f in /proc/[0-9]*/status; do
+  awk '/^Name:/{n=$2} /^VmSwap:/{if ($2 > 0) print $2, "kB", n}' "$f" 2>/dev/null
+done | sort -rn | head
+```
+
+### /proc/meminfo and a one-line percentage
+
+`free` and `top` read `/proc/meminfo`. There is no `SwapUsed` field; swap used is `SwapTotal - SwapFree`. A used percentage based on `MemAvailable`:
+
+```bash
+grep -E 'MemTotal|MemFree|MemAvailable|^Cached|Shmem:|SwapTotal|SwapFree|Dirty|Slab' /proc/meminfo
+awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "%.0f%% used (%.1f GiB available)\n", (t-a)*100/t, a/1048576}' /proc/meminfo
+```
+
+### In a container, `free` lies
+
+`/proc/meminfo` shows the **host's** memory unless the container runtime uses something like LXCFS. A container limited to 512 MB can see 64 GB "available" and still get OOM-killed. Check the cgroup instead:
+
+```bash
+cat /sys/fs/cgroup/memory.max        # cgroup v2 limit ("max" = unlimited)
+cat /sys/fs/cgroup/memory.current    # current usage, includes page cache
+docker stats --no-stream             # from the host
+```
+
+If `available` is healthy and the box isn't swapping, you don't have a system memory problem. If one process keeps growing, read on.
 
 ---
 
@@ -217,6 +296,20 @@ Memory that correlates with **uptime** rather than with traffic is the signature
 3. Plateau or steady climb? Rule out allocator high-water marks, heap sizing and kernel slab.
 4. Find the growing mapping (`pmap -x`), then use runtime tools and diff two snapshots.
 5. Put a limit and restart policy in place until the fix ships.
+
+## FAQ
+
+**Should I drop caches to free memory?**
+No. `echo 3 > /proc/sys/vm/drop_caches` throws away cache the kernel would have reclaimed on its own when needed, and the next reads hit disk instead. It's useful for benchmarking, not for fixing memory pressure.
+
+**Why is `available` lower than `free` plus `buff/cache`?**
+Some cached memory can't be reclaimed (tmpfs, shared memory, pages in active use), and the kernel keeps a low-watermark reserve. `available` subtracts those.
+
+**Is swap usage bad?**
+Swap that's used but idle is not a problem. Ongoing swap-in/swap-out activity (`si`/`so` in vmstat) is.
+
+**Why do the RSS numbers add up to more than my RAM?**
+RSS counts shared pages fully in every process that maps them. Ten PostgreSQL backends sharing 2 GB of `shared_buffers` can each report around 2 GB RSS. Use PSS (`smem -t -k -s pss`, or `Pss` in `smaps_rollup`) for a fair split.
 
 ---
 

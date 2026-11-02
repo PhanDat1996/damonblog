@@ -112,7 +112,7 @@ $ curl -s -H 'accept: application/dns-json' \
 {"name":"www.linkedin.com.cdn.cloudflare.net","type":1,"TTL":132,"data":"172.64.146.215"}]}
 ```
 
-DoH matching plain `dig @1.1.1.1` means port 53 to public resolvers was not being rewritten. Switching the Mac's DNS to `1.1.1.1` fixed name resolution, and that is where most "fix the DNS" advice stops. In this case it only moved the failure one layer up, to the reset above. (On a Mac, `dig` reads `/etc/resolv.conf` only and ignores per-domain resolvers; `scutil --dns` shows what the system really uses. The Linux equivalent is in [How to Check Which DNS Server Linux Is Using](/blog/how-to-check-dns-server-linux).)
+DoH matching plain `dig @1.1.1.1` means port 53 to public resolvers was not being rewritten. Switching the Mac's DNS to `1.1.1.1` fixed name resolution, and that is where most "fix the DNS" advice stops. In this case it only moved the failure one layer up, to the reset above. (On a Mac, `dig` reads `/etc/resolv.conf` only and ignores per-domain resolvers; `scutil --dns` shows what the system really uses. The Linux equivalent is in [How to Check Which DNS Server Linux Is Using](/blog/dns-not-resolving-linux-fix).)
 
 ---
 
@@ -274,4 +274,4 @@ DNS only returns the IP. The SNI filter acts later, on the hostname inside the T
 No. `setsockopt(IP_TTL)` on a normal TCP socket works as an unprivileged user on macOS and Linux.
 
 **Is an RST from hop 5 always the ISP?**
-It is the first device past hop 4, which here sat inside the ISP's address space. Use `whois` on the surrounding hops to see who owns that segment. See [traceroute examples](/blog/traceroute-linux-examples) for reading the `*` hops.
+It is the first device past hop 4, which here sat inside the ISP's address space. Use `whois` on the surrounding hops to see who owns that segment. See [traceroute examples](/blog/cannot-connect-to-server-linux-troubleshooting) for reading the `*` hops.

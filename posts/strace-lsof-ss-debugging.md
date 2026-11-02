@@ -234,7 +234,7 @@ size=165675008 blocks=81920 blksize=512
 
 lsof reports 158 MiB, but only 40 MiB (81920 × 512 bytes) is really allocated. The rest is a hole. The space was freed, and `df` is the number to trust. lsof's `SIZE/OFF` is the file's apparent size, not its disk usage. The same applies to a live (not deleted) log truncated with `truncate -s 0` or `> file`: if the writer doesn't use `O_APPEND`, the file comes back sparse at its old size. That's why logrotate's `copytruncate` works best with apps that open logs in append mode.
 
-Next time, truncate instead of deleting a live log, or fix log rotation. See [disk full cleanup](/blog/disk-full-linux-cleanup) and [deleting large files safely](/blog/how-to-delete-large-files-linux-safely).
+Next time, truncate instead of deleting a live log, or fix log rotation. See [disk full cleanup and deleting large files safely](/blog/check-disk-usage-linux-du-df).
 
 ---
 
@@ -366,7 +366,7 @@ State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
 LISTEN 0      8            0.0.0.0:8080      0.0.0.0:*    users:(("myapp",pid=2846,fd=3))
 ```
 
-For "address already in use" errors, see [port already in use](/blog/port-already-in-use-linux-fix).
+For "address already in use" errors, see [port already in use](/blog/check-open-ports-linux).
 
 ---
 
@@ -460,7 +460,7 @@ lsof combines selection options with OR. Use `lsof -a -p PID -i` to get the inte
 `lsof` and `ss` inside a container see only that container's processes and network namespace. From the host, enter its network namespace: `sudo nsenter -t $(docker inspect -f '{{.State.Pid}}' web) -n ss -tanp`. strace inside a container needs `SYS_PTRACE` (this lab used a privileged container), so it's usually easier to run it on the host against the container's host PID.
 
 **ss or netstat?**
-`ss`. It talks to the kernel over netlink, is faster on busy hosts, and has state filters and TCP internals (`-i`). `netstat` comes from the deprecated net-tools package. See [netstat vs ss](/blog/netstat-vs-ss-command).
+`ss`. It talks to the kernel over netlink, is faster on busy hosts, and has state filters and TCP internals (`-i`). `netstat` comes from the deprecated net-tools package. See [netstat vs ss](/blog/check-open-ports-linux).
 
 ---
 

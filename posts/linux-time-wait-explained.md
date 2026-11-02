@@ -282,7 +282,7 @@ Not with a sysctl. The 60-second value is a kernel constant. Reduce the number o
 On its own, no. It matters only when it's toward a single destination on a host that opens outgoing connections, and you see `Cannot assign requested address`.
 
 **What's the difference between TIME_WAIT and CLOSE_WAIT?**
-TIME-WAIT is on the side that closed first and goes away by itself after 60 seconds. CLOSE-WAIT is on the side that received the FIN and hasn't closed its socket yet. It doesn't time out, and a growing count is an application bug. See [check open connections](/blog/linux-check-open-connections) to find which process holds them.
+TIME-WAIT is on the side that closed first and goes away by itself after 60 seconds. CLOSE-WAIT is on the side that received the FIN and hasn't closed its socket yet. It doesn't time out, and a growing count is an application bug. See [check open connections](/blog/check-open-ports-linux) to find which process holds them.
 
 ---
 

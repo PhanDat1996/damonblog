@@ -151,7 +151,7 @@ upstream timed out (110: Connection timed out) while connecting to upstream, cli
 504 GET /dropped/ rt=3.004 uct=- uht=- urt=3.003 ups=504 addr=127.0.0.1:9202
 ```
 
-`uct=-` shows the TCP handshake never finished. A port with nothing listening is a different failure: Linux answers with a reset straight away, so you get a fast **502** with `connect() failed (111: Connection refused)` instead of a 504 (that case isn't repeated in this lab; the [502 post](/blog/nginx-502-bad-gateway-fix-linux) covers it). A connect **timeout** almost always means packets are being dropped somewhere, or the backend's accept queue is full. The accept-queue case is reproduced in [NGINX 502 under load](/blog/nginx-502-under-load), where an overloaded backend produced mostly 504s, not 502s. To test the path from the NGINX host by hand, see [how to test a TCP connection](/blog/test-tcp-connection-linux).
+`uct=-` shows the TCP handshake never finished. A port with nothing listening is a different failure: Linux answers with a reset straight away, so you get a fast **502** with `connect() failed (111: Connection refused)` instead of a 504 (that case isn't repeated in this lab; the [502 post](/blog/nginx-502-bad-gateway-fix-linux) covers it). A connect **timeout** almost always means packets are being dropped somewhere, or the backend's accept queue is full. The accept-queue case is reproduced in [NGINX 502 under load](/blog/nginx-502-under-load), where an overloaded backend produced mostly 504s, not 502s. To test the path from the NGINX host by hand, see [how to test a TCP connection](/blog/cannot-connect-to-server-linux-troubleshooting).
 
 ---
 

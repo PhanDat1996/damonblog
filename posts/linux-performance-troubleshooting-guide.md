@@ -1,8 +1,8 @@
 ---
 title: "Linux Performance Troubleshooting: The First 10 Minutes"
 date: "2026-04-21"
-updated: "2026-10-28"
-excerpt: "Linux server slow and you don't know why? A 10-command triage that tells CPU, memory, disk and network problems apart, and where to dig next."
+updated: "2026-11-02"
+excerpt: "Linux server slow and you don't know why? A 10-command triage that tells CPU, memory, disk and network problems apart, reading iostat, and where to dig next."
 tags: ["linux", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: true
 category: "linux"
@@ -61,7 +61,7 @@ On Linux the load average counts tasks that are **running, waiting for a CPU, or
 - **CPU saturation**: `vmstat` shows `r` around 12 and `id` near 0.
 - **I/O blocking**: `vmstat` shows `b` high, CPUs largely idle, `wa` up. Tasks are stuck on disk or NFS.
 
-Never conclude "CPU problem" from load alone. [How to Check Uptime in Linux](/blog/how-to-check-uptime-linux) covers load in more depth.
+Never conclude "CPU problem" from load alone. [How to Check Uptime in Linux](/blog/top-command-linux-guide) covers load in more depth.
 
 ### Pressure stall information (kernel 4.20+)
 
@@ -97,9 +97,8 @@ Questions to answer, in order:
 
 Watch out for two common misreadings: `ps` `%CPU` is averaged over the process's lifetime, so a process that started spinning recently looks quiet. And `top` shows per-process CPU relative to one core, so 300% is normal for a busy multithreaded service.
 
-- Quick numbers: [How to Check CPU Usage in Linux](/blog/check-cpu-usage-linux)
 - Full workflow, including steal time and `%sy`: [Linux High CPU Usage: How to Find the Real Cause](/blog/linux-high-cpu-usage-guide)
-- Every field and key in top: [top Command in Linux](/blog/top-command-linux-guide)
+- CPU numbers, load average and every field and key in top: [Check CPU Usage in Linux](/blog/top-command-linux-guide)
 
 ---
 
@@ -114,8 +113,7 @@ The two mistakes that waste the most time:
 
 When you do have pressure, find the consumer (`ps -eo pid,rss,comm --sort=-rss | head`), then decide whether it's a leak (anonymous memory growing regardless of load) or a configuration issue (heap or cache sized larger than the box or container limit). Inside containers, `free` shows the host; check the cgroup's `memory.max` and `memory.current`.
 
-- Reading `free`, `top` and `/proc/meminfo`: [Check Memory Usage in Linux](/blog/linux-check-memory-usage-free-top)
-- Proving and locating a leak: [Linux Memory Leak Troubleshooting](/blog/linux-memory-leak-troubleshooting)
+- Reading `free` and `/proc/meminfo`, then proving and locating a leak: [Linux Memory Leak Troubleshooting](/blog/linux-memory-leak-troubleshooting)
 
 ---
 
@@ -123,19 +121,9 @@ When you do have pressure, find the consumer (`ps -eo pid,rss,comm --sort=-rss |
 
 **Signs:** `b` > 0 and `wa` up in vmstat, many tasks in `D` state, high `await` in iostat, PSI io `full` above zero.
 
-```bash
-iostat -xz 1 3
-```
+Run `iostat -xz 1 3` and read latency (`r_await`/`w_await`) and queue size (`aqu-sz`) before `%util`; see **Check disk I/O with iostat** below.
 
-```
-# trimmed to the most useful columns
-Device            r/s     w/s     rkB/s     wkB/s  r_await  w_await  aqu-sz  %util
-nvme0n1          12.0  1840.0     96.0  98304.0     0.41    18.72   34.52   99.60
-```
-
-`w_await` of 18 ms on an NVMe device with `aqu-sz` of 34 and `%util` at 99.6: the device is saturated with writes. On NVMe and RAID devices, `%util` near 100% doesn't by itself prove saturation (they serve many requests in parallel), so lean on `await` and queue size. Exact column names vary between sysstat versions.
-
-Then find who's writing (`pidstat -d 1` or `iotop -o`) and check whether something is actually broken: I/O errors in `journalctl -k`, or a filesystem that's full.
+Then find who's writing (`pidstat -d 1` or `iotop -o`, below) and check whether something is actually broken: I/O errors in `journalctl -k`, or a filesystem that's full.
 
 ```bash
 ps -eo stat,pid,wchan:32,args | awk '$1 ~ /^D/'    # what is blocked, and on what
@@ -143,9 +131,110 @@ ps -eo stat,pid,wchan:32,args | awk '$1 ~ /^D/'    # what is blocked, and on wha
 
 Waits in `rpc_*` or `nfs_*` point at an NFS server, not local disk.
 
-- Reading iostat properly: [Check Disk I/O with iostat](/blog/linux-check-disk-io-iostat)
 - D state, zombies and what each state means: [Linux Process States](/blog/linux-process-states-guide)
-- Out of space: [Check Disk Usage with du and df](/blog/check-disk-usage-linux-du-df) and [Disk Full on Linux](/blog/disk-full-linux-cleanup)
+- Out of space: [Check Disk Usage in Linux: df, du, Large Files and Cleanup](/blog/check-disk-usage-linux-du-df)
+
+---
+
+## Check disk I/O with iostat
+
+Load average is 12 on an 8-core box, the app is slow, but `top` shows the CPUs mostly idle and `wa` is high. `iostat` tells you which disk, how slow each request is, and whether it's simply overloaded.
+
+```bash
+sudo apt install sysstat      # Debian/Ubuntu
+sudo dnf install sysstat      # Fedora/RHEL
+
+iostat -dxy 2                 # extended per-device stats every 2 s, skip the since-boot report
+```
+
+**Always skip the first report.** Without `-y`, the first block iostat prints is the average **since boot**, which hides any current problem.
+
+### Reading `iostat -x` output
+
+Current sysstat (version 12 and later, shipped in Ubuntu 20.04+, RHEL 8+, Debian 11+), trimmed to the columns you'll use most:
+
+```
+Device     r/s     rkB/s  r_await rareq-sz     w/s     wkB/s  w_await wareq-sz  aqu-sz  %util
+nvme0n1  412.00  26368.00    0.21    64.00  1830.50  58576.00    0.88    32.00    1.70  64.20
+sda        3.50     56.00    9.14    16.00   182.00   5824.00   46.37    32.00    8.47  99.60
+```
+
+| Column | Meaning |
+|---|---|
+| `r/s`, `w/s` | Read and write requests completed per second (IOPS) |
+| `rkB/s`, `wkB/s` | Throughput in kB/s (`-h` or `-m` for friendlier units) |
+| `r_await`, `w_await` | Average time per request in ms, **including time spent queued**. This is what your application feels. |
+| `rareq-sz`, `wareq-sz` | Average request size in kB. Small (4–16) means random I/O; large (256+) means sequential. |
+| `rrqm/s`, `wrqm/s` | Requests merged by the kernel before reaching the device |
+| `aqu-sz` | Average number of requests queued or in flight |
+| `%util` | Percentage of time the device had at least one request in progress |
+
+Older sysstat (version 11 and earlier, e.g. CentOS 7) uses different names: `avgrq-sz` (in 512-byte sectors), `avgqu-sz`, a combined `await`, and `svctm`. `svctm` was never accurate and was removed; ignore it if you see it.
+
+### Is the disk the bottleneck?
+
+**Latency first.** Rough expectations for a healthy device under normal load:
+
+| Device | Typical latency |
+|---|---|
+| NVMe SSD | well under 1 ms |
+| SATA SSD | around 1 ms or less |
+| 7200 rpm HDD | 5–15 ms for random I/O |
+| Cloud block storage (EBS, Persistent Disk) | about 0.5–3 ms, rising sharply when you hit the volume's IOPS or throughput limit |
+
+These are rules of thumb, not specs. What matters is the change: if `w_await` was 1 ms yesterday and is 40 ms now, something is wrong even if 40 ms sounds acceptable for an HDD. In the sample above, `sda` is the problem: 46 ms writes, 8+ requests waiting, 99.6% busy.
+
+- **`%util` lies on SSDs and RAID.** It only measures whether the device had *any* request in flight. A single HDD serves one request at a time, so 100% really means saturated. An NVMe drive or a RAID array serves many requests in parallel and can show 100% while having plenty of capacity left.
+- **`aqu-sz`** around 8 on a single HDD means requests are waiting in line. On an NVMe drive, 8 can be completely normal. A high queue **and** rising latency means the device can't keep up.
+- **Cloud volumes** hit the **provisioned limit** long before the hardware is busy. If `r/s + w/s` sits flat at a round number (3000, 16000) or throughput flat at the volume's MB/s cap while latency climbs, you're being throttled. The fix is a bigger or faster volume tier, not tuning.
+
+### Which process is causing the I/O?
+
+```bash
+pidstat -d 2
+```
+
+```
+10:42:01 AM   UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command
+10:42:03 AM   999      3012      0.00  44180.00      0.00      87  postgres
+10:42:03 AM     0       412      0.00    186.00      0.00       0  jbd2/sda1-8
+10:42:03 AM  1000     18233   5120.00      0.00      0.00      12  rsync
+```
+
+`iotop -o` shows the same information interactively (needs root). On kernel 5.14 and later, its `IO>` percentage column stays empty unless delay accounting is enabled (`sysctl kernel.task_delayacct=1`); the read/write rates work regardless. To see what files that process is working on:
+
+```bash
+sudo ls -l /proc/3012/fd | grep -v -e socket -e pipe
+```
+
+Common culprits: database checkpoints or vacuum, backup jobs (`rsync`, `tar`), log shipping, `updatedb`/`mlocate` cron runs, swapping (check `si`/`so` in `vmstat 1`), and a log being written at debug level. If the I/O is from deleting a huge number of files, see [Delete Large Files Safely](/blog/check-disk-usage-linux-du-df) for ways to throttle it.
+
+### History and scripting
+
+The slowdown happened at 2 a.m. and it's 9 a.m. now. If sysstat's collector is enabled, `sar` has the history:
+
+```bash
+sudo systemctl enable --now sysstat     # start collecting (Debian/Ubuntu also: ENABLED="true" in /etc/default/sysstat)
+
+sar -d -p -s 02:00:00 -e 02:30:00 -f /var/log/sysstat/sa28    # Debian/Ubuntu
+sar -d -p -s 02:00:00 -e 02:30:00 -f /var/log/sa/sa28          # RHEL/Fedora
+```
+
+`-p` prints real device names instead of `dev8-0`, `sa28` is the file for the 28th of the month, and `-s`/`-e` limit the time window. Default collection is every 10 minutes, so short spikes get averaged out.
+
+```bash
+iostat -dxy sda nvme0n1 2       # only these devices
+iostat -dxyp sda 2              # sda and its partitions
+iostat -dxym 2                  # throughput in MB/s
+iostat -dxy 5 3                 # three 5-second reports, then exit
+```
+
+In a script, use `-y` and a single report so you never read the since-boot numbers, and look columns up by header name, because positions differ between sysstat versions:
+
+```bash
+iostat -dxy sda 5 1 | awk '$1=="Device" {for (i=1; i<=NF; i++) col[$i]=i}
+                           $1=="sda"    {print "w_await=" $col["w_await"], "%util=" $col["%util"]}'
+```
 
 ---
 
@@ -163,7 +252,7 @@ ss -tan state time-wait | wc -l
 A large `TIME-WAIT` count is normal on a busy server that opens many short outbound connections; it becomes a problem only when you run out of local ports toward one destination, which shows up as `Cannot assign requested address` errors. `CLOSE-WAIT` piling up is different: your application isn't closing sockets the peer already closed, which is a bug, and it usually ends in "too many open files."
 
 - [Linux TIME_WAIT Explained](/blog/linux-time-wait-explained)
-- [Check Open Connections in Linux](/blog/linux-check-open-connections)
+- [Check Open Connections in Linux](/blog/check-open-ports-linux)
 - [Too Many Open Files](/blog/too-many-open-files-linux-fix)
 - [NGINX 502 Under Load](/blog/nginx-502-under-load) when the symptom is a proxy returning errors
 
@@ -176,7 +265,7 @@ CPU idle, memory fine, disks quiet, network calm, and the app is still slow. The
 - Look at what the threads are waiting on: `ps -L -o tid,stat,wchan:32 -p <PID>`, or a stack dump from the runtime.
 - Time the dependencies from the box: `curl -w '%{time_connect} %{time_starttransfer}\n' -o /dev/null -s <url>`, `dig` for DNS.
 - Use `strace -f -T -p <PID>` briefly to see which syscalls take long. Keep it short on production: strace slows the traced process significantly.
-- Correlate with logs around the time it started: [Linux Log Analysis](/blog/linux-log-analysis-guide) and [journalctl by Time Range](/blog/journalctl-filter-time-range).
+- Correlate with logs around the time it started: [Linux Log Analysis](/blog/linux-log-analysis-guide) and [journalctl by Time Range](/blog/monitor-real-time-logs-linux).
 
 [Linux Debugging Tools](/blog/linux-debugging-tools-guide) and the [strace Tutorial](/blog/strace-tutorial-linux) cover these tools in depth.
 
@@ -186,11 +275,11 @@ CPU idle, memory fine, disks quiet, network calm, and the app is still slow. The
 
 | Question | Command | Guide |
 |---|---|---|
-| What's running? Is my service up? | `ps aux`, `pgrep -a`, `systemctl status` | [Check Running Processes](/blog/check-running-process-linux) |
+| What's running? Is my service up? | `ps aux`, `pgrep -a`, `systemctl status` | [Check Running Processes](/blog/ps-command-linux-troubleshooting) |
 | What do the ps columns mean? | `ps -eo ...` | [ps Command in Linux](/blog/ps-command-linux-troubleshooting) |
-| Find a PID from a name | `pgrep -x`, `pgrep -f`, `pidof` | [Find a Process by Name](/blog/linux-find-process-by-name) |
-| Live view | `top`, `htop` | [htop vs top](/blog/htop-vs-top-linux) |
-| What's busy right now (scriptable)? | `pidstat 1` | [Check CPU Usage](/blog/check-cpu-usage-linux) |
+| Find a PID from a name | `pgrep -x`, `pgrep -f`, `pidof` | [Find a Process by Name](/blog/ps-command-linux-troubleshooting) |
+| Live view | `top`, `htop` | [htop vs top](/blog/top-command-linux-guide) |
+| What's busy right now (scriptable)? | `pidstat 1` | [Check CPU Usage](/blog/top-command-linux-guide) |
 | What files and sockets does it hold? | `lsof -p`, `ss -p` | [strace, lsof, and ss](/blog/strace-lsof-ss-debugging) |
 | What happened at 3 a.m.? | `sar -f`, `journalctl --since` | [Linux Log Analysis](/blog/linux-log-analysis-guide) |
 

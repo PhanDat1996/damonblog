@@ -120,7 +120,7 @@ export const SKILLS: Skill[] = [
       { label: 'Troubleshooting Clusters', href: `${K8S}/tasks/debug/debug-cluster/` },
       { label: 'Nodes: node status', href: `${K8S}/concepts/architecture/nodes/` },
     ],
-    relatedPosts: ['systemctl-service-not-starting-fix', 'journalctl-filter-time-range'],
+    relatedPosts: ['systemctl-service-not-starting-fix', 'monitor-real-time-logs-linux'],
   },
   {
     id: 'troubleshooting.cluster-components',
@@ -132,7 +132,7 @@ export const SKILLS: Skill[] = [
       { label: 'Debugging Kubernetes nodes with crictl', href: `${K8S}/tasks/debug/debug-cluster/crictl/` },
       { label: 'Create static Pods', href: `${K8S}/tasks/configure-pod-container/static-pod/` },
     ],
-    relatedPosts: ['linux-check-running-services-systemctl'],
+    relatedPosts: ['systemctl-service-not-starting-fix'],
   },
   {
     id: 'troubleshooting.resource-usage',
@@ -143,7 +143,7 @@ export const SKILLS: Skill[] = [
       { label: 'Tools for Monitoring Resources', href: `${K8S}/tasks/debug/debug-cluster/resource-usage-monitoring/` },
       { label: 'Resource metrics pipeline', href: `${K8S}/tasks/debug/debug-cluster/resource-metrics-pipeline/` },
     ],
-    relatedPosts: ['linux-oom-killer-explained', 'check-cpu-usage-linux', 'top-command-linux-guide'],
+    relatedPosts: ['linux-oom-killer-explained', 'top-command-linux-guide'],
   },
   {
     id: 'troubleshooting.container-output',
@@ -165,7 +165,7 @@ export const SKILLS: Skill[] = [
       { label: 'Debug Services', href: `${K8S}/tasks/debug/debug-application/debug-service/` },
       { label: 'Debugging DNS Resolution', href: `${K8S}/tasks/administer-cluster/dns-debugging-resolution/` },
     ],
-    relatedPosts: ['cannot-connect-to-server-linux-troubleshooting', 'test-tcp-connection-linux', 'dns-not-resolving-linux-fix'],
+    relatedPosts: ['cannot-connect-to-server-linux-troubleshooting', 'dns-not-resolving-linux-fix'],
   },
 
   // ── Workloads & Scheduling ─────────────────────────────────────────────────
@@ -248,7 +248,7 @@ export const SKILLS: Skill[] = [
       { label: 'Container Runtimes', href: `${K8S}/setup/production-environment/container-runtimes/` },
       { label: 'Ports and Protocols', href: `${K8S}/reference/networking/ports-and-protocols/` },
     ],
-    relatedPosts: ['check-open-ports-linux', 'check-firewall-status-linux'],
+    relatedPosts: ['check-open-ports-linux', 'iptables-block-ip-example'],
   },
   {
     id: 'cluster.kubeadm-create',
@@ -329,7 +329,7 @@ export const SKILLS: Skill[] = [
       { label: 'Cluster Networking', href: `${K8S}/concepts/cluster-administration/networking/` },
       { label: 'Services, Load Balancing, and Networking', href: `${K8S}/concepts/services-networking/` },
     ],
-    relatedPosts: ['docker-networking-guide', 'ping-vs-curl-vs-telnet'],
+    relatedPosts: ['docker-networking-guide', 'cannot-connect-to-server-linux-troubleshooting'],
   },
   {
     id: 'networking.network-policies',

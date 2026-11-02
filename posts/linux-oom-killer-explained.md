@@ -266,7 +266,7 @@ A few things that look like fixes but aren't:
 - **`OOMScoreAdjust=-1000` on everything.** If nothing is killable, a global OOM has no good choice left. Reserve `-1000` for things like `sshd` that you need to log in and fix the box.
 - **Adding swap to "fix" OOM kills.** It moves the problem: the process survives but can slow to a crawl. Fine as a buffer, not as a fix for a leak. See [Linux memory leak troubleshooting](/blog/linux-memory-leak-troubleshooting) to tell a leak from a sizing problem.
 - **`vm.overcommit_memory=2`.** Strict accounting makes allocations fail with `ENOMEM` instead of OOM kills later, and many runtimes (JVMs, anything that reserves large virtual ranges) fail to start under it. This lab VM used the default `0`.
-- **Only watching `free`.** A cgroup OOM happens with plenty of free host memory. Check the cgroup's `memory.current` against `memory.max`, as in [checking memory usage on Linux](/blog/linux-check-memory-usage-free-top).
+- **Only watching `free`.** A cgroup OOM happens with plenty of free host memory. Check the cgroup's `memory.current` against `memory.max`, as in [checking memory usage on Linux](/blog/linux-memory-leak-troubleshooting).
 
 ---
 
@@ -279,7 +279,7 @@ A few things that look like fixes but aren't:
 ## Checklist when a process "just died"
 
 1. `systemctl show <unit> -p Result -p ExecMainStatus`: `oom-kill` / `9`?
-2. `journalctl -k --since ... | grep -E "invoked oom-killer|Killed process"` (time filters in [journalctl --since and --until](/blog/journalctl-filter-time-range)).
+2. `journalctl -k --since ... | grep -E "invoked oom-killer|Killed process"` (time filters in [journalctl --since and --until](/blog/monitor-real-time-logs-linux)).
 3. `constraint=`: `CONSTRAINT_MEMCG` (a limit) or `CONSTRAINT_NONE` (the whole host)?
 4. Read `memory: usage ... limit ...` and the stats: anon (heap growth) or file (cache)?
 5. Read the `Tasks state` table: which process was big, and what were the `oom_score_adj` values?
