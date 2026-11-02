@@ -112,11 +112,12 @@ export function reportLinks(scenario: Scenario): { github: string; email: string
   };
 }
 
-export type Level = 'all' | 'core' | 'hard';
+export type Level = 'all' | 'core' | 'hard' | 'expert';
 export const LEVELS: { id: Level; label: string; vi: string }[] = [
   { id: 'all', label: 'All levels', vi: 'Tất cả' },
   { id: 'core', label: 'Core', vi: 'Cơ bản' },
   { id: 'hard', label: 'Hard', vi: 'Khó' },
+  { id: 'expert', label: 'Expert', vi: 'Expert' },
 ];
 
 /** Scenarios matching a domain (primary or cross-domain) and a level. */
@@ -124,6 +125,6 @@ export function filterScenarios(list: Scenario[], domain: string, level: Level):
   return list.filter(
     (s) =>
       (domain === 'all' || s.domainId === domain || (s.alsoDomains ?? []).includes(domain as Scenario['domainId'])) &&
-      (level === 'all' || (level === 'hard') === (s.level === 'hard')),
+      (level === 'all' || (level === 'core' ? !s.level : s.level === level)),
   );
 }

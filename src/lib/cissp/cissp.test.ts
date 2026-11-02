@@ -104,8 +104,23 @@ test('hard mode: two per domain, valid cross-domain tags, no untranslated text',
 test('filterScenarios: domain includes cross-domain scenarios; level splits core and hard', () => {
   const all = filterScenarios(SCENARIOS, 'all', 'all');
   assert.equal(all.length, SCENARIOS.length);
-  assert.equal(filterScenarios(SCENARIOS, 'all', 'hard').length + filterScenarios(SCENARIOS, 'all', 'core').length, SCENARIOS.length);
+  const parts = (['core', 'hard', 'expert'] as const).map((lv) => filterScenarios(SCENARIOS, 'all', lv).length);
+  assert.equal(parts.reduce((a, b) => a + b, 0), SCENARIOS.length, 'levels partition the set');
   const d6 = filterScenarios(SCENARIOS, 'd6', 'hard').map((s) => s.id);
   assert.ok(d6.includes('hard-acquisition-first-step'), 'D1 scenario tagged with D6 shows under D6');
   for (const s of filterScenarios(SCENARIOS, 'd3', 'core')) assert.notEqual(s.level, 'hard');
+});
+
+test('expert mode: three per domain, mostly cross-domain, LEAST/EXCEPT included, key rarely longest', () => {
+  const ex = SCENARIOS.filter((s) => s.level === 'expert');
+  assert.equal(ex.length, 24);
+  for (const d of DOMAINS) assert.equal(ex.filter((s) => s.domainId === d.id).length, 3, d.id);
+  assert.ok(ex.filter((s) => s.alsoDomains?.length).length >= 12, 'at least half cross-domain');
+  assert.ok(ex.filter((s) => /LEAST|EXCEPT/.test(s.question.en)).length >= 4, 'LEAST/EXCEPT questions');
+  for (const s of ex) assert.ok(s.situation.en.length >= 300, `${s.id}: situation should carry noise`);
+  const keyLongest = ex.filter((s) => {
+    const len = s.options.map((o) => o.text.en.length);
+    return s.options.find((o) => o.id === s.answer)!.text.en.length === Math.max(...len);
+  });
+  assert.ok(keyLongest.length <= 6, `answer is the longest option too often: ${keyLongest.map((s) => s.id)}`);
 });

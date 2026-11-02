@@ -217,16 +217,29 @@ export function CisspTrainer() {
                     'rounded-md border px-2.5 py-1 font-mono text-xs transition-colors',
                     FOCUS_RING,
                     level === lv.id
-                      ? lv.id === 'hard' ? 'border-amber-500/50 bg-amber-400/10 text-amber-300' : 'border-green-500/50 bg-green-400/10 text-green-300'
+                      ? lv.id === 'hard'
+                        ? 'border-amber-500/50 bg-amber-400/10 text-amber-300'
+                        : lv.id === 'expert'
+                          ? 'border-rose-500/50 bg-rose-400/10 text-rose-300'
+                          : 'border-green-500/50 bg-green-400/10 text-green-300'
                       : 'border-zinc-700 text-zinc-300 hover:border-zinc-500',
                   )}
                 >
-                  {mode === 'vi' ? lv.vi : mode === 'en' ? lv.label : `${lv.label} / ${lv.vi}`}{' '}
+                  {mode === 'vi' ? lv.vi : mode === 'en' || lv.label === lv.vi ? lv.label : `${lv.label} / ${lv.vi}`}{' '}
                   <span className="text-zinc-500">{sc.answered}/{sc.total}</span>
                 </button>
               );
             })}
           </div>
+          {level === 'expert' && (
+            <p className="text-xs text-zinc-400">
+              {mode === 'en'
+                ? 'Long scenarios with irrelevant detail. All four options are from the same family; some ask for the LEAST or the EXCEPTION.'
+                : mode === 'vi'
+                  ? 'Tình huống dài, có chi tiết gây nhiễu. Cả 4 phương án cùng một nhóm; có câu hỏi cái KÉM NHẤT hoặc cái NGOẠI LỆ.'
+                  : 'Long scenarios with irrelevant detail; some ask for the LEAST or the EXCEPTION. / Tình huống dài, có chi tiết gây nhiễu; có câu hỏi cái KÉM NHẤT hoặc NGOẠI LỆ.'}
+            </p>
+          )}
           {level === 'hard' && (
             <p className="text-xs text-zinc-400">
               {mode === 'en'
@@ -251,7 +264,7 @@ export function CisspTrainer() {
                     type="button"
                     onClick={() => go(s.id, false)}
                     aria-current={s.id === scenario.id ? 'true' : undefined}
-                    aria-label={`${i + 1}. ${s.title.en}${s.level === 'hard' ? ' (hard)' : ''}${r ? (r.correct ? ' (correct)' : ' (incorrect)') : ''}`}
+                    aria-label={`${i + 1}${r ? `. ${s.title.en}` : ''}${s.level ? ` (${s.level})` : ''}${r ? (r.correct ? ' (correct)' : ' (incorrect)') : ''}`}
                     className={clsx(
                       'relative h-8 w-8 rounded-md border font-mono text-xs transition-colors',
                       FOCUS_RING,
@@ -262,7 +275,9 @@ export function CisspTrainer() {
                     )}
                   >
                     {i + 1}
-                    {s.level === 'hard' && <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />}
+                    {s.level && (
+                      <span aria-hidden="true" className={clsx('absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full', s.level === 'hard' ? 'bg-amber-400' : 'bg-rose-400')} />
+                    )}
                   </button>
                 </li>
               );
@@ -283,18 +298,38 @@ export function CisspTrainer() {
             <span className="text-green-400">
               {index + 1}/{visible.length}
             </span>
-            <span>
-              {domainTags} · {pick(domain.name, mode)}
-            </span>
+            {/* Title, domain and concepts can give the answer away, so they appear only after checking. */}
+            {result ? (
+              <span>
+                {domainTags} · {pick(domain.name, mode)}
+              </span>
+            ) : (
+              <span>{mode === 'vi' ? 'Domain ẩn cho tới khi trả lời' : mode === 'en' ? 'Domain hidden until you answer' : 'Domain hidden until you answer / Domain ẩn cho tới khi trả lời'}</span>
+            )}
             {scenario.level === 'hard' && (
               <span className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
                 {mode === 'vi' ? 'Khó' : mode === 'en' ? 'Hard' : 'Hard · Khó'}
               </span>
             )}
+            {scenario.level === 'expert' && (
+              <span className="rounded border border-rose-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rose-300">
+                Expert
+              </span>
+            )}
           </div>
           <h2 id="scenario-title" className="font-display text-xl font-bold text-white md:text-2xl">
-            {mode === 'vi' ? scenario.title.vi : scenario.title.en}
-            {mode === 'both' && <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">{scenario.title.vi}</span>}
+            {result ? (
+              <>
+                {mode === 'vi' ? scenario.title.vi : scenario.title.en}
+                {mode === 'both' && <span lang="vi" className="mt-1 block text-base font-normal text-zinc-400">{scenario.title.vi}</span>}
+              </>
+            ) : mode === 'vi' ? (
+              `Câu ${index + 1}`
+            ) : mode === 'en' ? (
+              `Question ${index + 1}`
+            ) : (
+              `Question ${index + 1} / Câu ${index + 1}`
+            )}
           </h2>
         </header>
 
