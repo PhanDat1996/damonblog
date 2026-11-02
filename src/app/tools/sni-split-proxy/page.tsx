@@ -300,7 +300,7 @@ export default function SniSplitProxyPage() {
             {[
               { text: "Build a Python Proxy That Splits the TLS Client Hello (lab write-up)", href: "/blog/python-sni-split-proxy" },
               { text: "Connection Reset After Client Hello: Prove SNI Blocking",            href: "/blog/tls-connection-reset-sni-blocking" },
-              { text: "How to check which DNS server is answering",                         href: "/blog/how-to-check-dns-server-linux" },
+              { text: "How to check which DNS server is answering",                         href: "/blog/dns-not-resolving-linux-fix" },
             ].map(({ text, href }) => (
               <li key={href}>
                 <Link href={href} className="font-mono text-sm text-green-400 hover:underline">→ {text}</Link>

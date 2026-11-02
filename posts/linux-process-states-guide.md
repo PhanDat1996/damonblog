@@ -149,7 +149,7 @@ iostat -x 1 3                           # await and %util per device (sysstat)
 smartctl -H -A /dev/sda                 # health and error counters (smartmontools)
 ```
 
-High `await` and `%util` near 100% means the device is just overloaded; kernel I/O errors and resets mean it's failing. [Check Disk I/O with iostat](/blog/linux-check-disk-io-iostat) explains how to read those numbers. A full filesystem can also cause heavy writeback stalls; see [Disk Full on Linux](/blog/disk-full-linux-cleanup).
+High `await` and `%util` near 100% means the device is just overloaded; kernel I/O errors and resets mean it's failing. [Check Disk I/O with iostat](/blog/linux-performance-troubleshooting-guide) explains how to read those numbers. A full filesystem can also cause heavy writeback stalls; see [Disk Full on Linux](/blog/check-disk-usage-linux-du-df).
 
 If the device is truly gone, `D` tasks may only clear with a reboot.
 

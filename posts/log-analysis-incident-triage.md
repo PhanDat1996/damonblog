@@ -258,4 +258,4 @@ Two cautions:
 
 ---
 
-*Related: [Monitor logs in real time](/blog/monitor-real-time-logs-linux) to watch the fix take effect, [journalctl time filters](/blog/journalctl-filter-time-range) for exact windows, and [NGINX 502 under load](/blog/nginx-502-under-load) when the errors only appear at peak traffic.*
+*Related: [Monitor Linux logs](/blog/monitor-real-time-logs-linux) to watch the fix take effect and filter journalctl to exact windows, and [NGINX 502 under load](/blog/nginx-502-under-load) when the errors only appear at peak traffic.*

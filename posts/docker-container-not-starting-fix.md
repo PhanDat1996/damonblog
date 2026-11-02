@@ -163,7 +163,7 @@ docker ps --filter publish=8080        # another container?
 ss -ltnp 'sport = :8080'               # a host process?
 ```
 
-Map a different host port (`-p 8081:8080`), or stop the other container. `docker rm -f old_container` deletes that container and anything written inside it that isn't on a volume, so prefer `docker stop old_container` unless you're sure. For host processes, see [port already in use](/blog/port-already-in-use-linux-fix).
+Map a different host port (`-p 8081:8080`), or stop the other container. `docker rm -f old_container` deletes that container and anything written inside it that isn't on a volume, so prefer `docker stop old_container` unless you're sure. For host processes, see [port already in use](/blog/check-open-ports-linux).
 
 ---
 
@@ -261,4 +261,4 @@ SIGKILL from somewhere else. Usually `docker stop` timed out because the app ign
 
 ---
 
-*Related: [Docker log rotation](/blog/docker-log-rotation) so logs don't fill the disk while a container crash-loops. [Docker inspect container IP](/blog/docker-inspect-container-ip) for network-related startup failures.*
+*Related: [Docker log rotation](/blog/docker-log-rotation) so logs don't fill the disk while a container crash-loops. [Docker inspect container IP](/blog/docker-networking-guide) for network-related startup failures.*

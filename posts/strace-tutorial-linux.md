@@ -174,7 +174,7 @@ poll([{fd=9, events=POLLOUT}], 1, 5000) = 1 ([{fd=9, revents=POLLOUT|POLLERR|POL
 getsockopt(9, SOL_SOCKET, SO_ERROR, [111], [4]) = 0
 ```
 
-`EINPROGRESS` isn't the error. The real result is the `SO_ERROR` value: `111` is `ECONNREFUSED`, `110` is `ETIMEDOUT` (newer strace versions print the name instead of the number). A `poll` that waits its full timeout (`<5.00...>`) before `SO_ERROR` returns 110 means packets are being dropped somewhere: host down, routing, or a firewall `DROP`. [Test TCP connections](/blog/test-tcp-connection-linux) has the next steps.
+`EINPROGRESS` isn't the error. The real result is the `SO_ERROR` value: `111` is `ECONNREFUSED`, `110` is `ETIMEDOUT` (newer strace versions print the name instead of the number). A `poll` that waits its full timeout (`<5.00...>`) before `SO_ERROR` returns 110 means packets are being dropped somewhere: host down, routing, or a firewall `DROP`. [Test TCP connections](/blog/cannot-connect-to-server-linux-troubleshooting) has the next steps.
 
 Slow DNS looks like this: a `connect` to port 53, then `poll` calls that each take seconds.
 

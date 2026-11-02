@@ -133,7 +133,7 @@ ss -tnp state established | grep -E 'php-fpm|nginx|java' | grep -vE '127\.0\.0\.
 - **DNS:** long, high-entropy subdomain labels, or a high query volume to one domain. SUNBURST's first stage, for example, encoded data in subdomains of its C2 domain.
 - **Egress filtering** makes this phase much harder for the attacker. A server that can only reach its update mirror and its database leaves C2 few options.
 
-For digging into live connections on a host, see [check open connections on Linux](/blog/linux-check-open-connections).
+For digging into live connections on a host, see [check open connections on Linux](/blog/check-open-ports-linux).
 
 ### 7. Actions on Objectives
 

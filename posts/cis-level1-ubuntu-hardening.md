@@ -266,7 +266,7 @@ ufw enable
 ufw status verbose
 ```
 
-Inventory listeners (`ss -tulnp`) and who connects to them (monitoring, backups, load balancers) before enabling. Docker-published ports bypass ufw's INPUT rules. See [check firewall status on Linux](/blog/check-firewall-status-linux) for why.
+Inventory listeners (`ss -tulnp`) and who connects to them (monitoring, backups, load balancers) before enabling. Docker-published ports bypass ufw's INPUT rules. See [check firewall status on Linux](/blog/iptables-block-ip-example) for why.
 
 ---
 

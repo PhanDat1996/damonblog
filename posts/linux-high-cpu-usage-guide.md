@@ -12,7 +12,7 @@ The alert says CPU is at 95%. Response times are climbing. You open `top`, see a
 
 Wait. "High CPU" covers at least four different problems: an application doing too much work, the kernel doing work on its behalf, a hypervisor taking your CPU away, and a storage problem that only *looks* like CPU because the load average went up. Each has a different fix, and killing the top process only fixes one of them.
 
-This is the order to work through it. If you just need the numbers, [How to Check CPU Usage in Linux](/blog/check-cpu-usage-linux) is the short version.
+This is the order to work through it. If you just need the numbers, [How to Check CPU Usage in Linux](/blog/top-command-linux-guide) is the short version.
 
 ---
 
@@ -55,7 +55,7 @@ procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
 (The first line of vmstat output is the average since boot. Skip it.)
 
 - `r` above `nproc`, `id` near 0: real CPU saturation. Continue.
-- `b` high, `wa` high, `id` not zero: tasks are blocked on I/O. That's a storage problem; go to [Check Disk I/O with iostat](/blog/linux-check-disk-io-iostat).
+- `b` high, `wa` high, `id` not zero: tasks are blocked on I/O. That's a storage problem; go to [Check Disk I/O with iostat](/blog/linux-performance-troubleshooting-guide).
 - Neither high but load is high: look for D-state tasks with `ps -eo stat,pid,comm | awk '$1 ~ /^D/'`. See [Linux Process States](/blog/linux-process-states-guide).
 
 ---

@@ -39,13 +39,13 @@ docker ps -aq | xargs docker inspect -f '{{.Name}} {{.LogPath}}' \
   | sort -h | tail
 ```
 
-If the space is in `overlay2/` or `volumes/` instead, it isn't logs. Start with `docker system df` and the general [disk full cleanup guide](/blog/disk-full-linux-cleanup).
+If the space is in `overlay2/` or `volumes/` instead, it isn't logs. Start with `docker system df` and the general [disk full cleanup guide](/blog/check-disk-usage-linux-du-df).
 
 ---
 
 ## Emergency: free the space now
 
-**Don't `rm` the log file.** dockerd keeps it open, so deleting the name doesn't free the space. The blocks stay allocated until the container stops. (That "deleted but still open" trap is covered in [deleting large files safely](/blog/how-to-delete-large-files-linux-safely).)
+**Don't `rm` the log file.** dockerd keeps it open, so deleting the name doesn't free the space. The blocks stay allocated until the container stops. (That "deleted but still open" trap is covered in [deleting large files safely](/blog/check-disk-usage-linux-du-df).)
 
 Truncate it in place instead:
 

@@ -203,7 +203,7 @@ nginx: [emerg] bind() to 127.0.0.1:8501 failed (98: Address already in use)
 nginx: [emerg] still could not bind()
 ```
 
-`nginx -t` doesn't bind ports, so it can't catch this. NGINX retried five times, then gave up. Find the owner with `ss -ltnp 'sport = :80'`, then see [port already in use](/blog/port-already-in-use-linux-fix). On SELinux systems, a non-standard port can also fail with `(13: Permission denied)` until it's allowed with `semanage port -a -t http_port_t`. Other startup failures (unit errors, dependencies) are in [systemctl service not starting](/blog/systemctl-service-not-starting-fix).
+`nginx -t` doesn't bind ports, so it can't catch this. NGINX retried five times, then gave up. Find the owner with `ss -ltnp 'sport = :80'`, then see [port already in use](/blog/check-open-ports-linux). On SELinux systems, a non-standard port can also fail with `(13: Permission denied)` until it's allowed with `semanage port -a -t http_port_t`. Other startup failures (unit errors, dependencies) are in [systemctl service not starting](/blog/systemctl-service-not-starting-fix).
 
 ---
 

@@ -1,9 +1,9 @@
 ---
-title: "Docker Networking Explained: Bridge vs Host vs Overlay"
+title: "Docker Networking: Bridge vs Host vs Overlay, and Container IPs"
 date: "2024-07-05"
-updated: "2026-10-28"
-excerpt: "Containers that can't reach each other, ports that won't open, or ports open that shouldn't be: how Docker bridge, host and overlay networks really work."
-tags: ["docker", "networking", "infrastructure"]
+updated: "2026-11-02"
+excerpt: "How Docker bridge, host and overlay networks really work, why ports open or don't, and how to get a container's IP with docker inspect on any network."
+tags: ["docker", "networking", "infrastructure", "troubleshooting"]
 featured: false
 category: "devops"
 ---
@@ -107,7 +107,7 @@ docker run -d -p 127.0.0.1:5432:5432 postgres:16
 # Or don't publish at all: other containers on the same network reach it by name
 ```
 
-To filter traffic to published ports, add rules to the `DOCKER-USER` chain, which Docker evaluates before its own rules. See [checking firewall status on Linux](/blog/check-firewall-status-linux) for confirming what's actually allowed.
+To filter traffic to published ports, add rules to the `DOCKER-USER` chain, which Docker evaluates before its own rules. See [checking firewall status on Linux](/blog/iptables-block-ip-example) for confirming what's actually allowed.
 
 ---
 
@@ -175,6 +175,51 @@ networks:
 
 ---
 
+## Get a container's IP address with docker inspect
+
+The quick answer:
+
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' mycontainer
+# 172.18.0.3
+```
+
+A container gets **one IP per network it's attached to**, stored in a map keyed by network name under `NetworkSettings.Networks`. The top-level `NetworkSettings.IPAddress` is a **legacy** field, deprecated since Docker 1.13. It's only filled in for the default `bridge` network. Containers on user-defined networks (including everything started by Compose) show an empty string there. Always read from `Networks`.
+
+| Situation | Command |
+|---|---|
+| Several networks: label them | `docker inspect -f '{{range $name, $net := .NetworkSettings.Networks}}{{$name}} {{$net.IPAddress}}{{println}}{{end}}' web` |
+| A specific network with a hyphen in its name | `docker inspect -f '{{(index .NetworkSettings.Networks "my-app_default").IPAddress}}' web` |
+| A Compose service | `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(docker compose ps -q web)"` |
+| Every container on a network | `docker network inspect -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' myapp_default` |
+| From inside the container | `docker exec web cat /etc/hosts` (Docker writes the container's own IP there) |
+
+Gotchas:
+
+- Without a separator, a container on two networks prints `172.18.0.310.10.0.5`, which looks like one corrupted address. Label each IP with its network.
+- Dot syntax (`.NetworkSettings.Networks.bridge.IPAddress`) only works for identifier-style names. A Compose project called `my-app` creates `my-app_default`, and the dot form fails with `bad character U+002D '-'`. Use `index`, or `jq`. Not sure of the name? `docker inspect -f '{{json .NetworkSettings.Networks}}' web | jq 'keys'`.
+- `docker network inspect` includes the prefix length (`172.18.0.3/16`).
+- With `--network host` there is no container IP, so the template prints nothing. Check with `docker inspect -f '{{.HostConfig.NetworkMode}}' web` and use the host's address. With `--network none` there's nothing to reach.
+
+To find which container owns an IP you saw in a firewall or app log:
+
+```bash
+docker ps -q | xargs docker inspect \
+  -f '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{end}}' \
+  | grep -w "172.18.0.3"
+```
+
+**You probably shouldn't hard-code it.** Container IPs are assigned from the network's pool at start time and can change every time the container is recreated. Use names on a user-defined network instead (see above). If you really need a fixed address, assign one on a user-defined network with an explicit subnet:
+
+```bash
+docker network create --subnet 172.30.0.0/24 fixednet
+docker run -d --network fixednet --ip 172.30.0.10 --name web nginx
+```
+
+**Can't reach the IP from your laptop?** On Docker Desktop (macOS, Windows), containers run inside a VM, and their IPs aren't routable from the host. Use published ports (`-p 8080:80`) and `localhost:8080`. On a Linux host, the container IP is reachable from the host itself, but not from other machines unless you route to it.
+
+---
+
 ## Debugging connectivity
 
 Slim images often lack `ping`, `nslookup` and `curl`. Two ways around it:
@@ -195,7 +240,7 @@ Check membership and addresses:
 docker network inspect -f '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' myapp_default
 ```
 
-(For per-container IP lookups and template gotchas, see [docker inspect container IP](/blog/docker-inspect-container-ip).)
+(For per-container IP lookups and template gotchas, see "Get a container's IP address" above.)
 
 What the errors mean:
 
@@ -206,7 +251,7 @@ What the errors mean:
 | Timeout | Packets dropped: firewall, `internal` network, or blocked VXLAN between hosts |
 | `No route to host` / `Network unreachable` | No route between the networks, or a host firewall rejecting |
 
-To test a TCP path without application tools, see [test a TCP connection on Linux](/blog/test-tcp-connection-linux).
+To test a TCP path without application tools, see [test a TCP connection on Linux](/blog/cannot-connect-to-server-linux-troubleshooting).
 
 ---
 
@@ -220,6 +265,15 @@ For published ports, yes. Docker's NAT and forward rules handle the traffic befo
 
 **Is host networking faster than bridge?**
 It skips NAT and the veth hop, so it has slightly lower overhead. For most web workloads the difference is negligible compared to the loss of isolation and port flexibility.
+
+**Why does docker inspect return an empty IP address?**
+Usually you're reading the legacy `.NetworkSettings.IPAddress` for a container on a user-defined network, or the container uses `--network host` or isn't running. Read `.NetworkSettings.Networks` instead, and check `.State.Status`.
+
+**How do I get the IP of a stopped container?**
+You can't. The IP is released when the container stops and may differ on the next start. Start it, or use names instead of IPs.
+
+**How do I find the host's IP from inside a container?**
+On a Linux bridge network, the host is reachable at the network's gateway (`.Gateway` in `docker inspect`). Portable alternative: run with `--add-host=host.docker.internal:host-gateway` and connect to `host.docker.internal`.
 
 ---
 

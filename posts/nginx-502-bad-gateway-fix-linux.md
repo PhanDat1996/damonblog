@@ -281,4 +281,4 @@ Your single `curl` doesn't reproduce the conditions. Check whether NGINX is usin
 
 ---
 
-*Related: [NGINX Troubleshooting Guide](/blog/nginx-troubleshooting-guide) for other NGINX errors. [Test a TCP connection on Linux](/blog/test-tcp-connection-linux) to check upstream reachability without curl.*
+*Related: [NGINX Troubleshooting Guide](/blog/nginx-troubleshooting-guide) for other NGINX errors. [Test a TCP connection on Linux](/blog/cannot-connect-to-server-linux-troubleshooting) to check upstream reachability without curl.*

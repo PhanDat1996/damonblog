@@ -99,7 +99,7 @@ In `top`:
 | `c` | Full command line |
 | `o` | Add a filter, e.g. `%CPU>5.0` or `COMMAND=java` |
 
-`top -H -p PID` shows the threads of one process, which is how you find the single hot thread in a Java or Go service. The [top guide](/blog/top-command-linux-guide) covers the header fields; [htop vs top](/blog/htop-vs-top-linux) covers when htop is nicer (tree view `F5`, filter `F4`, search `/`).
+`top -H -p PID` shows the threads of one process, which is how you find the single hot thread in a Java or Go service. The [top guide](/blog/top-command-linux-guide) covers the header fields and when htop is nicer (tree view `F5`, filter `F4`, search `/`).
 
 `pidstat` (package `sysstat`) records per-process numbers over time, which `top` can't:
 
@@ -122,7 +122,7 @@ nvme0n1  12.0   410.0   96.0   18420.0    0.35    48.20    19.8   99.6
 (columns trimmed; sysstat prints more)
 ```
 
-Focus on `r_await`/`w_await` (average milliseconds per I/O, including queueing) and `aqu-sz` (average queue depth). `%util` near 100% on a single HDD means saturated, but on SSDs and NVMe, which serve many requests in parallel, `%util` alone can't tell you that. Latency (`await`) going up is the real signal. More in [disk I/O with iostat](/blog/linux-check-disk-io-iostat).
+Focus on `r_await`/`w_await` (average milliseconds per I/O, including queueing) and `aqu-sz` (average queue depth). `%util` near 100% on a single HDD means saturated, but on SSDs and NVMe, which serve many requests in parallel, `%util` alone can't tell you that. Latency (`await`) going up is the real signal. More in [disk I/O with iostat](/blog/linux-performance-troubleshooting-guide).
 
 Which process is doing it:
 

@@ -308,4 +308,4 @@ nft delete table inet trace_dbg     # clean up afterwards
 
 ---
 
-*Related: [Check firewall status on Linux](/blog/check-firewall-status-linux) to see what's loaded before and after. [iptables block IP examples](/blog/iptables-block-ip-example) if you're staying on iptables for now. [Linux security hardening guide](/blog/linux-security-hardening-guide) for where the host firewall fits in a broader baseline.*
+*Related: [Linux firewall: check status and block IPs](/blog/iptables-block-ip-example) to see what's loaded before and after, and for iptables examples if you're staying on it for now. [Linux security hardening guide](/blog/linux-security-hardening-guide) for where the host firewall fits in a broader baseline.*
