@@ -2,12 +2,19 @@ import { ImageResponse } from 'next/og';
 import { getAllSlugs, getPostBySlug } from '@/lib/posts';
 
 // Node runtime: getPostBySlug reads posts/ via fs, which edge cannot do.
-export const alt = 'Blog post';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
 export function generateStaticParams() {
   return getAllSlugs().map((slug) => ({ slug }));
+}
+
+// Per-post alt text. The static `alt` export can only be one string for every
+// post. The image is served at /blog/<slug>/opengraph-image/og.
+export async function generateImageMetadata({ params }: { params: Promise<{ slug: string }> | { slug: string } }) {
+  const { slug } = await params;
+  const post = getPostBySlug(slug);
+  return [{ id: 'og', alt: post?.title ?? 'damonsec.com blog post', size, contentType }];
 }
 
 export default async function OgImage({ params }: { params: Promise<{ slug: string }> }) {

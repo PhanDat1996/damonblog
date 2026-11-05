@@ -27,7 +27,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const url = `${BASE_URL}/blog/${slug}`;
 
   return {
-    title: post.title,
+    title: post.seoTitle ?? post.title,
     description: post.excerpt,
     keywords: post.tags,
     authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],

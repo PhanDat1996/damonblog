@@ -60,6 +60,7 @@ export function getPostBySlug(slug: string): Post | null {
     return {
       slug,
       title: meta.title,
+      seoTitle: meta.seoTitle,
       date: meta.date,
       updated: meta.updated,
       excerpt: meta.excerpt,

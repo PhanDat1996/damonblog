@@ -1,4 +1,5 @@
 import type { Post } from '@/types/post';
+import { CATEGORIES } from '@/lib/categories';
 
 interface BlogPostJsonLdProps {
   post: Post;
@@ -32,7 +33,7 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
     '@type': 'BlogPosting',
     headline: post.title,
     description: post.excerpt,
-    image: `${url}/opengraph-image`,
+    image: `${url}/opengraph-image/og`,
     author: {
       '@type': 'Person',
       name: 'Damon',
@@ -64,6 +65,19 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
     ...(wordCount ? { wordCount } : {}),
   };
 
+  // Blog > Category > Post. Category pages live at /blog/<category>.
+  const category = CATEGORIES[post.category];
+  const crumbs = [
+    { name: 'Blog', item: 'https://www.damonsec.com/blog' },
+    ...(category ? [{ name: category.label, item: `https://www.damonsec.com/blog/${category.slug}` }] : []),
+    { name: post.title, item: url },
+  ];
+  const breadcrumbJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: crumbs.map((c, i) => ({ '@type': 'ListItem', position: i + 1, ...c })),
+  };
+
   // Fix #3: FAQ schema for posts with FAQ sections
   const faqJsonLd = faqItems && faqItems.length > 0
     ? {
@@ -85,6 +99,10 @@ export function BlogPostJsonLd({ post, url, wordCount, faqItems }: BlogPostJsonL
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(articleJsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
       />
       {faqJsonLd && (
         <script

@@ -3,6 +3,7 @@ export type Category = 'nginx' | 'linux' | 'security' | 'devops' | 'tooling';
 export interface Post {
   slug: string;
   title: string;
+  seoTitle?: string;
   date: string;
   updated?: string;
   excerpt: string;
@@ -18,6 +19,7 @@ export interface Post {
 
 export interface PostMeta {
   title: string;
+  seoTitle?: string; // shorter <title> for search results; the H1 keeps title
   date: string;
   updated?: string; // last substantive revision; drives dateModified + sitemap lastmod
   excerpt: string;
