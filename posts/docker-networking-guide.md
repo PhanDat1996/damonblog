@@ -171,7 +171,7 @@ networks:
     internal: true               # no outbound internet from this network
 ```
 
-`nginx` reaches `app`, `app` reaches `db`, and `nginx` can't reach `db`. `internal: true` also removes the outbound NAT route, so a compromised `db` container can't call out. If NGINX in this setup returns 502s to `app`, see [NGINX 502 Bad Gateway](/blog/nginx-502-bad-gateway-fix-linux). `proxy_pass http://127.0.0.1:...` inside the NGINX container is a common cause.
+`nginx` reaches `app`, `app` reaches `db`, and `nginx` can't reach `db`. `internal: true` also removes the outbound NAT route, so a compromised `db` container can't call out. If NGINX in this setup returns 502s to `app`, see [NGINX 502 Bad Gateway](/blog/nginx-502-under-load). `proxy_pass http://127.0.0.1:...` inside the NGINX container is a common cause.
 
 ---
 

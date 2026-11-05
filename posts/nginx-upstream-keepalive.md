@@ -244,7 +244,7 @@ and `proxy_set_header Connection $connection_upgrade;`.
 
 ## When keepalive isn't the problem
 
-If 502s continue with reuse verified, look at backend capacity ([NGINX 502 under load](/blog/nginx-502-under-load)), the specific error message ([502 error-log table](/blog/nginx-502-bad-gateway-fix-linux)), or NGINX's own limits ([too many open files](/blog/too-many-open-files-linux-fix)).
+If 502s continue with reuse verified, look at backend capacity ([NGINX 502 under load](/blog/nginx-502-under-load#why-502s-appear-specifically-under-load)), the specific error message ([502 error-log table](/blog/nginx-502-under-load#step-2-look-up-the-message)), or NGINX's own limits ([too many open files](/blog/too-many-open-files-linux-fix)).
 
 ---
 

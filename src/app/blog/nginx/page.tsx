@@ -28,8 +28,7 @@ export const metadata: Metadata = {
 };
 
 const RECOMMENDED = [
-  { text: 'Fix NGINX 502 Bad Gateway errors in production',           href: '/blog/nginx-502-bad-gateway-fix-linux' },
-  { text: 'Diagnose NGINX 502 errors that only appear under load',    href: '/blog/nginx-502-under-load' },
+  { text: 'Fix NGINX 502 Bad Gateway errors, including under load',   href: '/blog/nginx-502-under-load' },
   { text: 'Configure upstream keepalive to prevent connection drops',  href: '/blog/nginx-upstream-keepalive' },
   { text: 'Set up NGINX rate limiting for API and login endpoints',   href: '/blog/nginx-rate-limiting-config' },
   { text: 'NGINX troubleshooting reference for production incidents',  href: '/blog/nginx-troubleshooting-guide' },
@@ -95,7 +94,7 @@ export default function NginxCategoryPage() {
         <div className="max-w-2xl space-y-4">
           <p className="font-sans text-zinc-400 leading-relaxed">
             Notes on NGINX problems:{' '}
-            <Link href="/blog/nginx-502-bad-gateway-fix-linux" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502</Link> and{' '}
+            <Link href="/blog/nginx-502-under-load" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">502</Link> and{' '}
             <Link href="/blog/nginx-504-gateway-timeout-fix" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">504</Link> errors traced from the
             upstream side, request size limits,{' '}
             <Link href="/blog/nginx-upstream-keepalive" className="text-zinc-300 underline decoration-zinc-700 hover:decoration-green-400 transition-colors">keepalive to upstreams</Link>, rate

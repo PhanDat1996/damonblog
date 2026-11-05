@@ -133,7 +133,7 @@ grep -E "^2026/10/28 14:2" /var/log/nginx/error.log \
 | `upstream prematurely closed connection` | Backend closed without a full response. Same family as 104. |
 | `no live upstreams while connecting to upstream` | Every server in the upstream block is marked failed. It's a consequence, not a cause. Look at the earlier errors. |
 
-If one backend IP dominates, go to that host. If all of them fail equally, suspect a shared dependency. The [NGINX 502 guide](/blog/nginx-502-bad-gateway-fix-linux) goes deeper on each of these.
+If one backend IP dominates, go to that host. If all of them fail equally, suspect a shared dependency. The [NGINX 502 guide](/blog/nginx-502-under-load) goes deeper on each of these.
 
 ---
 

@@ -372,7 +372,7 @@ export const SKILLS: Skill[] = [
       { label: 'Ingress', href: `${K8S}/concepts/services-networking/ingress/` },
       { label: 'Ingress Controllers', href: `${K8S}/concepts/services-networking/ingress-controllers/` },
     ],
-    relatedPosts: ['nginx-troubleshooting-guide', 'nginx-502-bad-gateway-fix-linux'],
+    relatedPosts: ['nginx-troubleshooting-guide', 'nginx-502-under-load'],
   },
   {
     id: 'networking.coredns',
