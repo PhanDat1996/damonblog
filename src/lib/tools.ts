@@ -44,7 +44,6 @@ export const WEB_TOOLS: WebTool[] = [
     pitch: 'Paste a config, get findings with the exact line and a fix.',
     relatedPosts: [
       'nginx-troubleshooting-guide',
-      'nginx-502-bad-gateway-fix-linux',
       'nginx-502-under-load',
       'nginx-504-gateway-timeout-fix',
       'nginx-413-request-entity-too-large',

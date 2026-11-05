@@ -41,7 +41,7 @@ Reading an error log line:
 
 | Symptom / log line | Usual cause | Details |
 |---|---|---|
-| **502 Bad Gateway** | Upstream down, wrong address or socket, upstream closed or reset | [NGINX 502 from the error log](/blog/nginx-502-bad-gateway-fix-linux) |
+| **502 Bad Gateway** | Upstream down, wrong address or socket, upstream closed or reset | [NGINX 502 Bad Gateway](/blog/nginx-502-under-load) |
 | **502 only under load** | Accept queue full, workers killed, port exhaustion | [502 under load](/blog/nginx-502-under-load) |
 | `[crit] ... (99: Cannot assign requested address)` | Ephemeral ports exhausted, no upstream keepalive | [Upstream keepalive](/blog/nginx-upstream-keepalive) |
 | **504**, `upstream timed out (110 ...)` | Upstream slow, or connect stalls | [504 lab](/blog/nginx-504-gateway-timeout-fix) |
@@ -66,7 +66,7 @@ upstream prematurely closed connection while reading response header            
 upstream timed out (110: Connection timed out) while reading response header     → backend too slow
 ```
 
-Start with [NGINX 502: find the cause from the error log](/blog/nginx-502-bad-gateway-fix-linux), [502 under load](/blog/nginx-502-under-load), or [504: find which timeout fired](/blog/nginx-504-gateway-timeout-fix).
+Start with [NGINX 502: from the error log to 502s under load](/blog/nginx-502-under-load), or [504: find which timeout fired](/blog/nginx-504-gateway-timeout-fix).
 
 ---
 

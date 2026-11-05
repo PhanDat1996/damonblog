@@ -113,8 +113,7 @@ export default function CategoryPage({ category }: { category: Category }) {
           </h2>
           <ul className="space-y-2.5">
             {[
-              { text: 'Fix NGINX 502 Bad Gateway errors in production',           href: '/blog/nginx-502-bad-gateway-fix-linux' },
-              { text: 'Diagnose NGINX 502 errors that only appear under load',    href: '/blog/nginx-502-under-load' },
+              { text: 'Fix NGINX 502 Bad Gateway errors, including under load',   href: '/blog/nginx-502-under-load' },
               { text: 'Configure upstream keepalive to prevent connection drops',  href: '/blog/nginx-upstream-keepalive' },
               { text: 'Set up NGINX rate limiting for API and login endpoints',   href: '/blog/nginx-rate-limiting-config' },
               { text: 'NGINX troubleshooting reference for production incidents',  href: '/blog/nginx-troubleshooting-guide' },

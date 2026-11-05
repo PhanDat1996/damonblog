@@ -602,8 +602,7 @@ export default function NginxConfigAnalyzerPage() {
           <h2 className="font-mono text-xl font-bold text-zinc-100">Related guides</h2>
           <ul className="space-y-2">
             {[
-              { text: "Fix NGINX 502 Bad Gateway errors in production",           href: "/blog/nginx-502-bad-gateway-fix-linux" },
-              { text: "NGINX 502 errors under load — diagnosis and fixes",        href: "/blog/nginx-502-under-load" },
+              { text: "Fix NGINX 502 Bad Gateway errors, including under load",   href: "/blog/nginx-502-under-load" },
               { text: "Configure upstream keepalive to prevent connection drops", href: "/blog/nginx-upstream-keepalive" },
               { text: "NGINX rate limiting for API and login endpoints",          href: "/blog/nginx-rate-limiting-config" },
               { text: "NGINX production troubleshooting reference",               href: "/blog/nginx-troubleshooting-guide" },
