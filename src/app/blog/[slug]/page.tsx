@@ -8,6 +8,8 @@ import { BlogPostJsonLd, extractFaqFromHtml } from '@/components/JsonLd';
 import { CATEGORIES } from '@/lib/categories';
 import { toolsForPost } from '@/lib/tools';
 import ReadingProgress from '@/components/ReadingProgressLazy';
+import CodeCopy from '@/components/CodeCopyLazy';
+import { addHeadingIds, splitAtFirstH2 } from '@/lib/headings';
 
 const BASE_URL = 'https://www.damonsec.com';
 
@@ -74,9 +76,17 @@ export default async function BlogPostPage({ params }: Props) {
     ? post.content.replace(/<[^>]+>/g, '').split(/\s+/).filter(Boolean).length
     : undefined;
 
+  // Heading ids/anchors, and a TOC between the intro and the first section
+  // once a post is long enough to need one.
+  const { html: contentHtml, headings } = addHeadingIds(post.content ?? '');
+  const tocItems = headings.filter((h) => h.level === 2);
+  const showToc = tocItems.length >= 4;
+  const [introHtml, bodyHtml] = showToc ? splitAtFirstH2(contentHtml) : [contentHtml, ''];
+
   return (
     <>
       <ReadingProgress />
+      <CodeCopy />
       <BlogPostJsonLd post={post} url={url} wordCount={wordCount} faqItems={faqItems} />
 
       <article className="mx-auto max-w-2xl">
@@ -130,8 +140,35 @@ export default async function BlogPostPage({ params }: Props) {
         {/* Post content */}
         <div
           className="prose"
-          dangerouslySetInnerHTML={{ __html: post.content ?? '' }}
+          dangerouslySetInnerHTML={{ __html: introHtml }}
         />
+
+        {showToc && (
+          <nav aria-labelledby="toc-heading" className="my-8 rounded-xl border border-zinc-800 bg-zinc-900/40">
+            <details open className="group">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-3 font-mono text-xs uppercase tracking-widest text-zinc-500 hover:text-zinc-300">
+                <span id="toc-heading">On this page</span>
+                <span aria-hidden="true" className="transition-transform group-open:rotate-180">▾</span>
+              </summary>
+              <ol className="space-y-1.5 border-t border-zinc-800 px-5 py-4 text-sm">
+                {tocItems.map((h) => (
+                  <li key={h.id}>
+                    <a href={`#${h.id}`} className="text-zinc-300 hover:text-green-400 transition-colors">
+                      {h.text}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </details>
+          </nav>
+        )}
+
+        {bodyHtml && (
+          <div
+            className="prose"
+            dangerouslySetInnerHTML={{ __html: bodyHtml }}
+          />
+        )}
 
         {/* Tools that apply what the post covers to the reader's own config */}
         {tools.length > 0 && (

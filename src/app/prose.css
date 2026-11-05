@@ -140,3 +140,38 @@
 }
 
 .prose strong { color: theme('colors.white'); font-weight: 600; }
+/* Heading anchors: the link has no text; "#" shows on hover or keyboard focus. */
+.prose .heading-anchor {
+  margin-left: 0.5rem;
+  color: theme('colors.zinc.600');
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.prose .heading-anchor::before { content: '#'; }
+.prose h2:hover .heading-anchor,
+.prose h3:hover .heading-anchor,
+.prose .heading-anchor:focus-visible { opacity: 1; }
+.prose .heading-anchor:hover { color: theme('colors.green.400'); }
+
+/* Copy button on code blocks (added client-side by CodeCopy). */
+.prose .code-block { position: relative; }
+.prose .code-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid theme('colors.zinc.700');
+  border-radius: 0.375rem;
+  background: theme('colors.zinc.800');
+  color: theme('colors.zinc.400');
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.7rem;
+  opacity: 0;
+  transition: opacity 150ms, color 150ms;
+}
+.prose .code-block:hover .code-copy,
+.prose .code-copy:focus-visible { opacity: 1; }
+.prose .code-copy:hover { color: theme('colors.green.400'); }
+/* Touch screens have no hover, so keep the button visible there. */
+@media (hover: none) { .prose .code-copy { opacity: 1; } }
