@@ -1,5 +1,6 @@
 ---
 title: "Monitor Linux Logs: tail -F, Multiple Files, journalctl Filters"
+seoTitle: "Tail Multiple Files and Monitor Logs in Linux"
 date: "2026-04-22"
 updated: "2026-11-02"
 excerpt: "Follow and filter Linux logs: tail -F vs -f after rotation, tail multiple files with labels, journalctl -f and --since/--until, and grep pipe buffering."
