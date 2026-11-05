@@ -1,5 +1,6 @@
 ---
 title: "Check CPU Usage in Linux: top, htop, Load Average and Uptime"
+seoTitle: "top vs htop: Check CPU Usage in Linux"
 date: "2026-04-21"
 updated: "2026-11-02"
 excerpt: "Check CPU usage, load average and uptime in Linux, read every line of top and its keys, and pick between htop and top on a production server."
