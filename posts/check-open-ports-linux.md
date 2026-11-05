@@ -1,5 +1,6 @@
 ---
 title: "Check Open Ports on Linux with ss: Connections and Port in Use"
+seoTitle: "Check Open Ports on Linux: ss, Port in Use"
 date: "2026-04-21"
 updated: "2026-11-02"
 excerpt: "What is listening on a Linux port, who is connected, and what holds the port you need. ss, lsof, fuser, netstat equivalents, and how to free a port safely."

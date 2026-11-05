@@ -49,6 +49,8 @@ const nextConfig = {
   // Permanent redirects pass the old URLs' ranking signals to the new target.
   async redirects() {
     return [
+      // OG images moved under /og when per-post alt text was added (generateImageMetadata).
+      { source: '/blog/:slug/opengraph-image', destination: '/blog/:slug/opengraph-image/og', permanent: true },
       { source: '/blog/check-open-ports-linux-ss-netstat', destination: '/blog/check-open-ports-linux', permanent: true },
       { source: '/blog/check-listening-ports-linux',       destination: '/blog/check-open-ports-linux', permanent: true },
       { source: '/blog/linux-check-listening-ports-ss',    destination: '/blog/check-open-ports-linux', permanent: true },
