@@ -1,7 +1,7 @@
 ---
 title: "Connection Reset After Client Hello: Prove SNI Blocking"
 date: "2026-11-01"
-updated: "2026-11-01"
+updated: "2026-11-06"
 excerpt: "curl connects, sends Client Hello, then gets Connection reset by peer? Prove it is SNI-based blocking with --resolve, then find the hop that injects the RST."
 tags: ["networking", "troubleshooting", "debugging", "security"]
 featured: false
@@ -34,6 +34,22 @@ curl -sv -k -I --resolve www.linkedin.com:443:1.1.1.1 https://www.linkedin.com
 
 If (2) completes the handshake and (3) is reset, the filter is looking at the hostname, not the IP. Then lower the IP TTL of the Client Hello to find the hop that sends the reset (see "Which hop sends the reset?" below).
 
+```mermaid
+flowchart TD
+    A(["curl: reset right after Client hello"]) --> B["(1) Local DNS answer matches DoH?"]
+    B -- No --> B1["DNS is filtered too:<br/>switch resolver, then go on"]
+    B -- Yes --> C
+    B1 --> C["(2) Harmless SNI to the same IP:<br/>does the handshake complete?"]
+    C -- No --> C1["IP or route problem,<br/>not SNI"]
+    C -- Yes --> D["(3) Blocked SNI to an unrelated IP:<br/>still reset?"]
+    D -- No --> D1["The server or LB<br/>refuses that name"]
+    D -- Yes --> E["SNI filter on the path:<br/>TTL probe finds the hop"]
+    classDef bad stroke:#f87171,color:#fecaca
+    classDef other stroke:#facc15,color:#fef08a
+    class E bad
+    class B1,C1,D1 other
+```
+
 ---
 
 ## What the failure looks like
@@ -52,6 +68,21 @@ Three things in those lines matter:
 - `Connected ... port 443`: the TCP three-way handshake finished, so the IP is not blackholed and nothing is dropping SYNs.
 - `Client hello (1)` is the last thing that happened. The Client Hello is the first packet that carries the hostname, in the clear, in the SNI extension.
 - `Connection reset by peer`: a TCP RST came back instead of a `Server hello`. A real TLS server that dislikes a request sends a TLS alert, not a bare reset.
+
+```mermaid
+sequenceDiagram
+    participant C as Laptop (curl)
+    participant F as Filter on the path
+    participant S as Server 104.18.41.41
+    C->>S: SYN
+    S-->>C: SYN-ACK
+    C->>S: ACK
+    Note over C,S: "Connected ... port 443"
+    C->>F: TLS Client Hello, SNI = www.linkedin.com
+    Note over F: hostname matches the blocklist
+    F--xC: TCP RST (looks like it came from the server)
+    Note over C: "Connection reset by peer"<br/>no Server hello ever arrives
+```
 
 IPv6 failed the same way, to a different address:
 
@@ -75,6 +106,22 @@ Meanwhile `https://www.google.com` and `https://www.microsoft.com` completed TLS
 ---
 
 ## Layer 1: DNS was also lying
+
+The block turned out to have two layers. Each one fails at a different step of opening the site, so fixing the first only moves the failure to the second:
+
+```mermaid
+flowchart TD
+    A(["Open linkedin.com"]) --> B["DNS lookup"]
+    B -- "via router" --> X1["Layer 1: DNS block<br/>answer is 127.0.0.1"]
+    B -- "via 1.1.1.1 or DoH" --> D["Real IP 104.18.41.41<br/>TCP :443 connects<br/>Client Hello carries SNI in clear"]
+    D --> F["ISP hop 5 reads the SNI"]
+    F -- "*.linkedin.com" --> X2["Layer 2: SNI block<br/>injected TCP RST"]
+    F -- "any other name" --> OK["Handshake completes"]
+    classDef bad stroke:#f87171,color:#fecaca
+    classDef good stroke:#4ade80,color:#bbf7d0
+    class X1,X2 bad
+    class OK good
+```
 
 Before the reset there was an earlier symptom: the default resolver pointed at the router, and the router returned localhost.
 
@@ -236,11 +283,19 @@ traceroute to 104.18.41.41 (104.18.41.41), 8 hops max, 40 byte packets
 
 With TTL 1 the Client Hello dies at the home router, and no reset came back, so **the router is not the injector**. The local machine isn't either: a local proxy or endpoint agent would reset at every TTL. The reset appears only once the packet gets past hop 4, which is inside the ISP's network (`whois` puts hops 2 to 8 in the same ISP's AS). The device at hop 5 doesn't answer traceroute, which is typical for inline filtering gear.
 
-```
-  laptop ── router ── ISP hop 2 ── hop 3 ── hop 4 ── [hop 5: SNI filter] ──...── CDN
-             │                                              │
-             └ DNS answers 127.0.0.1                         └ reads SNI / Host,
-               (layer 1)                                       injects TCP RST (layer 2)
+```mermaid
+sequenceDiagram
+    participant L as Laptop
+    participant R as Router (hop 1)
+    participant I as ISP hops 2-4
+    participant F as Hop 5 (SNI filter)
+    L->>R: Client Hello, TTL=1
+    Note over R: TTL expires: timeout, no RST
+    L->>I: Client Hello, TTL=2..4
+    Note over I: TTL expires: timeout, no RST
+    L->>F: Client Hello, TTL=5
+    F-->>L: TCP RST
+    Note over L,F: first TTL that gets a reset: the injector sits past hop 4
 ```
 
 The 127.0.0.1 DNS answer and the SNI reset are two separate controls. Fixing the first only exposes the second.

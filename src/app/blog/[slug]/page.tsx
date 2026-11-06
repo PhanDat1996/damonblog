@@ -9,6 +9,7 @@ import { CATEGORIES } from '@/lib/categories';
 import { toolsForPost } from '@/lib/tools';
 import ReadingProgress from '@/components/ReadingProgressLazy';
 import CodeCopy from '@/components/CodeCopyLazy';
+import Mermaid from '@/components/Mermaid';
 import { addHeadingIds, splitAtFirstH2 } from '@/lib/headings';
 
 const BASE_URL = 'https://www.damonsec.com';
@@ -87,6 +88,7 @@ export default async function BlogPostPage({ params }: Props) {
     <>
       <ReadingProgress />
       <CodeCopy />
+      <Mermaid />
       <BlogPostJsonLd post={post} url={url} wordCount={wordCount} faqItems={faqItems} />
 
       <article className="mx-auto max-w-2xl">
