@@ -175,3 +175,19 @@
 .prose .code-copy:hover { color: theme('colors.green.400'); }
 /* Touch screens have no hover, so keep the button visible there. */
 @media (hover: none) { .prose .code-copy { opacity: 1; } }
+
+/* Diagrams rendered client-side from ```mermaid fences by the Mermaid component. */
+.prose .mermaid-diagram {
+  margin: 1.5rem 0;
+  padding: 1.25rem 1rem;
+  background-color: theme('colors.zinc.900');
+  border: 1px solid theme('colors.zinc.800');
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  text-align: center;
+}
+.prose .mermaid-diagram svg { margin: 0 auto; max-width: 100%; height: auto; }
+/* Sequence diagrams are wide; on phones scroll them sideways instead of shrinking the text. */
+.prose .mermaid-diagram svg[aria-roledescription='sequence'] { min-width: 520px; }
+/* Mermaid measures labels outside .prose; keep article paragraph spacing off them. */
+.prose .mermaid-diagram p { margin: 0; line-height: 1.5; color: inherit; }

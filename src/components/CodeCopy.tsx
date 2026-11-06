@@ -13,6 +13,8 @@ export default function CodeCopy() {
 
     for (const pre of blocks) {
       if (pre.parentElement?.classList.contains('code-block')) continue;
+      // Mermaid fences are swapped for rendered diagrams by the Mermaid component.
+      if (pre.querySelector('code.language-mermaid')) continue;
 
       // Wrap the pre so the button stays put while the code scrolls sideways.
       const wrapper = document.createElement('div');
