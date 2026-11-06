@@ -191,3 +191,12 @@
 .prose .mermaid-diagram svg[aria-roledescription='sequence'] { min-width: 520px; }
 /* Mermaid measures labels outside .prose; keep article paragraph spacing off them. */
 .prose .mermaid-diagram p { margin: 0; line-height: 1.5; color: inherit; }
+
+/* Screenshots / figures embedded in posts */
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  border: 1px solid theme('colors.zinc.800');
+  margin: 1.75rem 0;
+}
