@@ -4,11 +4,11 @@ import Link from 'next/link';
 export const metadata: Metadata = {
   title: 'Privacy Policy',
   description:
-    'Privacy policy for damonsec.com — what data is collected, how cookies and advertising (Google AdSense) are used, and how to opt out.',
+    'Privacy policy for damonsec.com — what data is collected, how cookies, analytics (Google Analytics) and advertising (Google AdSense) are used, and how to opt out.',
   alternates: { canonical: '/privacy' },
 };
 
-const LAST_UPDATED = '2026-10-31';
+const LAST_UPDATED = '2026-11-08';
 
 const SECTIONS = [
   {
@@ -22,6 +22,14 @@ const SECTIONS = [
     heading: 'Information collected automatically',
     body: [
       'Like most websites, the hosting provider (Vercel) may log standard request data such as IP address, browser type, referring page, and time of visit. These logs are used for security, debugging, and aggregate traffic statistics.',
+    ],
+  },
+  {
+    heading: 'Analytics',
+    body: [
+      'This site uses Google Analytics 4 to understand how many people visit, which pages they read, how they arrived (for example from a search engine or a link), and their approximate country, device and browser. Google Analytics sets first-party cookies (such as _ga) for this purpose.',
+      'This data is used only in aggregate to decide what to write and improve. It is not used to identify you, and it is not sold. Google processes it under its own terms: https://policies.google.com/technologies/partner-sites.',
+      'You can opt out with the Google Analytics opt-out browser add-on (https://tools.google.com/dlpage/gaoptout) or by blocking cookies. Visitors in the EEA, UK and Switzerland are asked for consent first; until they agree, analytics and advertising cookies are not set.',
     ],
   },
   {
@@ -50,7 +58,7 @@ const SECTIONS = [
   {
     heading: 'Your choices',
     body: [
-      'You can block or delete cookies in your browser settings. Visitors in the EEA, UK, and Switzerland will be asked for consent before personalized ads are shown.',
+      'You can block or delete cookies in your browser settings. Visitors in the EEA, UK, and Switzerland are asked for consent before analytics cookies are set or personalized ads are shown, and can change that choice later: clearing this site’s cookies shows the consent message again.',
     ],
   },
   {
