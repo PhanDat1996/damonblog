@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { getAllNoteSlugs, getNoteBySlug, getNotes } from '@/lib/news';
@@ -36,6 +37,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       publishedTime: new Date(note.date).toISOString(),
       authors: [`${BASE_URL}/about`],
       siteName: 'damonsec.com',
+      images: [SITE_OG_IMAGE],
     },
     twitter: {
       card: 'summary_large_image',

@@ -18,6 +18,14 @@ const CISSP_CSP = [
 const nextConfig = {
   pageExtensions: ['ts', 'tsx', 'js', 'jsx'],
 
+  // ── Metadata in <head> for crawlers ───────────────────────────────────────
+  // Next 15 streams metadata of dynamic pages (e.g. /blog, which reads
+  // searchParams) into <body>, except for UAs in `htmlLimitedBots`. Its default
+  // list leaves out Googlebot, so Google saw /blog's title, canonical and robots
+  // only after rendering. This is Next's default list plus Googlebot.
+  htmlLimitedBots:
+    /Googlebot|[\w-]+-Google|Google-[\w-]+|Chrome-Lighthouse|Slurp|DuckDuckBot|baiduspider|yandex|sogou|bitlybot|tumblr|vkShare|quora link preview|redditbot|ia_archiver|Bingbot|BingPreview|applebot|facebookexternalhit|facebookcatalog|Twitterbot|LinkedInBot|Slackbot|Discordbot|WhatsApp|SkypeUriPreview|Yeti|googleweblight/i,
+
   // ── Legacy JS fix ─────────────────────────────────────────────────────────
   // The polyfills Lighthouse reports (Array.prototype.at, Array.prototype.flat,
   // Array.prototype.flatMap, Object.fromEntries, Object.hasOwn,

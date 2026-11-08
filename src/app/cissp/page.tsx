@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import Link from 'next/link';
 import { DOMAINS, OUTLINE_META } from '@/lib/cissp/domains.ts';
 import { SCENARIOS } from '@/lib/cissp/scenarios.ts';
@@ -21,6 +22,7 @@ export const metadata: Metadata = {
     url: PAGE_URL,
     type: 'website',
     siteName: 'damonsec.com',
+    images: [SITE_OG_IMAGE],
   },
   twitter: {
     card: 'summary',
