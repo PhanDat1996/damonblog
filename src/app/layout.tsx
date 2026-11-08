@@ -46,6 +46,30 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 // Google AdSense publisher ID (public: also listed in /ads.txt)
 const ADSENSE_CLIENT = 'ca-pub-8567170568100797';
 
+// Google tag (GA4 stream "damonsec web")
+const GOOGLE_TAG_ID = 'GTM-WJXVC7P7';
+
+// Consent Mode v2: deny storage by default in the EEA, UK and Switzerland until
+// the AdSense consent message (Privacy & messaging) records a choice; elsewhere
+// tags run normally. Must run before the Google tag loads.
+const CONSENT_REGIONS = [
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IS', 'IE', 'IT',
+  'LV', 'LI', 'LT', 'LU', 'MT', 'NL', 'NO', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'CH',
+];
+const GOOGLE_TAG_INIT = `
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('consent', 'default', {
+  ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied',
+  analytics_storage: 'denied', region: ${JSON.stringify(CONSENT_REGIONS)}, wait_for_update: 500
+});
+gtag('js', new Date());
+var s = document.createElement('script');
+s.async = true;
+s.src = 'https://www.googletagmanager.com/gtm.js?id=${GOOGLE_TAG_ID}';
+document.head.appendChild(s);
+`;
+
 // ── Site-wide metadata ───────────────────────────────────────────────────────
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.damonsec.com'),
@@ -136,6 +160,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`}
           crossOrigin="anonymous"
         />
+        {/* Google tag (GA4): sets consent defaults, then injects gtm.js itself so the
+            order can't be changed by Next's script hoisting */}
+        <script dangerouslySetInnerHTML={{ __html: GOOGLE_TAG_INIT }} />
       </head>
       <body className="min-h-screen bg-zinc-950 text-zinc-200 antialiased selection:bg-green-400/20 selection:text-green-300"
         // No font-sans here — inherited from Navbar's CSS variable injection
