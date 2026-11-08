@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import Link from 'next/link';
 import { CURRICULUM_META, DOMAINS, SKILLS } from '@/lib/cka/curriculum.ts';
 import { formatDate } from '@/lib/cka/dates.ts';
@@ -23,6 +24,7 @@ export const metadata: Metadata = {
     url: PAGE_URL,
     type: 'website',
     siteName: 'damonsec.com',
+    images: [SITE_OG_IMAGE],
   },
   twitter: {
     card: 'summary',

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import Link from 'next/link';
 import clsx from 'clsx';
 import { getNewsFeed, getNotes, groupByDay, NEWS_SOURCES, type NewsItem } from '@/lib/news';
@@ -22,6 +23,7 @@ export const metadata: Metadata = {
     url: `${BASE_URL}/news`,
     type: 'website',
     siteName: 'damonsec.com',
+    images: [SITE_OG_IMAGE],
   },
   twitter: { card: 'summary', title: TITLE, description: DESCRIPTION },
 };

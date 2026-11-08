@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import { getAllPosts, getAllTags } from '@/lib/posts';
 import { CATEGORIES, VALID_CATEGORIES } from '@/lib/categories';
 import PostCard from '@/components/PostCard';
@@ -45,6 +46,7 @@ export async function generateMetadata({
             title,
             description,
             url: `${BASE_URL}/blog?page=${currentPage}`,
+            images: [SITE_OG_IMAGE],
           },
         }
       : {}),

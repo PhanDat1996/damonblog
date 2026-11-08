@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SITE_OG_IMAGE } from '@/lib/og';
 import Link from 'next/link';
 import { getAllPosts } from '@/lib/posts';
 import { CATEGORIES, VALID_CATEGORIES } from '@/lib/categories';
@@ -22,6 +23,7 @@ export function buildCategoryMetadata(category: Category): Metadata {
       url: `${BASE_URL}/blog/${category}`,
       type: 'website',
       siteName: 'damonsec.com',
+      images: [SITE_OG_IMAGE],
     },
     twitter: {
       card: 'summary',
