@@ -86,7 +86,6 @@ const nextConfig = {
       { source: '/blog/how-to-check-dns-server-linux',          destination: '/blog/dns-not-resolving-linux-fix', permanent: true },
       { source: '/blog/check-firewall-status-linux',            destination: '/blog/iptables-block-ip-example', permanent: true },
       { source: '/blog/docker-inspect-container-ip',            destination: '/blog/docker-networking-guide', permanent: true },
-      { source: '/blog/linux-tail-multiple-files',              destination: '/blog/monitor-real-time-logs-linux', permanent: true },
       { source: '/blog/journalctl-filter-time-range',           destination: '/blog/monitor-real-time-logs-linux', permanent: true },
       { source: '/blog/linux-check-last-login-users',           destination: '/blog/linux-log-analysis-guide', permanent: true },
       { source: '/blog/systemctl-restart-service-not-working',  destination: '/blog/systemctl-service-not-starting-fix', permanent: true },

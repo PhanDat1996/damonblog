@@ -1,8 +1,8 @@
 ---
 title: "Linux TIME_WAIT Explained: When It Actually Breaks Things"
 date: "2024-12-05"
-updated: "2026-10-28"
-excerpt: "Thousands of TIME_WAIT sockets are usually harmless. Learn when they exhaust ephemeral ports, how to confirm it, and which sysctls help or hurt."
+updated: "2026-11-08"
+excerpt: "netstat or ss shows thousands of TIME_WAIT sockets? What TCP TIME_WAIT means, when it exhausts ephemeral ports, and which sysctls help or hurt."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 category: "linux"
@@ -274,6 +274,9 @@ Errors under load?
 ---
 
 ## FAQ
+
+**What does TIME_WAIT mean in netstat or ss?**
+The local side closed the TCP connection first and is waiting, 60 seconds on Linux, so late packets from the old connection can't be mistaken for a new one. The connection is finished; the entry only holds the address and port pair until the timer expires.
 
 **Can I shorten TIME_WAIT on Linux?**
 Not with a sysctl. The 60-second value is a kernel constant. Reduce the number of connections instead, or let `tcp_tw_reuse` reuse them for outgoing traffic.
