@@ -1,8 +1,8 @@
 ---
 title: "strace, lsof and ss: Debug a Misbehaving Process"
 date: "2024-05-02"
-updated: "2026-11-01"
-excerpt: "Logs are quiet but a process hangs, leaks connections or fills the disk. Combine strace, lsof and ss to see what it's doing, holding and waiting on."
+updated: "2026-11-08"
+excerpt: "A process hangs, leaks connections or fills the disk while logs stay quiet. Use strace, lsof and ss together, and know when to pick ss vs lsof."
 tags: ["debugging", "linux", "troubleshooting", "production"]
 featured: false
 lab: true
@@ -420,6 +420,22 @@ In practice:
 - On a busy production process, attach for **seconds**, with `timeout`, to a file (`-o`).
 - `strace -c` (a summary only) still pays the per-syscall stop. It's a smaller output, not a cheaper trace.
 - For a low-overhead view of a running process, use eBPF tools instead (`perf trace`, or `bpftrace` / the bcc tools). They don't stop the process.
+
+---
+
+## lsof vs ss
+
+Both can answer "which process has this socket," but they come at it from different sides:
+
+| | `lsof` | `ss` |
+|---|---|---|
+| Starts from | Processes and their open files (files, pipes, sockets, deleted files) | The kernel's socket tables |
+| TCP state, Recv-Q / Send-Q, timers | State only (`-i`), no queues | Yes: `-t`, `-n`, `-o` timers, `-i` TCP internals |
+| Owning process | Always | With `-p` (root needed for other users' processes) |
+| Speed on a busy host | Slow: walks every process's `/proc/PID/fd` | Fast: one netlink query |
+| Non-socket files | Yes | No |
+
+Rule of thumb: **`ss` for network questions** (how many connections, in what state, are queues growing), **`lsof` for "what does this process hold"** (files, deleted files still taking disk space, FD leaks).
 
 ---
 

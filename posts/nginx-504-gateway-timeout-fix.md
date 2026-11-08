@@ -1,8 +1,8 @@
 ---
 title: "NGINX 504 Gateway Timeout: Find Which Timeout Fired"
 date: "2026-10-28"
-updated: "2026-10-28"
-excerpt: "NGINX returns 504 Gateway Timeout? Lab-tested: tell a read timeout from a connect timeout, why retries double the wait, and when a 504 becomes a 502."
+updated: "2026-11-08"
+excerpt: "NGINX shows 504 Gateway Time-out? Lab-tested: tell a read timeout from a connect timeout, why retries double the wait, and when a 504 becomes a 502."
 tags: ["nginx", "troubleshooting", "debugging", "linux", "infrastructure"]
 featured: false
 lab: true
