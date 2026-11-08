@@ -278,7 +278,7 @@ CPU idle, memory fine, disks quiet, network calm, and the app is still slow. The
 | What's running? Is my service up? | `ps aux`, `pgrep -a`, `systemctl status` | [Check Running Processes](/blog/ps-command-linux-troubleshooting) |
 | What do the ps columns mean? | `ps -eo ...` | [ps Command in Linux](/blog/ps-command-linux-troubleshooting) |
 | Find a PID from a name | `pgrep -x`, `pgrep -f`, `pidof` | [Find a Process by Name](/blog/ps-command-linux-troubleshooting) |
-| Live view | `top`, `htop` | [htop vs top](/blog/top-command-linux-guide) |
+| Live view | `top`, `htop` | [top vs htop](/blog/htop-vs-top-linux) |
 | What's busy right now (scriptable)? | `pidstat 1` | [Check CPU Usage](/blog/top-command-linux-guide) |
 | What files and sockets does it hold? | `lsof -p`, `ss -p` | [strace, lsof, and ss](/blog/strace-lsof-ss-debugging) |
 | What happened at 3 a.m.? | `sar -f`, `journalctl --since` | [Linux Log Analysis](/blog/linux-log-analysis-guide) |
