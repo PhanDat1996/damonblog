@@ -43,6 +43,9 @@ const plusJakartaSans = Plus_Jakarta_Sans({
   adjustFontFallback: true,
 });
 
+// Google AdSense publisher ID (public: also listed in /ads.txt)
+const ADSENSE_CLIENT = 'ca-pub-8567170568100797';
+
 // ── Site-wide metadata ───────────────────────────────────────────────────────
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.damonsec.com'),
@@ -107,6 +110,10 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
+  // AdSense site ownership verification
+  other: {
+    'google-adsense-account': ADSENSE_CLIENT,
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -123,6 +130,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* AdSense loader: plain async <script> (next/script adds attributes AdSense warns about) */}
+        <script
+          async
+          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT}`}
+          crossOrigin="anonymous"
+        />
       </head>
       <body className="min-h-screen bg-zinc-950 text-zinc-200 antialiased selection:bg-green-400/20 selection:text-green-300"
         // No font-sans here — inherited from Navbar's CSS variable injection
