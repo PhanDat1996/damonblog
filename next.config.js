@@ -68,7 +68,6 @@ const nextConfig = {
       { source: '/blog/linux-sort-command-examples',            destination: '/blog/linux-find-file-by-name-and-size', permanent: true },
       { source: '/blog/compress-files-linux-tar-examples',      destination: '/blog/how-to-extract-tar-gz-linux', permanent: true },
       { source: '/blog/linux-move-files-between-directories',   destination: '/blog/how-to-copy-files-recursively-linux', permanent: true },
-      { source: '/blog/htop-vs-top-linux',                      destination: '/blog/top-command-linux-guide', permanent: true },
       { source: '/blog/check-cpu-usage-linux',                  destination: '/blog/top-command-linux-guide', permanent: true },
       { source: '/blog/how-to-check-uptime-linux',              destination: '/blog/top-command-linux-guide', permanent: true },
       { source: '/blog/check-running-process-linux',            destination: '/blog/ps-command-linux-troubleshooting', permanent: true },

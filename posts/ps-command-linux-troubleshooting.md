@@ -130,7 +130,7 @@ top          # always installed
 htop         # nicer, if installed
 ```
 
-Both sort by current CPU usage. `%CPU` in `ps` is averaged over the process's whole lifetime, so the busiest process **right now** is better found with `top`. See [Check CPU Usage in Linux](/blog/top-command-linux-guide), which also covers htop vs top.
+Both sort by current CPU usage. `%CPU` in `ps` is averaged over the process's whole lifetime, so the busiest process **right now** is better found with `top`. See [Check CPU Usage in Linux](/blog/top-command-linux-guide), and [top vs htop](/blog/htop-vs-top-linux) for when htop is the better tool.
 
 ### By service, not by process
 
