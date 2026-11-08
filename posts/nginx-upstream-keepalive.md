@@ -238,7 +238,7 @@ map $http_upgrade $connection_upgrade {
 }
 ```
 
-and `proxy_set_header Connection $connection_upgrade;`.
+and `proxy_set_header Connection $connection_upgrade;`. The full WebSocket setup, including the 60-second idle disconnect, is tested in [NGINX WebSocket proxy](/blog/nginx-websocket-proxy).
 
 ---
 
