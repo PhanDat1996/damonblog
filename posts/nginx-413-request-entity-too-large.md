@@ -111,7 +111,7 @@ location ~ \.php$ {
 2 MiB to /api/import.php               413 up=0 t=0.000500 | <html> <head><title>413 Request Entity Too Large</title></head> ...
 ```
 
-`/api/import.php` starts with `/api/`, but NGINX picks a matching regex location over a plain prefix location. The request was handled by `location ~ \.php$`, which still has the 1m default. **The 20m limit on `/api/` never applied.** That's why a 413 can remain after "I already raised `client_max_body_size`". Either set the limit at the `server` level so every location inherits it, or set it in the regex location too. To see which locations exist and what each one sets, dump the effective config:
+`/api/import.php` starts with `/api/`, but NGINX picks a matching regex location over a plain prefix location (the full precedence is tested in [NGINX location matching order](/blog/nginx-location-matching-order)). The request was handled by `location ~ \.php$`, which still has the 1m default. **The 20m limit on `/api/` never applied.** That's why a 413 can remain after "I already raised `client_max_body_size`". Either set the limit at the `server` level so every location inherits it, or set it in the regex location too. To see which locations exist and what each one sets, dump the effective config:
 
 ```bash
 sudo nginx -T 2>/dev/null | grep -nE "server_name|location|client_max_body_size"
