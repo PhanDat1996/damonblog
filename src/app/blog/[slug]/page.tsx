@@ -136,6 +136,18 @@ export default async function BlogPostPage({ params }: Props) {
             <span>{post.readingTime}</span>
             <span className="text-zinc-700">·</span>
             <Link href="/about" className="text-green-400 hover:underline">Damon</Link>
+            {post.lab && (
+              <>
+                <span className="text-zinc-700">·</span>
+                <Link
+                  href="/about#lab"
+                  title="Commands and output in this post were run on the lab VM"
+                  className="text-green-400 border border-green-800/40 bg-green-900/20 px-1.5 py-0.5 rounded hover:bg-green-900/40 transition-colors"
+                >
+                  ✓ lab-tested
+                </Link>
+              </>
+            )}
           </div>
         </header>
 
@@ -171,6 +183,27 @@ export default async function BlogPostPage({ params }: Props) {
             dangerouslySetInnerHTML={{ __html: bodyHtml }}
           />
         )}
+
+        {/* Author box: who wrote this and how it was tested */}
+        <aside className="mt-12 flex gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5" aria-label="About the author">
+          <div className="flex-shrink-0 h-12 w-12 rounded-lg border border-zinc-800 bg-zinc-900 flex items-center justify-center font-display text-lg font-bold text-green-400">
+            D
+          </div>
+          <div className="space-y-1.5 text-sm">
+            <p>
+              <Link href="/about" className="font-semibold text-white hover:text-green-400 transition-colors">Damon</Link>
+              <span className="font-mono text-xs text-zinc-500"> · Senior Technical Support Engineer, OPSWAT</span>
+            </p>
+            <p className="text-zinc-400 leading-relaxed">
+              8+ years on Linux, NGINX and production incidents: Linux system engineer at an Anti-DDoS
+              hosting provider, now Level 3 support for enterprise deployments.
+              {post.lab
+                ? ' The commands and output in this post were run on my lab VM.'
+                : ' Written from day-to-day support work.'}{' '}
+              <Link href="/about#lab" className="text-green-400 hover:underline">How posts are tested</Link>
+            </p>
+          </div>
+        </aside>
 
         {/* Tools that apply what the post covers to the reader's own config */}
         {tools.length > 0 && (
