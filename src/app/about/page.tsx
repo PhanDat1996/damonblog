@@ -78,6 +78,13 @@ const TOPICS = [
   },
 ];
 
+const LAB = [
+  'Ubuntu 26.04 LTS VM on a private network, no inbound exposure',
+  'NGINX 1.28 from the Ubuntu archive for the NGINX posts',
+  'Docker with vulhub images for CVE reproductions, using harmless payloads only',
+  'Memory and CPU experiments run in resource-limited systemd units',
+];
+
 export default function AboutPage() {
   return (
     <div className={"mx-auto max-w-2xl space-y-16"}>
@@ -193,6 +200,28 @@ export default function AboutPage() {
           Guides are reviewed for technical accuracy and updated when tools or defaults
           change; each post shows its last update date. If you spot a mistake, please{' '}
           <Link href="/contact" className="text-green-400 hover:underline">let me know</Link>.
+        </p>
+      </section>
+
+      {/* How posts are tested */}
+      <section id="lab" className="scroll-mt-24 space-y-4">
+        <h2 className="font-display text-xl font-bold text-white">How Posts Are Tested</h2>
+        <p className="font-sans text-zinc-400 text-sm leading-relaxed">
+          Posts marked <span className="font-mono text-xs text-green-400">✓ lab-tested</span> were
+          run on my own lab VM before publishing. The log lines, status codes and command output
+          in them are copied from those runs, not written from memory.
+        </p>
+        <ul className="space-y-2">
+          {LAB.map((item) => (
+            <li key={item} className="flex items-start gap-3 text-sm text-zinc-400">
+              <span className="text-green-500 font-mono mt-0.5 flex-shrink-0">▸</span>
+              {item}
+            </li>
+          ))}
+        </ul>
+        <p className="font-sans text-zinc-400 text-sm leading-relaxed">
+          Each lab-tested post opens with a note giving the exact versions used. Posts without the mark come from support and sysadmin work
+          and were not re-run for the article.
         </p>
       </section>
 
