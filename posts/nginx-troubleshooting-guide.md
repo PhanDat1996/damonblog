@@ -298,7 +298,7 @@ Cache-Control: max-age=60
 
 ### 4. A cache in between
 
-Test with `curl -sI` directly against the server, not through the browser or CDN.
+Test with `curl -sI` directly against the server, not through the browser or CDN. If NGINX itself caches with `proxy_cache`, an `X-Cache-Status` header tells you whether the backend was reached at all; [NGINX proxy_cache setup](/blog/nginx-proxy-cache-setup) walks through each status and the cache-key mistakes that serve one user's page to another.
 
 ---
 

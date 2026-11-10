@@ -159,7 +159,7 @@ Same 15-request burst, from two source addresses:
 /ex/x from 127.0.0.2: 200:15
 ```
 
-Behind a load balancer or CDN, fix the client address first with the realip module (`set_real_ip_from` your proxy ranges, `real_ip_header X-Forwarded-For`). Otherwise `$binary_remote_addr` is the proxy, and every user shares one bucket. That setup wasn't part of this lab.
+Behind a load balancer or CDN, fix the client address first with the realip module (`set_real_ip_from` your proxy ranges, `real_ip_header X-Forwarded-For`). Otherwise `$binary_remote_addr` is the proxy, and every user shares one bucket. That setup wasn't part of this lab; [NGINX real client IP behind a load balancer](/blog/nginx-real-ip-behind-load-balancer) tests it, including the trusted-range mistake that lets clients pick their own address.
 
 ---
 
