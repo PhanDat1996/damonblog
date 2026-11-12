@@ -15,7 +15,7 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
     return (
       <Link
         href={`/blog/${post.slug}`}
-        className="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 p-7 transition-all duration-300 hover:border-green-500/40 hover:bg-zinc-900 hover:shadow-[0_0_40px_rgba(74,222,128,0.05)]"
+        className="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/70 p-7 shadow-[0_2px_10px_rgba(0,0,0,0.35)] transition-all duration-300 hover:border-green-500/40 hover:bg-zinc-900 hover:shadow-[0_0_40px_rgba(74,222,128,0.08)]"
       >
         <div>
           <div className="mb-4 flex items-center gap-3">
@@ -57,7 +57,7 @@ export default function PostCard({ post, featured = false }: PostCardProps) {
   return (
     <Link
       href={`/blog/${post.slug}`}
-      className="group flex h-full flex-col gap-3 rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-5 transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/50"
+      className="group flex h-full flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 shadow-[0_2px_8px_rgba(0,0,0,0.3)] transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/80 hover:shadow-[0_6px_20px_rgba(0,0,0,0.4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500/50"
     >
       <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400">
         <time dateTime={post.date}>{formatDate(post.date)}</time>
