@@ -119,7 +119,7 @@ With an `index.html` added to `/srv/lab403/spa/`, the results were:
 /strict/assets/app.js      200
 ```
 
-`/spa/assets/` returned 200 because `$uri/index.html` doesn't exist there, so the request fell through to the app shell. Whether that's what you want depends on the app.
+`/spa/assets/` returned 200 because `$uri/index.html` doesn't exist there, so the request fell through to the app shell. Whether that's what you want depends on the app. The same fallthrough makes missing JavaScript files return the HTML shell with a 200; [NGINX try_files explained](/blog/nginx-try-files-explained) shows that case and the other `try_files` traps.
 
 ---
 
