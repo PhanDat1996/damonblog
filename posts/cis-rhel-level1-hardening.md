@@ -40,7 +40,7 @@ Then, before remediating: verify SSH group membership and key logins, route PAM 
 oscap info /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml | grep -i cis
 ```
 
-The `--report` HTML is readable and shows the failing rule, the expected value and the remediation script for each item. The `--results` XML is what compliance tooling consumes.
+The `--report` HTML is readable and shows the failing rule, the expected value and the remediation script for each item. The `--results` XML is what compliance tooling consumes. For the full OpenSCAP workflow — finding profiles, tailoring, generating fixes and tracking scans over time — see the [OpenSCAP scanning guide](/blog/openscap-cis-scanning-guide).
 
 ### Tailor before you remediate
 

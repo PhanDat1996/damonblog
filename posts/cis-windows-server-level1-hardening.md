@@ -293,4 +293,4 @@ Yes. Domain-joined VMs get the GPOs like any other server, and standalone VMs ca
 
 ---
 
-*Related: [Linux security hardening guide](/blog/linux-security-hardening-guide) for the same rollout approach on Linux. [Log analysis for incident triage](/blog/log-analysis-incident-triage) for putting the audit trail to use.*
+*Related: [Linux security hardening guide](/blog/linux-security-hardening-guide) for the same rollout approach on Linux. [CIS RHEL Level 1 hardening](/blog/cis-rhel-level1-hardening) and [CIS Level 1 Ubuntu hardening](/blog/cis-level1-ubuntu-hardening) for the Linux servers in a mixed fleet. [Log analysis for incident triage](/blog/log-analysis-incident-triage) for putting the audit trail to use.*

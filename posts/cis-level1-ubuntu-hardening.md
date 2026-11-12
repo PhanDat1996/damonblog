@@ -396,4 +396,4 @@ Mostly no. auditd is the exception. A broad ruleset on a busy server costs CPU a
 
 ---
 
-*Related: [Linux security hardening guide](/blog/linux-security-hardening-guide) for the cross-distro rollout plan. [CIS RHEL Level 1 hardening](/blog/cis-rhel-level1-hardening) for the Red Hat side.*
+*Related: [OpenSCAP scanning guide](/blog/openscap-cis-scanning-guide) for auditing with `oscap` instead of USG (no Pro needed). [Linux security hardening guide](/blog/linux-security-hardening-guide) for the cross-distro rollout plan. [CIS RHEL Level 1 hardening](/blog/cis-rhel-level1-hardening) for the Red Hat side. [CIS Windows Server Level 1](/blog/cis-windows-server-level1-hardening) for mixed environments.*
