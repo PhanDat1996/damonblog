@@ -1,12 +1,14 @@
 ---
 title: "Linux TIME_WAIT Explained: When It Actually Breaks Things"
 date: "2024-12-05"
-updated: "2026-11-08"
+updated: "2026-11-12"
 excerpt: "netstat or ss shows thousands of TIME_WAIT sockets? What TCP TIME_WAIT means, when it exhausts ephemeral ports, and which sysctls help or hurt."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]
 featured: false
 category: "linux"
 ---
+
+**Too many TIME_WAIT sockets, the short answer:** TIME_WAIT is normal. The side that actively closes a connection holds the socket for ~60s (2×MSL) before its port can be reused, so a busy host accumulates thousands — usually harmless. It only breaks things when one host opens huge numbers of short-lived connections to the *same* destination and runs out of ephemeral ports (`cannot assign requested address`). The fix is connection reuse — HTTP keepalive or a connection pool — not `tcp_tw_recycle` (removed in Linux 4.12) or blindly shrinking timeouts.
 
 Under load, outgoing connections start failing:
 

@@ -1,13 +1,15 @@
 ---
 title: "strace, lsof and ss: Debug a Misbehaving Process"
 date: "2024-05-02"
-updated: "2026-11-08"
+updated: "2026-11-12"
 excerpt: "A process hangs, leaks connections or fills the disk while logs stay quiet. Use strace, lsof and ss together, and know when to pick ss vs lsof."
 tags: ["debugging", "linux", "troubleshooting", "production"]
 featured: false
 lab: true
 category: "linux"
 ---
+
+**strace vs lsof vs ss, in one line:** `lsof` shows what a process has **open** (files, sockets, pipes); `ss` shows the **state** of its network connections; `strace` shows the **syscalls** it's making right now. Start with `lsof` and `ss` — they're cheap snapshots — and reach for `strace` last, because it can slow a busy process 200× or more.
 
 The process isn't crashing. It's just wrong: requests hang, database connections keep climbing, or `df` says the disk is full while `du` disagrees. The logs are quiet, and you can't attach a debugger in production.
 
