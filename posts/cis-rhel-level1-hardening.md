@@ -332,7 +332,7 @@ At fleet scale, Red Hat Satellite and Red Hat Insights both offer OpenSCAP-based
 
 ## Beyond the OS
 
-CIS hardens the operating system. Check the services on top too: [NGINX CIS hardening checker](/tools/nginx-cis-hardening-checker), [NGINX CVE checker](/tools/nginx-cve-checker), and [PostgreSQL hardening checker](/tools/pg-hardening-checker).
+CIS hardens the operating system. Check the services on top too: [NGINX CIS hardening checker](/tools/nginx-cis-hardening-checker), [NGINX CVE checker](/tools/nginx-cve-checker), and [PostgreSQL hardening checker](/tools/pg-hardening-checker). Running Kubernetes on these nodes? The control plane has its own CIS benchmark — see [running the CIS Kubernetes Benchmark with kube-bench](/blog/kube-bench-cis-kubernetes-benchmark).
 
 ---
 
