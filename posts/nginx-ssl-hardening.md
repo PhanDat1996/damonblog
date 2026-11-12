@@ -64,6 +64,8 @@ server {
 nginx -t && systemctl reload nginx
 ```
 
+The port-80 block uses `$host` for brevity. For a single canonical hostname, one-hop redirects, and the redirect loop behind a TLS-terminating load balancer, see [NGINX redirect HTTP to HTTPS](/blog/nginx-redirect-http-to-https).
+
 This matches the "intermediate" profile of the [Mozilla SSL Configuration Generator](https://ssl-config.mozilla.org/), minus the DHE suites (see below). Use the generator as the reference when your NGINX or OpenSSL version differs.
 
 If you also enable HTTP/3 with `listen 443 quic`, NGINX opens UDP sockets with their own set of 2026 advisories. How to check that and turn QUIC off cleanly: [NGINX HTTP/3 CVEs](/blog/nginx-cve-2026-42530-http3-quic).
