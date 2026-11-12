@@ -247,4 +247,4 @@ Usually, but read the entry. Ubuntu's NGINX changelog mentions CVE-2026-42533 in
 No. It hides the version from banner scanners, but the code is the same. Fix the package, then use `server_tokens off` as hardening.
 
 **What about Docker images?**
-Not tested in this lab. Images built on a distro's NGINX package follow that distro's changelog. Images built from upstream source follow upstream versions.
+Not tested in this lab. Images built on a distro's NGINX package follow that distro's changelog. Images built from upstream source follow upstream versions. To check an image's whole package set at once, scan it — see [scanning container images for CVEs with Trivy](/blog/trivy-container-image-scanning-ci).
