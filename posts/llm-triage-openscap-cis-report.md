@@ -35,7 +35,7 @@ oscap xccdf eval \
 - **225 pass, 115 fail, 68 not applicable**
 - Failures by CIS severity: **4 high, 98 medium, 9 low**, 4 without a severity tag
 
-![The OpenSCAP HTML evaluation report header for the Ubuntu 24.04 scan, showing the CIS Ubuntu Linux 24.04 LTS Benchmark for Level 1 - Server profile, benchmark v1.0.0](/images/oscap-cis-ubuntu24-report.jpg)
+![The OpenSCAP report's Compliance and Scoring section for the Ubuntu 24.04 scan: a rule-results bar showing 225 passed and 115 failed, a severity bar breaking the failures into 4 high, 98 medium, 9 low and 4 other, and a default score of 66.76 out of 100](/images/oscap-cis-ubuntu24-results.jpg)
 
 Now look at what "severity" buys you. The four **high** failures are:
 
