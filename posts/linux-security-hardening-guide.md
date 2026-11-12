@@ -17,7 +17,7 @@ This guide is the overview: how to choose a baseline, which controls cause outag
 ## TL;DR
 
 - **Baseline:** CIS Benchmark Level 1 for your exact distribution and version. Level 2 only where you have a reason.
-- **Audit before you change anything.** `usg` on Ubuntu, `oscap` on RHEL. Both report without modifying the system.
+- **Audit before you change anything.** `usg` on Ubuntu, [`oscap`](/blog/openscap-cis-scanning-guide) on RHEL (and Ubuntu without Pro). Both report without modifying the system.
 - **The controls that cause outages:** SSH group restrictions, firewall default-deny, PAM lockout and password expiry, `noexec` on `/tmp`, `ip_forward=0` on container hosts, and auditd settings that halt or freeze the box.
 - **Roll out in phases**, with console access and a rollback ready before you touch SSH, PAM or the firewall.
 
