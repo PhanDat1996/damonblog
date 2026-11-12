@@ -1,12 +1,14 @@
 ---
 title: "tail Multiple Files in Linux: Label, Merge or Split View"
 date: "2026-04-22"
-updated: "2026-11-08"
+updated: "2026-11-12"
 excerpt: "Follow several log files at once: tail with clean per-line labels, merging the journal with flat files, multitail split panes, and lnav for time order."
 tags: ["linux", "logs", "troubleshooting", "monitoring", "debugging"]
 featured: false
 category: "linux"
 ---
+
+**To follow several files at once:** `tail -n 0 -F /var/log/one.log /var/log/two.log` tails them together and prints a `==> filename <==` header whenever the source switches. For a clean label on every line, use `multitail` or pipe through `awk`; to merge logs that have different timestamp formats into true time order, use `lnav`.
 
 The request fails somewhere between NGINX and the app, and you want to see both logs at the same time: the NGINX error log, the application log, maybe the service's journal too. `tail` takes several files at once, but the raw output is hard to read under pressure.
 
