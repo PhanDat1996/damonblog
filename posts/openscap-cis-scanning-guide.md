@@ -156,7 +156,7 @@ You can also generate the fix from a results file (`--result-id` against `result
 - Ubuntu / Debian: [CIS Level 1 Ubuntu hardening](/blog/cis-level1-ubuntu-hardening) — USG vs OpenSCAP, SSH drop-ins, and Docker's networking vs sysctl.
 - Windows Server: [CIS Windows Server Level 1](/blog/cis-windows-server-level1-hardening) — the GPO-driven equivalent for mixed shops.
 
-The cross-distro rollout order lives in the [Linux security hardening guide](/blog/linux-security-hardening-guide).
+The cross-distro rollout order lives in the [Linux security hardening guide](/blog/linux-security-hardening-guide). And once you have a report with a hundred-plus findings, [triaging an OpenSCAP CIS report with an LLM](/blog/llm-triage-openscap-cis-report) covers where AI helps turn that wall into a plan — and where trusting it breaks things.
 
 ---
 
