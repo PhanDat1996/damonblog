@@ -151,7 +151,7 @@ find /srv/app -type f -exec chmod 640 {} +
 
 ## Common cases
 
-**Script won't run.** `ls -l deploy.sh` shows no `x`. Fix with `chmod u+x deploy.sh`. If it has `x` and still fails, check the mount (next section) or run it explicitly with `bash deploy.sh`.
+**Script won't run.** `ls -l deploy.sh` shows no `x`. Fix with `chmod u+x deploy.sh`. If it has `x` and still fails, check the mount (next section) or run it explicitly with `bash deploy.sh`. From a crontab the same error is easy to miss, because cron mails it instead of printing it; see [why a cron job is not running](/blog/linux-cron-job-not-running).
 
 **SSH: "UNPROTECTED PRIVATE KEY FILE".** The private key is readable by others:
 
