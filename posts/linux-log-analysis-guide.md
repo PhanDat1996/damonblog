@@ -199,7 +199,7 @@ Use the timestamp format the file actually uses. NGINX error logs use `2026/10/2
 
 ### 5. Don't forget rotated and compressed files
 
-logrotate renames `app.log` to `app.log.1` and later `app.log.2.gz`. If the event is a few days old, it's probably not in the current file.
+logrotate renames `app.log` to `app.log.1` and later `app.log.2.gz`. If the event is a few days old, it's probably not in the current file. If the current file never shrinks or the app is still writing to `app.log.1`, see [logrotate not working](/blog/logrotate-not-working).
 
 ```bash
 ls -la /var/log/myapp/

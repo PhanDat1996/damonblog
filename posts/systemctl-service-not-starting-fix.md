@@ -213,6 +213,8 @@ systemctl list-units --type=socket --state=listening --no-legend      # socket-a
 systemctl list-timers --all                                            # scheduled jobs
 ```
 
+Timers show up here too. If you're moving scheduled jobs off cron, [systemd timer vs cron](/blog/systemd-timer-vs-cron) covers the conversion and how the two behave differently.
+
 Before disabling anything, check what depends on it. `rpcbind`, for example, looks unnecessary until NFS stops working:
 
 ```bash
