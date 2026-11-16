@@ -1,6 +1,6 @@
 ---
 title: "Log Analysis for Incident Triage: Find the First Failure"
-date: "2024-08-11"
+date: "2026-04-20"
 updated: "2026-10-28"
 excerpt: "Alerts firing, error rate climbing, logs everywhere. A triage order for production outages: scope it, read NGINX and app logs, and build the timeline."
 tags: ["logs", "debugging", "incident", "troubleshooting", "security-ops"]

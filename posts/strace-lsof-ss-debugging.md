@@ -1,6 +1,6 @@
 ---
 title: "strace, lsof and ss: Debug a Misbehaving Process"
-date: "2024-05-02"
+date: "2026-04-20"
 updated: "2026-11-12"
 excerpt: "A process hangs, leaks connections or fills the disk while logs stay quiet. Use strace, lsof and ss together, and know when to pick ss vs lsof."
 tags: ["debugging", "linux", "troubleshooting", "production"]

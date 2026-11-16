@@ -1,6 +1,6 @@
 ---
 title: "nftables Migration Guide: Move Off iptables Safely"
-date: "2024-06-18"
+date: "2026-04-20"
 updated: "2026-10-28"
 excerpt: "Translate an iptables ruleset to native nftables, test it with an automatic rollback, and avoid the gotchas with Docker, firewalld and flush ruleset."
 tags: ["firewall", "linux", "security", "networking"]

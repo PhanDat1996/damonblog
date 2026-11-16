@@ -1,7 +1,6 @@
 import { MetadataRoute } from 'next';
 import { getAllPosts } from '@/lib/posts';
 import { VALID_CATEGORIES } from '@/lib/categories';
-import { getNotes } from '@/lib/news';
 import { ADVISORIES_UPDATED } from '@/lib/nginx-cve/advisories';
 
 const BASE_URL = 'https://www.damonsec.com';
@@ -16,7 +15,6 @@ const TOOL_SLUGS = [
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const posts = getAllPosts();
-  const notes = await getNotes();
 
   // Real content dates instead of new Date(): a lastmod that changes on every
   // build tells Google nothing, and it learns to ignore the sitemap's dates.
@@ -26,7 +24,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const latestPost = latest(indexable.map(postDate));
   const latestInCategory = (cat: string) =>
     latest(indexable.filter((post) => post.category === cat).map(postDate));
-  const latestNote = notes.length ? new Date(notes[0].date) : undefined;
 
   const postEntries: MetadataRoute.Sitemap = indexable
     .map((post) => ({
@@ -60,12 +57,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.9,
     },
     ...categoryEntries,
-    {
-      url: `${BASE_URL}/news`,
-      lastModified: latestNote,
-      changeFrequency: 'hourly',
-      priority: 0.8,
-    },
+    // /news and its notes are noindex (aggregated headlines, short notes)
     {
       url: `${BASE_URL}/tools`,
       changeFrequency: 'monthly',
@@ -104,11 +96,5 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.3,
     },
     ...postEntries,
-    ...notes.map((note) => ({
-      url: `${BASE_URL}${note.url}`,
-      lastModified: new Date(note.date),
-      changeFrequency: 'monthly' as const,
-      priority: 0.6,
-    })),
   ];
 }

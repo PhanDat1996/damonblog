@@ -1,6 +1,6 @@
 ---
 title: "NGINX Upstream Keepalive: Stop Port Exhaustion 502s"
-date: "2024-11-28"
+date: "2026-04-20"
 updated: "2026-10-31"
 excerpt: "Lab-tested NGINX upstream keepalive: why keepalive alone still churns connections, the 502s a half config hides behind retries, and how to verify reuse."
 tags: ["nginx", "infrastructure", "production", "networking", "troubleshooting"]
