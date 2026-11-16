@@ -1,6 +1,6 @@
 ---
 title: "NGINX SSL Hardening: TLS Config That Scores A+ on SSL Labs"
-date: "2024-09-20"
+date: "2026-04-20"
 updated: "2026-10-28"
 excerpt: "Get NGINX to an A+ on SSL Labs: TLS 1.2/1.3 only, modern ciphers, HSTS done safely, and which old advice (4096-bit DH, OCSP, X-XSS) to drop."
 tags: ["nginx", "ssl", "security", "infrastructure"]

@@ -1,6 +1,6 @@
 ---
 title: "Docker Log Rotation: Stop Container Logs Filling the Disk"
-date: "2024-10-03"
+date: "2026-04-20"
 updated: "2026-10-28"
 excerpt: "Docker logs filled your disk? Free space safely now, set max-size in daemon.json, and know why the change won't touch existing containers until recreated."
 tags: ["docker", "logs", "infrastructure", "troubleshooting"]

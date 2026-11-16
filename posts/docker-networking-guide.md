@@ -1,6 +1,6 @@
 ---
 title: "Docker Networking: Bridge vs Host vs Overlay, and Container IPs"
-date: "2024-07-05"
+date: "2026-04-20"
 updated: "2026-11-02"
 excerpt: "How Docker bridge, host and overlay networks really work, why ports open or don't, and how to get a container's IP with docker inspect on any network."
 tags: ["docker", "networking", "infrastructure", "troubleshooting"]

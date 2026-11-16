@@ -1,6 +1,6 @@
 ---
 title: "Linux TIME_WAIT Explained: When It Actually Breaks Things"
-date: "2024-12-05"
+date: "2026-04-20"
 updated: "2026-11-12"
 excerpt: "netstat or ss shows thousands of TIME_WAIT sockets? What TCP TIME_WAIT means, when it exhausts ephemeral ports, and which sysctls help or hurt."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]

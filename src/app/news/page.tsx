@@ -16,6 +16,9 @@ const DESCRIPTION =
 export const metadata: Metadata = {
   title: TITLE,
   description: DESCRIPTION,
+  // Mostly third-party headlines (RSS excerpts), so keep it out of the index:
+  // aggregated content reads as low-value to Google/AdSense. Links still followed.
+  robots: { index: false, follow: true },
   alternates: { canonical: `${BASE_URL}/news` },
   openGraph: {
     title: TITLE,

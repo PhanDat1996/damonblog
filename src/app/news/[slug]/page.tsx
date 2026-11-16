@@ -28,6 +28,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     title: note.title,
     description: note.summary,
     authors: [{ name: 'Damon', url: `${BASE_URL}/about` }],
+    // Notes are short (~100 words); noindex until they are full posts
+    robots: { index: false, follow: true },
     alternates: { canonical: url },
     openGraph: {
       title: note.title,
