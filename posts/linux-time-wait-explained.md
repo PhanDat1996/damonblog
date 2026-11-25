@@ -94,7 +94,7 @@ Exceed that rate to one destination (an NGINX upstream without keepalive, a serv
 | Go | `dial tcp ...: connect: cannot assign requested address` |
 | Python | `OSError: [Errno 99] Cannot assign requested address` |
 | Java | `java.net.BindException: Cannot assign requested address` |
-| curl 8.x | `(7) Failed to connect ... after 0 ms: Couldn't connect to server`; only `curl -v` shows `Cannot assign requested address` |
+| curl 8.5 (Ubuntu 24.04) | `(7) Failed to connect ...: Couldn't connect to server`, the same text as a refused port; only `curl -v` shows `Cannot assign requested address` |
 
 If you see `Connection refused` (errno 111), that's a different problem: the destination isn't accepting. Start with [cannot connect to server](/blog/cannot-connect-to-server-linux-troubleshooting).
 
@@ -143,7 +143,8 @@ The TIME-WAIT sockets were on the **client**, because curl closed each connectio
 Note what curl printed: `Couldn't connect to server`, the same text curl 8.5 uses for a refused or unreachable port. The errno only shows up in verbose mode, or from a client that reports it directly:
 
 ```
-root@client:~# curl -v -sS -o /dev/null http://172.30.0.10:8080/ 2>&1 | head -4
+root@client:~# sysctl -w net.ipv4.tcp_tw_reuse=0; for i in $(seq 1 10); do curl -s -o /dev/null http://172.30.0.10:8080/; done; curl -v -sS -o /dev/null http://172.30.0.10:8080/ 2>&1 | head -4
+net.ipv4.tcp_tw_reuse = 0
 *   Trying 172.30.0.10:8080...
 * Immediate connect fail for 172.30.0.10: Cannot assign requested address
 * Failed to connect to 172.30.0.10 port 8080 after 0 ms: Couldn't connect to server
@@ -153,7 +154,7 @@ root@client:~# python3 -c 'import socket; socket.create_connection(("172.30.0.10
 OSError: [Errno 99] Cannot assign requested address
 ```
 
-(The Python traceback above is shortened to its last line. The `curl -v` run came from a second exhaustion of the same 10 ports.) "after 0 ms" is the other giveaway: a refused connection needs a round trip, this failure never left the host.
+(The Python traceback above is shortened to its last line. The `curl -v` run came from a second exhaustion of the same 10 ports, hence the loop in front of it.) Don't read anything into "after 0 ms": on a LAN a refused connection prints that too. The errno is the reliable sign.
 
 ---
 
@@ -294,7 +295,7 @@ root@client:~# sleep 1; date +%T; curl -sS -o /dev/null -w "%{http_code} local p
 200 local port 50006
 ```
 
-That matches the kernel's rule: a TIME-WAIT port is only reused once its last timestamp is at least a second old. So `tcp_tw_reuse` raises the ceiling from "ports per 60 seconds" to roughly "ports per second" for one destination. A client that opens connections faster than that still runs out.
+That is consistent with the kernel's rule on this 6.8 kernel: a TIME-WAIT port can be reused once the seconds clock has moved past its last timestamp, which is up to one second later. So `tcp_tw_reuse` raises the ceiling from "ports per 60 seconds" to roughly "ports per second" for one destination. A client that opens connections faster than that still runs out.
 
 ### Settings that don't do what people think
 

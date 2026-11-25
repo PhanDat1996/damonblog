@@ -74,7 +74,7 @@ Common causes when `dig` works and `getent` doesn't:
 
 ### From the lab: dig says one thing, the app connects somewhere else
 
-> **Lab environment:** two Ubuntu 24.04.5 LTS boxes. `lab01` (172.30.0.10) runs dnsmasq 2.91 as the internal DNS server for `corp.lab`; `client` (172.30.0.20) uses it. Captured 25 Nov 2026. Output is copied from the terminal without edits.
+> **Lab environment:** two Ubuntu 24.04.5 LTS boxes. `lab01` (172.30.0.10) runs dnsmasq 2.91 as the internal DNS server for `corp.lab`; `client` (172.30.0.20) uses it. The scenarios were staged: the client's `/etc/resolv.conf` was written by hand for each test, and the `/etc/hosts` line below was added on purpose. Captured 25 Nov 2026. Output is copied from the terminal without edits.
 
 The setup is the classic one: `api.corp.lab` is 172.30.0.10 in DNS, but the client's `/etc/hosts` still has a line for the server it used to run on. From the client:
 
@@ -100,7 +100,7 @@ hosts:          files dns
 
 `dig` asked the DNS server and got the right answer. curl used `getaddrinfo()`, which read `files` first and found the old address in `/etc/hosts`. The curl error mentions nothing about DNS, so this looks like a network problem until you compare `dig` with `getent`.
 
-The search domain works the other way round. A short name that resolves for applications is refused when `dig` sends it as-is:
+The search domain works the other way round. A short name that resolves for applications gets no answer when `dig` sends it as-is (dnsmasq here returned `REFUSED`; other servers return `NXDOMAIN`):
 
 ```
 root@client:~# dig db01 | grep -E 'status|SERVER'
@@ -290,9 +290,9 @@ root@client:~# dig api.example.org | grep -v '^$'
 ;; no servers could be reached
 ```
 
-One lookup took **24.6 seconds** to fail with the default resolver settings (5-second timeout, two attempts) and a `search` domain, which adds a second name to try. An application making that call at startup or per request just looks hung. `options timeout:1 attempts:2` in `resolv.conf` (or the equivalent in netplan/resolved) shortens it when the server really is gone; fixing the server is still the fix.
+One lookup took **24.6 seconds** to fail. With the default resolver settings (5-second timeout, 2 attempts) and a `search` domain adding a second name, the timeouts add up quickly. An application making that call at startup or per request just looks hung. `options timeout:1 attempts:2` in `resolv.conf` (where you manage the file directly; systemd-resolved and netplan have no equivalent for upstream servers) shortens it when the server really is gone; fixing the server is still the fix.
 
-Then the server came back, but with UDP/53 dropped by its firewall:
+Then the client was pointed back at lab01 (172.30.0.10), this time with UDP/53 dropped by lab01's firewall:
 
 ```
 root@lab01:~# iptables -I INPUT -p udp --dport 53 -j DROP
