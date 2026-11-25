@@ -1,7 +1,7 @@
 ---
 title: "systemctl Troubleshooting: Failed Start, Restart, Check Services"
 date: "2026-04-22"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "Check running and failed services with systemctl, read exit codes like 203/EXEC, and fix restarts that hit start-limit-hit, hang or ignore changes."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging", "monitoring"]
 featured: false
@@ -38,7 +38,7 @@ runuser -u appuser -- /opt/app/bin/myapp --config /etc/myapp/prod.yml   # reprod
 
 | Restart symptom | Likely cause | Fix |
 |---|---|---|
-| `Start request repeated too quickly`, `Result: start-limit-hit` | Start rate limit | Fix the crash, then `systemctl reset-failed myapp` |
+| `Start request repeated too quickly` (`Result: start-limit-hit`, or `exit-code` for a crash loop) | Start rate limit | Fix the crash, then `systemctl reset-failed myapp` |
 | Restart takes ~90s | Process ignores SIGTERM; systemd waits `TimeoutStopSec` | Fix signal handling or tune `TimeoutStopSec`/`KillSignal` |
 | Unit file change ignored | No `daemon-reload` | `systemctl daemon-reload && systemctl restart myapp` |
 | Crash not restarted | `Restart=` missing, or the exit counts as "clean" | Set `Restart=on-failure` (or `always`) |
@@ -263,7 +263,7 @@ Three lines carry the diagnosis.
 | `signal` / `core-dump` | The process was killed by a signal (SIGKILL from the OOM killer, SIGSEGV crash) |
 | `timeout` | It didn't finish starting within `TimeoutStartSec` (default 90s) |
 | `resources` | systemd couldn't even set it up: missing `EnvironmentFile`, can't create a directory, etc. |
-| `start-limit-hit` | Failed too many times in a row; systemd stopped trying (see "start-limit-hit" below) |
+| `start-limit-hit` | Started too often in a row; systemd stopped trying. A unit that crashed each time keeps `exit-code` instead (see "start-limit-hit" below) |
 | `dependency` | A unit it `Requires=` failed first |
 
 **`status=`** The exit status. Below 200 it comes from your program; 200 and above means systemd failed **before** your program ran.
@@ -339,6 +339,81 @@ chown -R appuser:appuser /var/lib/myapp /var/log/myapp
 ```
 
 Avoid `chmod -R 777` or `chown -R` across `/opt/app` as a quick fix. It hides the actual problem and lets the service rewrite its own code. Better still, let systemd create the directories with `StateDirectory=myapp` and `LogsDirectory=myapp`. [Permission denied fixes](/blog/permission-denied-linux-fix-chmod-chown) covers the details.
+
+### From the lab: three failures in a row
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01`, systemd 255 (255.4-1ubuntu8.19). Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+A small Python service, `myapp.service`, with `User=appuser`, `Restart=on-failure`, and an `ExecStart` copied from another host where Python lives in `/usr/local/bin`. It failed three different ways before it ran, which is typical of a first deploy.
+
+**1. 203/EXEC.**
+
+```
+root@lab01:~# systemctl start myapp; sleep 8; systemctl status myapp --no-pager | head -8
+× myapp.service - myapp demo service
+     Loaded: loaded (/etc/systemd/system/myapp.service; disabled; preset: enabled)
+     Active: failed (Result: exit-code) since Wed 2026-11-25 13:42:52 UTC; 1s ago
+   Duration: 1ms
+    Process: 584 ExecStart=/usr/local/bin/python3 /opt/myapp/myapp.py --config /etc/myapp/prod.conf (code=exited, status=203/EXEC)
+   Main PID: 584 (code=exited, status=203/EXEC)
+        CPU: 1ms
+```
+
+In this run, grepping the unit's journal for `Failed to locate`, `Failed at step` or `No such` found only the status lines (`Main process exited, code=exited, status=203/EXEC`); no line named the missing file. Don't count on the journal for this one. `systemd-analyze verify` names the problem directly, and works on a unit file before you install it:
+
+```
+root@lab01:~# systemd-analyze verify /root/myapp-broken.service
+myapp-broken.service: Command /usr/local/bin/python3 is not executable: No such file or directory
+```
+
+**2. The fix that didn't load.** The path was corrected with `sed`, and the restart warned about it but went ahead with the old definition:
+
+```
+root@lab01:~# sed -i 's#/usr/local/bin/python3#/usr/bin/python3#' /etc/systemd/system/myapp.service
+root@lab01:~# systemctl restart myapp
+Warning: The unit file, source configuration file or drop-ins of myapp.service changed on disk. Run 'systemctl daemon-reload' to reload units.
+```
+
+**3. status=1/FAILURE: the program ran and gave up.** After `daemon-reload` the exit status dropped below 200, so the error is the application's, and it is in the journal:
+
+```
+root@lab01:~# systemctl daemon-reload && systemctl restart myapp; sleep 2; systemctl status myapp --no-pager | sed -n '3p;5,6p'
+     Active: activating (auto-restart) (Result: exit-code) since Wed 2026-11-25 13:43:02 UTC; 869ms ago
+   Main PID: 639 (code=exited, status=1/FAILURE)
+        CPU: 7ms
+root@lab01:~# journalctl -u myapp -o cat --no-pager | grep -m3 -E 'Error|Permission'
+PermissionError: [Errno 13] Permission denied: '/etc/myapp/prod.conf'
+PermissionError: [Errno 13] Permission denied: '/etc/myapp/prod.conf'
+root@lab01:~# ls -l /etc/myapp/prod.conf
+-rw------- 1 root root 10 Nov 25 13:42 /etc/myapp/prod.conf
+```
+
+The config was readable by root only, and the service runs as `appuser`: a file that works when you test as root and fails under the unit. Running the command as the service user reproduced it outside systemd:
+
+```
+root@lab01:~# runuser -u appuser -- /usr/bin/python3 /opt/myapp/myapp.py --config /etc/myapp/prod.conf 2>&1 | tail -1
+PermissionError: [Errno 13] Permission denied: '/etc/myapp/prod.conf'
+```
+
+Giving the service's group read access, not making the file world-readable, fixed it:
+
+```
+root@lab01:~# chgrp appuser /etc/myapp/prod.conf && chmod 640 /etc/myapp/prod.conf
+root@lab01:~# systemctl start myapp; sleep 2; systemctl is-active myapp
+active
+```
+
+![Terminal on lab01: myapp.service fails with status=203/EXEC, systemd-analyze verify reports /usr/local/bin/python3 is not executable, restart warns to run daemon-reload, after reload the service exits with status=1 and the journal shows PermissionError on /etc/myapp/prod.conf, and after chgrp and chmod 640 the service is active](/images/lab-systemd-203-exec-permission.jpg)
+
+One more thing from the 203/EXEC run. With `RestartSec=1` and the default limit of 5 starts in 10 seconds, the first start plus four automatic restarts used up the budget, and the fifth restart was refused:
+
+```
+Nov 25 13:42:52.697071 lab01 systemd[1]: myapp.service: Scheduled restart job, restart counter is at 5.
+Nov 25 13:42:52.697146 lab01 systemd[1]: myapp.service: Start request repeated too quickly.
+Nov 25 13:42:52.697156 lab01 systemd[1]: myapp.service: Failed with result 'exit-code'.
+```
+
+The start limit was hit, but the unit's result stayed `exit-code`: `systemctl show myapp -p NRestarts -p Result` gave `Result=exit-code` and `NRestarts=5`, and `systemctl status` said `failed (Result: exit-code)`. A second test on the same box confirmed the pattern: two units with `Restart=always` and `RestartSec=100ms`, one running `/bin/false`, one running `/bin/true`. Both logged `Start request repeated too quickly`; the crashing one ended with `Result=exit-code`, the one that exited cleanly with `Result=start-limit-hit`. systemd keeps the first failure as the result. So for a crash loop, don't wait for `start-limit-hit` in status. Grep the journal for "repeated too quickly" instead, and fix the first error, not the limit.
 
 ### `ExecStart` isn't a shell
 
@@ -438,6 +513,8 @@ myapp.service: Start request repeated too quickly.
 myapp.service: Failed with result 'start-limit-hit'.
 Failed to start My Application.
 ```
+
+That is what you see when the runs themselves exited cleanly, or for repeated manual restarts. When each run crashed, the same "repeated too quickly" line is followed by `Failed with result 'exit-code'` instead (the lab run above shows both).
 
 systemd allows a unit `StartLimitBurst=` starts within `StartLimitIntervalSec=`. The defaults are **5 starts in 10 seconds** (`DefaultStartLimitBurst`/`DefaultStartLimitIntervalSec` in `/etc/systemd/system.conf`). Every start counts: automatic restarts from `Restart=` **and** your manual `systemctl restart`.
 
@@ -570,7 +647,7 @@ Three things that surprise people:
 
 - **SIGTERM, SIGINT, SIGHUP and SIGPIPE count as clean.** If someone runs `kill 4521`, the process dies from SIGTERM, and `Restart=on-failure` does **not** restart it. `kill -9` (unclean) would.
 - **`systemctl stop` never triggers `Restart=`.** That's by design. A unit that is stopped stays stopped.
-- **The start limit still applies.** A crash loop with `Restart=always` ends in `start-limit-hit` unless the timing keeps it under the limit.
+- **The start limit still applies.** A crash loop with `Restart=always` ends with "Start request repeated too quickly" unless the timing keeps it under the limit. The result stays `exit-code` if each run crashed; `start-limit-hit` shows when the runs exited cleanly.
 
 For services that must stay up:
 
@@ -584,18 +661,7 @@ Use `Restart=always` if a clean exit is also unexpected (a worker that should ne
 
 ### "Address already in use" right after restart
 
-The new process can't bind because something still holds the port:
-
-```bash
-ss -ltnp 'sport = :8080'
-# LISTEN 0 4096 0.0.0.0:8080 0.0.0.0:* users:(("myapp",pid=3977,fd=7))
-systemctl status myapp | grep "Main PID"        # is 3977 the unit's own process?
-```
-
-- **The process was started by hand** (outside systemd), so `stop` never touched it.
-- **`KillMode=process`** (or `none`) is set, so only the main process is signaled on stop and its children keep running with the socket. The default `KillMode=control-group` kills everything in the cgroup; check why the unit overrides it.
-
-Stop the stray process properly (a plain `kill <pid>` first; `kill -9` only if it doesn't exit), then start the unit. [Port already in use](/blog/check-open-ports-linux) has more on finding the holder.
+The new process can't bind because something still holds the port. Find the holder with `ss -ltnp 'sport = :8080'`, then run `systemctl status <PID>` on it: that names the unit, if any. Usually it's a copy started by hand outside systemd, or a unit with `KillMode=process` (or `none`) whose children kept the socket after stop. [Port already in use](/blog/check-open-ports-linux) walks through a real case where the holder turned out to be a forgotten transient unit.
 
 ### `Type=forking` and PID files
 

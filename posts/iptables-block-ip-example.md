@@ -1,7 +1,7 @@
 ---
 title: "Linux Firewall: Check Status, Read Rules and Block IPs"
 date: "2026-04-22"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "Find which firewall is active (ufw, firewalld, nftables), read its real rules, prove it blocks your port, then block IPs with iptables and ipset safely."
 tags: ["linux", "security", "networking", "infrastructure", "troubleshooting"]
 featured: false
@@ -151,38 +151,14 @@ num   pkts bytes target  prot opt in   out  source      destination
 
 ## Is the firewall really blocking my port?
 
-Work through this in order. Each step rules out a layer.
+Before blaming the firewall, rule out the two things that look the same from the client:
 
-**1. Is anything listening, and on which address?**
+1. **Nothing listening, or listening on `127.0.0.1` only.** `ss -tlnp 'sport = :8080'` on the server; no firewall rule fixes a loopback-only bind. See [check open ports on Linux](/blog/check-open-ports-linux).
+2. **Read the client's error.** `Connection timed out` usually means a DROP (host firewall, security group, network ACL). `Connection refused` can be a closed port *or* a REJECT rule: curl and nc print the same message for both; from the client side, only a packet capture tells them apart (on the server, `ss` and the rule counters do). [Cannot connect to server](/blog/cannot-connect-to-server-linux-troubleshooting) shows both side by side, with tcpdump.
 
-```bash
-ss -tlnp | grep ':8080'
-# LISTEN 0  511  127.0.0.1:8080  0.0.0.0:*  users:(("node",pid=2211,fd=19))
-```
+Then confirm which rule is doing it.
 
-Bound to `127.0.0.1` means it only accepts local connections. No firewall rule will fix that. More in [check open ports on Linux](/blog/check-open-ports-linux).
-
-**2. Read the client's error.**
-
-```bash
-nc -zv -w 3 server.example.com 8080
-```
-
-| Client sees | Usually means |
-|---|---|
-| `Connection timed out` | Packets are silently dropped: host firewall DROP, cloud security group, or network ACL |
-| `Connection refused` | The host answered: nothing listening, or a REJECT rule with a TCP reset / port-unreachable |
-| `No route to host` (and the route exists) | Often a REJECT with an ICMP "prohibited" message, firewalld's style |
-
-**3. Do the packets even arrive?**
-
-```bash
-tcpdump -ni eth0 'tcp port 8080'
-```
-
-Run the client test again. No SYN packets at all means the traffic is dropped **before** the host (security group, upstream firewall, wrong IP). SYNs arriving with no reply means the host firewall or the service is the problem.
-
-**4. Watch the counters or the drop log.**
+**Watch the counters or the drop log.**
 
 Rerun the test and see which rule or policy counter increases:
 
@@ -243,6 +219,47 @@ num   pkts bytes target  prot opt in  out  source            destination
 ```
 
 A rising `pkts` counter on your DROP rule confirms it works.
+
+### From the lab: the appended rule that never matched
+
+> **Lab environment:** Ubuntu 24.04.5 LTS box `lab01` (172.30.0.10) running nginx on 8080, and `client` (172.30.0.20) on the same network. iptables 1.8.10 (nf_tables). Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+lab01 had a typical small ruleset: loopback, established connections, SSH and 8080 allowed, everything else rejected. The task was to block the client completely. With `-A`:
+
+```
+root@lab01:~# iptables -A INPUT -s 172.30.0.20 -j DROP
+root@client:~# curl -sS -m 3 http://172.30.0.10:8080/
+app ok
+root@lab01:~# iptables -L INPUT -v -n --line-numbers
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination         
+1        0     0 ACCEPT     0    --  lo     *       0.0.0.0/0            0.0.0.0/0           
+2        5   339 ACCEPT     0    --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
+3        0     0 ACCEPT     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:22
+4        1    60 ACCEPT     6    --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:8080
+5        0     0 REJECT     0    --  *      *       0.0.0.0/0            0.0.0.0/0            reject-with icmp-port-unreachable
+6        0     0 DROP       0    --  *      *       172.30.0.20          0.0.0.0/0           
+```
+
+The client still got through. The counters show why: the SYN hit rule 4 (`ACCEPT dpt:8080`, 1 packet), the rest of the connection hit rule 2, and rule 6 sat behind a catch-all REJECT with `0` packets. Nothing can ever reach it. The command succeeded, so nothing warned about this.
+
+Moved to the top, it works on the next attempt:
+
+```
+root@lab01:~# iptables -D INPUT -s 172.30.0.20 -j DROP
+root@lab01:~# iptables -I INPUT 1 -s 172.30.0.20 -j DROP
+root@client:~# curl -sS -m 3 http://172.30.0.10:8080/
+curl: (28) Connection timed out after 3001 milliseconds
+root@lab01:~# iptables -L INPUT -v -n --line-numbers | head -4
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination         
+1        3   180 DROP       0    --  *      *       172.30.0.20          0.0.0.0/0           
+2        0     0 ACCEPT     0    --  lo     *       0.0.0.0/0            0.0.0.0/0           
+```
+
+![Terminal on lab01 and client: a DROP rule added with iptables -A lands at line 6 with 0 packets and the client still gets "app ok"; after iptables -I INPUT 1 the client times out and the DROP rule counts 3 packets](/images/lab-iptables-drop-rule-order.jpg)
+
+Three packets for one curl: the SYN and the client's retransmissions before its 3-second timeout. Also, `iptables -C INPUT -s 172.30.0.20 -j DROP && echo present` printed `present` for the appended rule at position 6 as well. `-C` tells you a rule exists, not that it matches anything. Check the counters after a test connection.
 
 ### DROP or REJECT?
 

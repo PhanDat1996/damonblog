@@ -1,7 +1,7 @@
 ---
 title: "Cannot Connect to Server on Linux: Troubleshoot Layer by Layer"
 date: "2026-04-22"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "Refused, timed out or no route to host? Check interface, route, traceroute, TCP port and app in order with ip, ping, mtr, nc and curl."
 tags: ["linux", "networking", "troubleshooting", "debugging", "infrastructure"]
 featured: false
@@ -24,7 +24,7 @@ mtr -n -rwc 100 10.0.1.50                                      # where along the
 
 ## Start with the exact error
 
-Reproduce it from the client with a short timeout. Always set one: without it, a filtered port makes Linux retry the SYN until `net.ipv4.tcp_syn_retries` runs out. With the default of 6, that's about **two minutes** before you get an answer.
+Reproduce it from the client with a short timeout. Always set one: without it, a filtered port makes Linux retry the SYN until `net.ipv4.tcp_syn_retries` runs out. With the default of 6 and pure exponential backoff, that's about **two minutes** before you get an answer. Kernels with `net.ipv4.tcp_syn_linear_timeouts` (Ubuntu 24.04's 6.8 kernel has it set to 4) retry the first few times one second apart, so it ends sooner, but still far later than you want to wait.
 
 | Error | What happened on the wire | Look at |
 |---|---|---|
@@ -37,6 +37,47 @@ Reproduce it from the client with a short timeout. Always set one: without it, a
 | `Connection reset by peer` right after the TLS `Client hello` | Something on the path read the hostname and reset the flow; see [proving SNI blocking](/blog/tls-connection-reset-sni-blocking) | — |
 
 "Refused" is good news in a way: you reached *something* that answered. "Timed out" means packets disappear in between.
+
+### What the three failures look like side by side
+
+> **Lab environment:** two Ubuntu 24.04.5 LTS boxes on one network, `lab01` (172.30.0.10) and `client` (172.30.0.20). Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+On lab01, nothing listens on 9000, and two iptables rules were added: `DROP` for port 8080 and `REJECT` (default `icmp-port-unreachable`) for port 8090. From the client:
+
+```
+root@client:~# curl -sS -m 5 http://172.30.0.10:9000/
+curl: (7) Failed to connect to 172.30.0.10 port 9000 after 0 ms: Couldn't connect to server
+root@client:~# time curl -sS -m 5 http://172.30.0.10:8080/
+curl: (28) Connection timed out after 5002 milliseconds
+
+real	0m5.008s
+user	0m0.003s
+sys	0m0.003s
+root@client:~# curl -sS -m 5 http://172.30.0.10:8090/
+curl: (7) Failed to connect to 172.30.0.10 port 8090 after 1 ms: Couldn't connect to server
+```
+
+The DROP is easy to tell apart: it ran into the 5-second cap. The other two give curl the same error 7 and the same message, although one is "no service" and the other is "firewall". `nc` doesn't help either:
+
+```
+root@client:~# nc -vz -w 3 172.30.0.10 8090
+nc: connect to 172.30.0.10 port 8090 (tcp) failed: Connection refused
+root@client:~# nc -vz -w 3 172.30.0.10 9000
+nc: connect to 172.30.0.10 port 9000 (tcp) failed: Connection refused
+```
+
+A packet capture on the client does (header and summary lines trimmed). The closed port answers with a TCP reset (`Flags [R.]`); the REJECT rule answers with ICMP:
+
+```
+13:41:39.618721 IP 172.30.0.20.57556 > 172.30.0.10.8090: Flags [S], seq 671969181, win 64240, options [mss 1460,sackOK,TS val 1733842357 ecr 0,nop,wscale 7], length 0
+13:41:39.618771 IP 172.30.0.10 > 172.30.0.20: ICMP 172.30.0.10 tcp port 8090 unreachable, length 68
+13:41:39.681175 IP 172.30.0.20.58470 > 172.30.0.10.9000: Flags [S], seq 2163762644, win 64240, options [mss 1460,sackOK,TS val 1733842419 ecr 0,nop,wscale 7], length 0
+13:41:39.681218 IP 172.30.0.10.9000 > 172.30.0.20.58470: Flags [R.], seq 0, ack 2163762645, win 0, length 0
+```
+
+![Terminal on the client: curl gives the same error 7 for a closed port and a REJECT rule, curl times out after 5 s on the DROP rule, and tcpdump shows a TCP RST from port 9000 but an ICMP port unreachable for port 8090](/images/lab-refused-vs-timeout-tcpdump.jpg)
+
+So when a client says "connection refused", `ss` on the server is the first check, and if the port *is* listening, run `tcpdump -ni any 'tcp port 8080 or icmp'` on the client. An ICMP port unreachable means a REJECT rule. A reset despite a listener means a `REJECT --reject-with tcp-reset` rule, or a different host answering than the one you checked. The DROP case is covered in Connection timed out below.
 
 ---
 
@@ -374,7 +415,7 @@ A `200` here means DNS, routing, the TCP port, TLS (certificate valid for that n
 | curl error | Layer |
 |---|---|
 | `(6) Could not resolve host` | DNS |
-| `(7) Failed to connect ... Connection refused` | TCP: nothing listening |
+| `(7) Failed to connect ... Couldn't connect to server` (older curl: `Connection refused`) | TCP: nothing listening, or a REJECT rule |
 | `(28) Connection timed out` | TCP: filtered or unreachable |
 | `(60) SSL certificate problem` | TLS: expired, self-signed, wrong chain |
 | `(35)` / handshake errors | TLS: protocol or cipher mismatch |
@@ -496,6 +537,18 @@ Then connect from the client.
 | Nothing | Packets are dropped **before** the server: cloud security group / NACL, network firewall, wrong route, or wrong IP |
 | SYN arrives, no SYN-ACK goes out | Dropped **on** the server: host firewall (DROP), or an accept queue that's overflowing |
 | SYN arrives, SYN-ACK goes out, client still times out | The reply is lost on the way back: asymmetric routing, or a firewall on the return path |
+
+In the lab above, with a `DROP` rule for 8080 on lab01, the server-side capture showed the second row: the same SYN (same sequence number) arriving five times about a second apart, and nothing going back:
+
+```
+13:41:20.712535 IP 172.30.0.20.60384 > 172.30.0.10.8080: Flags [S], seq 2220798691, win 64240, options [mss 1460,sackOK,TS val 1733823451 ecr 0,nop,wscale 7], length 0
+13:41:21.717411 IP 172.30.0.20.60384 > 172.30.0.10.8080: Flags [S], seq 2220798691, win 64240, options [mss 1460,sackOK,TS val 1733824456 ecr 0,nop,wscale 7], length 0
+13:41:22.741259 IP 172.30.0.20.60384 > 172.30.0.10.8080: Flags [S], seq 2220798691, win 64240, options [mss 1460,sackOK,TS val 1733825480 ecr 0,nop,wscale 7], length 0
+13:41:23.765282 IP 172.30.0.20.60384 > 172.30.0.10.8080: Flags [S], seq 2220798691, win 64240, options [mss 1460,sackOK,TS val 1733826504 ecr 0,nop,wscale 7], length 0
+13:41:24.789351 IP 172.30.0.20.60384 > 172.30.0.10.8080: Flags [S], seq 2220798691, win 64240, options [mss 1460,sackOK,TS val 1733827528 ecr 0,nop,wscale 7], length 0
+```
+
+Those are the client's retransmissions, one second apart because this kernel uses linear SYN timeouts for the first retries (`net.ipv4.tcp_syn_linear_timeouts = 4`). After the curl and a 3-second `nc` attempt, the DROP rule's counter in `iptables -L INPUT -v -n` showed 8 packets.
 
 tcpdump sees incoming packets before the host firewall does, so a SYN that shows up in the capture can still be dropped by nftables/iptables afterwards. If nothing arrives, a TCP-mode traceroute or mtr from the client shows where along the path it stops.
 
@@ -701,7 +754,7 @@ Never run `nmcli networking off` over SSH: it disables networking on every inter
 No. ICMP has no ports. Use `nc -zv host port`, or `curl` for HTTP.
 
 **Why does telnet hang instead of failing?**
-The SYN is being dropped silently (a firewall DROP rule or security group), so the client keeps retrying until the kernel gives up, about two minutes by default. `nc -w 3` returns in three seconds instead.
+The SYN is being dropped silently (a firewall DROP rule or security group), so the client keeps retrying until the kernel gives up, up to about two minutes depending on the kernel. `nc -w 3` returns in three seconds instead.
 
 **Is telnet still safe to use for testing?**
 The telnet *client* is fine for connection tests. The risk is the telnet *server* (port 23), which sends everything in clear text and shouldn't be running.
