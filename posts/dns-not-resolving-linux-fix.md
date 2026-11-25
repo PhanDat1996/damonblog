@@ -1,7 +1,7 @@
 ---
 title: "DNS Not Resolving on Linux: Check Your DNS Server and Fix It"
 date: "2026-04-22"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "Could not resolve host? Find which DNS server Linux really uses, test it with dig, and fix resolv.conf, systemd-resolved or Docker so it survives a reboot."
 tags: ["linux", "networking", "troubleshooting", "debugging"]
 featured: false
@@ -40,7 +40,7 @@ If `getent` fails but `dig` works, the problem is on the box (nsswitch, hosts fi
 | `Name or service not known` | `EAI_NONAME`: a server answered, and the name does not exist (`NXDOMAIN`), or no source in `nsswitch.conf` had it |
 | `curl: (6) Could not resolve host` | curl's wrapper around either of the above. Check with `getent` |
 | `dig`: `status: SERVFAIL` | The server you asked could not get an answer, often a broken upstream or DNSSEC validation failure |
-| `dig`: `connection timed out; no servers could be reached` | Nothing answered on port 53. Think network, firewall, or a dead stub resolver |
+| `dig`: `communications error to ...#53: timed out`, then `no servers could be reached` (older dig: `connection timed out; no servers could be reached`) | Nothing answered on port 53. Think network, firewall, or a dead stub resolver |
 
 "Temporary failure" points at reachability. "Not known" points at the name or the search domain. They send you in different directions.
 
@@ -71,6 +71,55 @@ Common causes when `dig` works and `getent` doesn't:
 - A stale entry in `/etc/hosts` overriding DNS (`files` comes first).
 - A short name like `db01` that only resolves with the right `search` domain. `search corp.example.com` makes `db01` resolve as `db01.corp.example.com` for applications, but not for `dig`.
 - `mdns4_minimal [NOTFOUND=return]` stopping lookups for names ending in `.local` before DNS is ever asked. If your internal domain really is `.local`, this bites.
+
+### From the lab: dig says one thing, the app connects somewhere else
+
+> **Lab environment:** two Ubuntu 24.04.5 LTS boxes. `lab01` (172.30.0.10) runs dnsmasq 2.91 as the internal DNS server for `corp.lab`; `client` (172.30.0.20) uses it. Captured 25 Nov 2026. Output is copied from the terminal without edits.
+
+The setup is the classic one: `api.corp.lab` is 172.30.0.10 in DNS, but the client's `/etc/hosts` still has a line for the server it used to run on. From the client:
+
+```
+root@client:~# cat /etc/resolv.conf
+nameserver 172.30.0.10
+search corp.lab
+root@client:~# dig +short api.corp.lab
+172.30.0.10
+root@client:~# getent ahosts api.corp.lab
+172.30.0.99     STREAM api.corp.lab
+172.30.0.99     DGRAM  
+172.30.0.99     RAW    
+root@client:~# curl -sS -m 5 http://api.corp.lab:8080/
+curl: (7) Failed to connect to api.corp.lab port 8080 after 3054 ms: Couldn't connect to server
+root@client:~# grep api /etc/hosts
+172.30.0.99 api.corp.lab   # old app server
+root@client:~# grep ^hosts /etc/nsswitch.conf
+hosts:          files dns
+```
+
+![Terminal on the client: dig returns 172.30.0.10 for api.corp.lab, getent ahosts returns 172.30.0.99, curl fails after 3054 ms, and /etc/hosts holds an old entry for api.corp.lab with nsswitch hosts set to files dns](/images/lab-dig-vs-getent-hosts-file.jpg)
+
+`dig` asked the DNS server and got the right answer. curl used `getaddrinfo()`, which read `files` first and found the old address in `/etc/hosts`. The curl error mentions nothing about DNS, so this looks like a network problem until you compare `dig` with `getent`.
+
+The search domain works the other way round. A short name that resolves for applications is refused when `dig` sends it as-is:
+
+```
+root@client:~# dig db01 | grep -E 'status|SERVER'
+;; ->>HEADER<<- opcode: QUERY, status: REFUSED, id: 55454
+;; SERVER: 172.30.0.10#53(172.30.0.10) (UDP)
+root@client:~# dig +search +short db01
+172.30.0.30
+root@client:~# getent hosts db01
+172.30.0.30     db01.corp.lab
+```
+
+The two error messages from the table above, from the same box: a name that doesn't exist gets `Name or service not known` (and curl's error 6), while an unreachable server gets `Temporary failure` (see below):
+
+```
+root@client:~# curl -sS http://nosuch.corp.lab/
+curl: (6) Could not resolve host: nosuch.corp.lab
+root@client:~# python3 -c 'import socket; socket.getaddrinfo("nosuch.corp.lab", 80)' 2>&1 | tail -1
+socket.gaierror: [Errno -2] Name or service not known
+```
 
 ---
 
@@ -215,6 +264,52 @@ nc -vz -w 3 10.0.0.2 53                  # TCP connect test
 ```
 
 UDP working and TCP failing, or the reverse, points at a firewall rule. See [testing a TCP connection](/blog/cannot-connect-to-server-linux-troubleshooting).
+
+### From the lab: a dead server, and a server with UDP blocked
+
+Same lab as above. First the client's `resolv.conf` pointed at an address with no DNS server behind it:
+
+```
+root@client:~# cat /etc/resolv.conf
+nameserver 172.30.0.99
+search corp.lab
+root@client:~# time getent hosts api.example.org; echo "exit=$?"
+
+real	0m24.565s
+user	0m0.002s
+sys	0m0.000s
+exit=2
+root@client:~# python3 -c 'import socket; socket.getaddrinfo("api.example.org", 80)' 2>&1 | tail -1
+socket.gaierror: [Errno -3] Temporary failure in name resolution
+root@client:~# dig api.example.org | grep -v '^$'
+;; communications error to 172.30.0.99#53: timed out
+;; communications error to 172.30.0.99#53: timed out
+;; communications error to 172.30.0.99#53: timed out
+; <<>> DiG 9.18.39-0ubuntu0.24.04.9-Ubuntu <<>> api.example.org
+;; global options: +cmd
+;; no servers could be reached
+```
+
+One lookup took **24.6 seconds** to fail with the default resolver settings (5-second timeout, two attempts) and a `search` domain, which adds a second name to try. An application making that call at startup or per request just looks hung. `options timeout:1 attempts:2` in `resolv.conf` (or the equivalent in netplan/resolved) shortens it when the server really is gone; fixing the server is still the fix.
+
+Then the server came back, but with UDP/53 dropped by its firewall:
+
+```
+root@lab01:~# iptables -I INPUT -p udp --dport 53 -j DROP
+root@client:~# dig +short api.corp.lab
+;; communications error to 172.30.0.10#53: timed out
+;; communications error to 172.30.0.10#53: timed out
+;; communications error to 172.30.0.10#53: timed out
+;; no servers could be reached
+root@client:~# dig +tcp +short api.corp.lab
+172.30.0.10
+root@client:~# nc -vz -w 3 172.30.0.10 53
+Connection to 172.30.0.10 53 port [tcp/domain] succeeded!
+```
+
+![Terminal on the client: with nameserver 172.30.0.99, getent takes 24.565 s and exits 2, Python reports Temporary failure in name resolution, dig prints three communications errors and no servers could be reached; with UDP/53 dropped on 172.30.0.10, dig times out over UDP but answers 172.30.0.10 over TCP and nc connects to TCP/53](/images/lab-dns-dead-server-udp-blocked.jpg)
+
+A TCP test alone (`nc`) would have said "DNS port is open". Normal lookups use UDP, so test both.
 
 ---
 

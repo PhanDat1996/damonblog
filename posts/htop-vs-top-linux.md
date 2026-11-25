@@ -2,7 +2,7 @@
 title: "top vs htop: Which to Use on a Production Server"
 seoTitle: "top vs htop: Differences, Comparison Table, When to Use"
 date: "2026-04-21"
-updated: "2026-11-12"
+updated: "2026-11-25"
 excerpt: "top vs htop on Linux: same /proc data, different ergonomics. A clear verdict, a key-by-key comparison table, and why their numbers sometimes differ."
 tags: ["linux", "troubleshooting", "monitoring", "debugging"]
 featured: false
@@ -66,6 +66,43 @@ People switch between the two tools and think one is wrong. Usually it's one of 
 **%CPU above 100%.** Both tools, by default, scale per-process CPU to one core, so a process using four cores shows ~400%. In top, `Shift+I` switches to dividing by the CPU count. Neither is wrong; check which mode you're in.
 
 **Different sampling moments and intervals.** top refreshes every 3 seconds by default; htop every 1.5 seconds. A bursty process will show different numbers in each.
+
+### From the lab: one process, four different-looking answers
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01` with 2 CPUs, procps-ng top and htop 3.3.0 from the Ubuntu archive. Captured 25 Nov 2026. Output is copied from the terminal without edits; the htop screens were captured with `tmux capture-pane`.
+
+The test load was `xz -T2 -9 < /dev/urandom > /dev/null`, which compresses with two worker threads, started as a systemd unit. Here is what each tool reported in the first 20 seconds:
+
+```
+root@lab01:~# ps -o pid,nlwp,%cpu,etime,cmd -C xz
+    PID NLWP %CPU     ELAPSED CMD
+    536    3  184       00:08 xz -T2 -9
+root@lab01:~# top -b -n 2 -d 2 -p $(pgrep -x xz) | tail -2
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    536 root      20   0 2512036   1.3g   1896 S 189.0  32.8   0:19.28 xz
+root@lab01:~# top -H -b -n 1 -p $(pgrep -x xz) | tail -4
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    537 root      20   0 2512036   1.3g   1896 R  99.9  33.1   0:09.68 xz
+    538 root      20   0 2512036   1.3g   1896 R  72.7  33.1   0:09.28 xz
+    536 root      20   0 2512036   1.3g   1896 S   0.0  33.1   0:00.77 xz
+```
+
+- **`ps` said 184%, `top` said 189%.** `ps` divides total CPU time by the process's whole lifetime (8 seconds here). `top` measures the last interval (2 seconds). On a steady load they agree roughly. On a bursty one they don't, and neither is wrong.
+- **Over 100% is normal for a threaded process.** Two busy threads on two cores is ~200%. `NLWP 3` is the main thread plus two workers.
+- **`top -H` shows where it goes:** two worker threads doing the work, the main thread (PID 536) idle.
+
+htop shows threads like that by default, as separate rows:
+
+![htop 3.3.0 on lab01 filtered to xz: first screen lists threads 538 and 537 at about 93% CPU each plus process 536 at 0%, all with RES 1448M; after pressing H only process 536 remains at 134% CPU](/images/lab-htop-threads-vs-process.jpg)
+
+Every xz row shows the same `RES 1448M`. That is one address space counted on three rows, not 4.3 GB. Pressing `H` collapsed them into one row for PID 536 at `134.0` CPU%. That figure is from a single 1-second refresh while memory pressure was rising (the bar went from 3.40G to 3.55G of 3.81G in 4 seconds), which is a good example of why one sample from one tool is not a measurement.
+
+Two smaller things the screens show:
+
+- `VIRT` is the same number in both tools: top's `2512036` KiB is htop's `2453M`. Same `/proc` data, different units.
+- `htop -F xz` matched the **command line**, not the process name, so it also listed the `bash -c xz ...` wrapper and the tmux session that started htop. Filter on something specific.
+
+The test was stopped there because `xz -9` kept allocating memory: 3.55G of 3.81G was in use on the second screen.
 
 **The memory bar vs `avail Mem`.** htop's memory bar shows used memory plus buffers and cache in different colors. The green part is application memory; the rest is cache the kernel can mostly reclaim. top prints `avail Mem` as a number instead. For "am I running out of RAM," the relevant figure is available memory in both. If it keeps shrinking over days, see [Linux Memory Leak Troubleshooting](/blog/linux-memory-leak-troubleshooting).
 

@@ -1,7 +1,7 @@
 ---
 title: "Linux TIME_WAIT Explained: When It Actually Breaks Things"
 date: "2026-04-20"
-updated: "2026-11-12"
+updated: "2026-11-25"
 excerpt: "netstat or ss shows thousands of TIME_WAIT sockets? What TCP TIME_WAIT means, when it exhausts ephemeral ports, and which sysctls help or hurt."
 tags: ["linux", "networking", "troubleshooting", "infrastructure", "debugging"]
 featured: false
@@ -94,8 +94,66 @@ Exceed that rate to one destination (an NGINX upstream without keepalive, a serv
 | Go | `dial tcp ...: connect: cannot assign requested address` |
 | Python | `OSError: [Errno 99] Cannot assign requested address` |
 | Java | `java.net.BindException: Cannot assign requested address` |
+| curl 8.x | `(7) Failed to connect ... after 0 ms: Couldn't connect to server`; only `curl -v` shows `Cannot assign requested address` |
 
 If you see `Connection refused` (errno 111), that's a different problem: the destination isn't accepting. Start with [cannot connect to server](/blog/cannot-connect-to-server-linux-troubleshooting).
+
+### From the lab: running out of ports on purpose
+
+> **Lab environment:** two Ubuntu 24.04.5 LTS boxes (kernel 6.8), `client` (172.30.0.20) and `lab01` (172.30.0.10) running nginx 1.24.0 on port 8080. Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+Hitting 470 connections per second needs a load generator. Shrinking the ephemeral range to 10 ports shows the same failure with a shell loop:
+
+```
+root@client:~# sysctl -w net.ipv4.ip_local_port_range='50000 50009' net.ipv4.tcp_tw_reuse=0
+net.ipv4.ip_local_port_range = 50000 50009
+net.ipv4.tcp_tw_reuse = 0
+root@client:~# for i in $(seq 1 12); do curl -sS -o /dev/null -w "%{http_code} local port %{local_port}\n" http://172.30.0.10:8080/; done
+200 local port 50006
+200 local port 50004
+200 local port 50008
+200 local port 50000
+200 local port 50002
+200 local port 50005
+200 local port 50001
+200 local port 50009
+200 local port 50003
+200 local port 50007
+curl: (7) Failed to connect to 172.30.0.10 port 8080 after 0 ms: Couldn't connect to server
+000 local port 0
+curl: (7) Failed to connect to 172.30.0.10 port 8080 after 0 ms: Couldn't connect to server
+000 local port 0
+```
+
+Ten connections, ten ports, then failure in 0 ms. Every port was sitting in TIME-WAIT toward the one destination, with 59 seconds to go:
+
+```
+root@client:~# ss -Htn state time-wait | awk '{print $4}' | sort | uniq -c
+     10 172.30.0.10:8080
+root@client:~# ss -tno state time-wait | head -3
+Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                  
+0      0        172.30.0.20:50001  172.30.0.10:8080 timer:(timewait,59sec,0)
+0      0        172.30.0.20:50008  172.30.0.10:8080 timer:(timewait,59sec,0)
+```
+
+The TIME-WAIT sockets were on the **client**, because curl closed each connection first. `ss -s` on lab01 at the same moment showed `timewait 2`, and both of those were lab01's own earlier downloads from the Ubuntu mirrors on port 80, not the curl traffic.
+
+![Terminal on the client: with a 10-port ephemeral range, curl succeeds ten times on ports 50000 to 50009 and then fails with error 7; ss shows ten TIME-WAIT sockets to 172.30.0.10:8080 with 59 s left; Python reports Errno 99 and curl -v shows Cannot assign requested address (Python traceback trimmed)](/images/lab-time-wait-port-exhaustion.jpg)
+
+Note what curl printed: `Couldn't connect to server`, the same text curl 8.5 uses for a refused or unreachable port. The errno only shows up in verbose mode, or from a client that reports it directly:
+
+```
+root@client:~# curl -v -sS -o /dev/null http://172.30.0.10:8080/ 2>&1 | head -4
+*   Trying 172.30.0.10:8080...
+* Immediate connect fail for 172.30.0.10: Cannot assign requested address
+* Failed to connect to 172.30.0.10 port 8080 after 0 ms: Couldn't connect to server
+* Closing connection
+root@client:~# python3 -c 'import socket; socket.create_connection(("172.30.0.10", 8080))'
+...
+OSError: [Errno 99] Cannot assign requested address
+```
+
+(The Python traceback above is shortened to its last line. The `curl -v` run came from a second exhaustion of the same 10 ports.) "after 0 ms" is the other giveaway: a refused connection needs a round trip, this failure never left the host.
 
 ---
 
@@ -222,6 +280,21 @@ net.ipv4.tcp_tw_reuse = 1
 ```
 
 It only affects connections this host *initiates*, and it relies on TCP timestamps (`net.ipv4.tcp_timestamps = 1`, the default). It's the reasonable kernel-side setting for a busy client or proxy. It doesn't replace step 1.
+
+In the lab above, with all 10 ports in TIME-WAIT, switching it on did not help within the same second; one second later the ports were reused:
+
+```
+root@client:~# date +%T; sysctl -w net.ipv4.tcp_tw_reuse=1; curl -sS -o /dev/null -w "%{http_code} local port %{local_port}\n" http://172.30.0.10:8080/
+14:43:44
+net.ipv4.tcp_tw_reuse = 1
+curl: (7) Failed to connect to 172.30.0.10 port 8080 after 0 ms: Couldn't connect to server
+000 local port 0
+root@client:~# sleep 1; date +%T; curl -sS -o /dev/null -w "%{http_code} local port %{local_port}\n" http://172.30.0.10:8080/
+14:43:45
+200 local port 50006
+```
+
+That matches the kernel's rule: a TIME-WAIT port is only reused once its last timestamp is at least a second old. So `tcp_tw_reuse` raises the ceiling from "ports per 60 seconds" to roughly "ports per second" for one destination. A client that opens connections faster than that still runs out.
 
 ### Settings that don't do what people think
 
