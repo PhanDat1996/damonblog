@@ -96,9 +96,11 @@ interface ConfigFacts {
   has:       (name: string) => boolean;
   valueOf:   (name: string) => string[];
   listenHas: (token: string) => boolean;
+  /** Values of a directive set anywhere inside stream {} */
+  streamValueOf: (name: string) => string[];
 }
 
-function facts(config: string): ConfigFacts {
+export function facts(config: string): ConfigFacts {
   const ast = parseConfigs([{ id: "cfg", filename: "nginx.conf", content: config }]);
   const valueOf = (name: string) => getAllDirectivesDeep(ast.root, name).map((d) => d.rawValue.trim().toLowerCase());
   return {
@@ -106,19 +108,29 @@ function facts(config: string): ConfigFacts {
     has: (name) => getAllDirectivesDeep(ast.root, name).length > 0,
     valueOf,
     listenHas: (token) => valueOf("listen").some((v) => v.split(/\s+/).includes(token)),
+    streamValueOf: (name) => getBlocksOfType(ast.root, "unknown")
+      .filter((b) => b.contextLabel === "stream")
+      .flatMap((b) => getAllDirectivesDeep(b, name).map((d) => d.rawValue.trim().toLowerCase())),
   };
 }
 
 const tls = (c: ConfigFacts) => c.listenHas("ssl") || c.listenHas("quic");
 const on = (values: string[]) => values.some((v) => v !== "off");
 
+// Order matters: the first matching title wins, so specific rules go before generic ones.
 const FEATURES: { match: RegExp; feature: Feature }[] = [
+  { match: /ssl_early_data/i, feature: { label: "TLS 1.3 early data (ssl_early_data on)", detect: (c) => tls(c) && c.valueOf("ssl_early_data").includes("on") } },
+  { match: /TLS 1\.3/i, feature: { label: "TLS listener (listen ... ssl)", detect: tls } },
+  // Case-sensitive: "PROXY protocol" (listen ... proxy_protocol), not ngx_http_proxy_module
+  { match: /PROXY protocol/, feature: { label: "PROXY protocol (listen ... proxy_protocol)", detect: (c) => c.listenHas("proxy_protocol") } },
   { match: /HTTP\/3|QUIC|ngx_http_v3_module/i, feature: { label: "HTTP/3 (listen ... quic)", detect: (c) => c.listenHas("quic") || on(c.valueOf("http3")) } },
   { match: /HTTP\/2 request injection in the ngx_http_proxy_module|proxy_v2|grpc/i, feature: { label: "HTTP/2 to upstreams (grpc_pass or proxy_http_version 2)", detect: (c) => c.has("grpc_pass") || c.valueOf("proxy_http_version").includes("2") } },
   { match: /HTTP\/2/i, feature: { label: "HTTP/2 (listen ... http2 or http2 on)", detect: (c) => c.listenHas("http2") || on(c.valueOf("http2")) } },
   { match: /SPDY/i, feature: { label: "SPDY (listen ... spdy)", detect: (c) => c.listenHas("spdy") } },
   { match: /ngx_http_mp4_module|\bmp4\b/i, feature: { label: "mp4 module (mp4 directive)", detect: (c) => c.has("mp4") } },
-  { match: /in stream/i, feature: { label: "stream {} with ssl_ocsp", detect: (c) => getBlocksOfType(c.root, "unknown").some((b) => b.contextLabel === "stream") && c.has("ssl_ocsp") } },
+  { match: /client certificate validation in stream/i, feature: { label: "stream {} with ssl_verify_client", detect: (c) => on(c.streamValueOf("ssl_verify_client")) } },
+  { match: /ssl_preread/i, feature: { label: "stream ssl_preread on", detect: (c) => c.streamValueOf("ssl_preread").includes("on") } },
+  { match: /in stream/i, feature: { label: "stream {} with ssl_ocsp", detect: (c) => on(c.streamValueOf("ssl_ocsp")) } },
   { match: /OCSP/i, feature: { label: "OCSP (ssl_stapling or ssl_ocsp)", detect: (c) => on(c.valueOf("ssl_stapling")) || on(c.valueOf("ssl_ocsp")) } },
   { match: /\bresolver\b/i, feature: { label: "resolver directive", detect: (c) => c.has("resolver") } },
   { match: /\bdav\b|ngx_http_dav_module|WebDAV/i, feature: { label: "WebDAV (dav_methods)", detect: (c) => on(c.valueOf("dav_methods")) } },
@@ -132,11 +144,12 @@ const FEATURES: { match: RegExp; feature: Feature }[] = [
   { match: /session tickets/i, feature: { label: "TLS with session tickets (default on)", detect: (c) => tls(c) && !c.valueOf("ssl_session_tickets").includes("off") } },
   { match: /SSL session reuse|renegotiation/i, feature: { label: "TLS listener (listen ... ssl)", detect: tls } },
   { match: /map and regex/i, feature: { label: "map {} with regex keys", detect: (c) => getBlocksOfType(c.root, "map").some((m) => m.directives.some((d) => d.name.replace(/^["']/, "").startsWith("~"))) } },
+  { match: /alias with try_files/i, feature: { label: "alias combined with try_files", detect: (c) => c.has("alias") && c.has("try_files") } },
   { match: /alias with rewrite/i, feature: { label: "alias combined with rewrite", detect: (c) => c.has("alias") && c.has("rewrite") } },
   { match: /rewrite_module/i, feature: { label: "rewrite module (rewrite, set, if, return)", detect: (c) => ["rewrite", "set", "if", "return"].some(c.has) } },
 ];
 
-function featureFor(adv: Advisory): Feature | null {
+export function featureFor(adv: Advisory): Feature | null {
   if (adv.windowsOnly) return { label: "nginx for Windows only", detect: () => false };
   return FEATURES.find((f) => f.match.test(adv.title))?.feature ?? null;
 }
