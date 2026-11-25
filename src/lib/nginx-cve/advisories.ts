@@ -3,11 +3,197 @@
 
 import type { Advisory } from './types.ts';
 
-export const ADVISORIES_UPDATED = "2026-10-30";
-export const LATEST_MAINLINE_VERSION = "1.31.8";
-export const LATEST_STABLE_VERSION = "1.30.6";
+export const ADVISORIES_UPDATED = "2026-11-23";
+export const LATEST_MAINLINE_VERSION = "1.31.10";
+export const LATEST_STABLE_VERSION = "1.30.8";
 
 export const ADVISORIES: Advisory[] = [
+  {
+    "id": "CVE-2026-132779",
+    "title": "Excessive CPU usage in TLS 1.3 with ssl_early_data",
+    "severity": "medium",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163947",
+    "notVulnerable": [
+      "1.31.10",
+      "1.30.8"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.21.4",
+        "to": "1.31.9"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-123634",
+    "title": "Use-after-free during response processing in resolver",
+    "severity": "medium",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163925",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "0.6.18",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-123007",
+    "title": "Memory corruption in HTTP/2 flow control",
+    "severity": "major",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163926",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.9.5",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-121810",
+    "title": "Use-after-free in HTTP/3",
+    "severity": "medium",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163927",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.25.0",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-123633",
+    "title": "Use-after-free in HTTP/2",
+    "severity": "medium",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163928",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.19.7",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-118899",
+    "title": "Infinite loop while reading client request body over TLS 1.3",
+    "severity": "major",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163930",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.13.0",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-113425",
+    "title": "Use-after-free in mail proxy module",
+    "severity": "major",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163931",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "0.5.33",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-120993",
+    "title": "NULL pointer dereference when using PROXY protocol version 2",
+    "severity": "low",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163932",
+    "notVulnerable": [
+      "1.31.9"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.31.4",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-125283",
+    "title": "Buffer overflow when using alias with try_files",
+    "severity": "low",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163933",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "0.9.6",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-120967",
+    "title": "SNI bypass when using client certificate validation in stream",
+    "severity": "medium",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163934",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.25.5",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
+  {
+    "id": "CVE-2026-123640",
+    "title": "Insufficient validation in stream ssl_preread module",
+    "severity": "low",
+    "advisoryUrl": "https://my.f5.com/manage/s/article/K000163935",
+    "notVulnerable": [
+      "1.31.9",
+      "1.30.7"
+    ],
+    "vulnerable": [
+      {
+        "from": "1.15.2",
+        "to": "1.31.8"
+      }
+    ],
+    "windowsOnly": false
+  },
   {
     "id": "CVE-2026-15176",
     "title": "Buffer overflow when using alias with rewrite",
