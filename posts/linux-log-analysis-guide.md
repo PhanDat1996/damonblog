@@ -124,7 +124,7 @@ These are the lines worth searching for first, because each one points at a spec
 | `Memory cgroup out of memory: Killed process` | kernel | A container or a systemd unit with `MemoryMax=` hit **its own** limit. The host may have plenty of free RAM. |
 | `segfault at 0 ip ... error 4 in myapp[...]` | kernel | The process read from an invalid address (`at 0` = null pointer). `error 6` would be a write. It's a crash in the program, not a system problem. |
 | `I/O error, dev sda, sector 2048` | kernel | The disk or controller failed a request. Check `smartctl -a /dev/sda`. Repeated lines mean hardware. |
-| `EXT4-fs error` / `Remounting filesystem read-only` | kernel | ext4 found corruption or an I/O failure and protected itself. Writes now fail with `EROFS`. |
+| `EXT4-fs error` / `Remounting filesystem read-only` | kernel | ext4 found corruption or an I/O failure and protected itself. Writes now fail with `EROFS`. Recovery steps: [read-only file system fix](/blog/linux-read-only-file-system-fix). |
 | `INFO: task <name>:<pid> blocked for more than 120 seconds` | kernel | A task was stuck in D state (uninterruptible I/O) for 2 minutes. Usually slow or dead storage, or a hung NFS mount. |
 | `<unit>: Main process exited, code=exited, status=1/FAILURE` | systemd | The service's own process exited with code 1. The reason is in the lines just **before** this one. |
 | `<unit>: Main process exited, code=killed, status=9/KILL` | systemd | Something sent SIGKILL: the OOM killer, a stop timeout, or a person. Check the kernel log at the same second. |
