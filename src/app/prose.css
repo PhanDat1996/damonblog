@@ -47,7 +47,10 @@
   padding: 0.15em 0.45em;
   border-radius: 0.25rem;
   border: 1px solid theme('colors.zinc.700');
-  white-space: nowrap;
+  /* Long inline snippets (error lines, URLs) must wrap or they widen the page on phones. */
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .prose pre {

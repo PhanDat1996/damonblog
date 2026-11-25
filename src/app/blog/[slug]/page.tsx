@@ -124,7 +124,7 @@ export default async function BlogPostPage({ params }: Props) {
 
           <p className="text-lg text-zinc-400 leading-relaxed">{post.excerpt}</p>
 
-          <div className="flex items-center gap-4 font-mono text-xs text-zinc-400 border-t border-b border-zinc-800 py-4">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-zinc-400 border-t border-b border-zinc-800 py-4">
             <span>{formatDate(post.date)}</span>
             {post.updated && post.updated !== post.date && (
               <>
