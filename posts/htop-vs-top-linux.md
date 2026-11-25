@@ -30,7 +30,7 @@ Know `top` well, because it's always there. Install `htop` where you can, becaus
 ## The verdict
 
 - **Use `top`** when you're on a machine you don't control (customer, vendor appliance, fresh cloud image, container), when you need text output for a ticket or script (`top -b`), or when you can't install packages.
-- **Use `htop`** on servers you manage, where it's in your base image. It's faster for scanning many cores, filtering by name, viewing the process tree and sending signals to the right process.
+- **Use `htop`** on servers you manage, where it's in your base image. It's faster for scanning many cores, filtering the list, viewing the process tree and sending signals to the right process.
 - **Use neither for scripts.** Use `ps`, `pidstat`, `vmstat` or read `/proc` directly. `top -b` is fine for a one-off snapshot.
 
 ---
@@ -43,7 +43,7 @@ Know `top` well, because it's always there. Install `htop` where you can, becaus
 | Per-core CPU | Press `1` | Bars for every core by default |
 | Process tree | `V` | `F5` or `t` |
 | Search for a process | `L` (locate) | `F3` or `/` |
-| Filter list by name | `o` then `COMMAND=nginx` | `F4` or `\` then type |
+| Filter list | `o` then `COMMAND=nginx` | `F4` or `\` then type: matches the whole command line, not just the name |
 | Sort | `P`, `M`, `T`, `<` `>` | `F6`, `<` `>`, or click a column header |
 | Send a signal | `k`, type PID and signal number | Highlight, `F9`, pick signal by name |
 | Act on several processes | No | Tag with `Space`, then `F9` |
@@ -71,7 +71,7 @@ People switch between the two tools and think one is wrong. Usually it's one of 
 
 > **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01` with 2 CPUs, procps-ng top and htop 3.3.0 from the Ubuntu archive. Captured 25 Nov 2026. Output is copied from the terminal without edits; the htop screens were captured with `tmux capture-pane`.
 
-The test load was `xz -T2 -9 < /dev/urandom > /dev/null`, which compresses with two worker threads, started as a systemd unit. Here is what each tool reported in the first 20 seconds:
+The test load was `xz -T2 -9 < /dev/urandom > /dev/null`, which compresses with two worker threads, started with `systemd-run --unit=compress-job bash -c "..."` (the `bash -c` wrapper shows up below). Here is what each tool reported in the first 20 seconds:
 
 ```
 root@lab01:~# ps -o pid,nlwp,%cpu,etime,cmd -C xz
@@ -93,7 +93,7 @@ root@lab01:~# top -H -b -n 1 -p $(pgrep -x xz) | tail -4
 
 htop shows threads like that by default, as separate rows:
 
-![htop 3.3.0 on lab01 filtered to xz: first screen lists threads 538 and 537 at about 93% CPU each plus process 536 at 0%, all with RES 1448M; after pressing H only process 536 remains at 134% CPU](/images/lab-htop-threads-vs-process.jpg)
+![htop 3.3.0 on lab01 filtered to xz: first screen lists threads 538 and 537 at about 93% CPU each plus process 536 at 0%, all with RES 1448M; after pressing H the two thread rows disappear and one xz row, PID 536, remains at 134% CPU](/images/lab-htop-threads-vs-process.jpg)
 
 Every xz row shows the same `RES 1448M`. That is one address space counted on three rows, not 4.3 GB. Pressing `H` collapsed them into one row for PID 536 at `134.0` CPU%. That figure is from a single 1-second refresh while memory pressure was rising (the bar went from 3.40G to 3.55G of 3.81G in 4 seconds), which is a good example of why one sample from one tool is not a measurement.
 
