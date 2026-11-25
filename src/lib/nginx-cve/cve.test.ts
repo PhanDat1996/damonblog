@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { analyzeCVEs, isAffected, ADVISORIES, LATEST_MAINLINE_VERSION, LATEST_STABLE_VERSION } from './cveAnalyzer.ts';
+import { analyzeCVEs, isAffected, featureFor, facts, ADVISORIES, LATEST_MAINLINE_VERSION, LATEST_STABLE_VERSION } from './cveAnalyzer.ts';
 import { parseAdvisories } from '../../../scripts/update-nginx-advisories.mjs';
 
 const adv = (id: string) => {
@@ -114,4 +114,31 @@ test('every advisory title maps to the intended feature (no accidental substring
   assert.equal(off.matches.find((m) => m.advisory.id === 'CVE-2026-97629')?.conditionStatus, 'not_detected');
   // SSL session reuse (2025) needs TLS, not SSI
   assert.equal(analyzeCVEs('1.27.3').matches.find((m) => m.advisory.id === 'CVE-2025-23419')?.condition, 'TLS listener (listen ... ssl)');
+});
+
+test('November 2026 advisories map to the feature they need, not to every build', () => {
+  const titled = (title: string) => ({ id: 'X', title, severity: 'medium' as const, advisoryUrl: '', notVulnerable: [], vulnerable: [], windowsOnly: false });
+  const check = (title: string, label: string, yes: string, no: string) => {
+    const f = featureFor(titled(title));
+    assert.equal(f?.label, label, title);
+    assert.equal(f!.detect(facts(yes)), true, `${title}: should detect`);
+    assert.equal(f!.detect(facts(no)), false, `${title}: should not detect`);
+  };
+  check('Excessive CPU usage in TLS 1.3 with ssl_early_data', 'TLS 1.3 early data (ssl_early_data on)',
+    'http { server { listen 443 ssl; ssl_early_data on; } }', 'http { server { listen 443 ssl; } }');
+  check('Infinite loop while reading client request body over TLS 1.3', 'TLS listener (listen ... ssl)',
+    'http { server { listen 443 ssl; } }', 'http { server { listen 80; } }');
+  check('NULL pointer dereference when using PROXY protocol version 2', 'PROXY protocol (listen ... proxy_protocol)',
+    'http { server { listen 80 proxy_protocol; } }', 'http { server { listen 80; location / { proxy_pass http://b; } } }');
+  check('Buffer overflow when using alias with try_files', 'alias combined with try_files',
+    'http { server { location /a/ { alias /srv/a/; try_files $uri =404; } } }', 'http { server { location / { try_files $uri =404; } } }');
+  check('SNI bypass when using client certificate validation in stream', 'stream {} with ssl_verify_client',
+    'stream { server { listen 443 ssl; ssl_verify_client on; } }', 'http { server { listen 443 ssl; ssl_verify_client on; } }');
+  check('Insufficient validation in stream ssl_preread module', 'stream ssl_preread on',
+    'stream { server { listen 443; ssl_preread on; } }', 'stream { server { listen 443; } }');
+  // the generic stream rule still covers the OCSP advisory, and only for ssl_ocsp inside stream {}
+  check('OCSP result bypass in stream', 'stream {} with ssl_ocsp',
+    'stream { server { listen 443 ssl; ssl_ocsp on; } }', 'http { server { listen 443 ssl; ssl_ocsp on; } }');
+  // "HTTP/2 request injection in the ngx_http_proxy_module" must not hit the PROXY protocol rule
+  assert.notEqual(featureFor(titled('HTTP/2 request injection in the ngx_http_proxy_module'))?.label, 'PROXY protocol (listen ... proxy_protocol)');
 });
