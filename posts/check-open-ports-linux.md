@@ -2,7 +2,7 @@
 title: "Check Open Ports on Linux with ss: Connections and Port in Use"
 seoTitle: "Check Open Ports on Linux: ss, Port in Use"
 date: "2026-04-21"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "What is listening on a Linux port, who is connected, and what holds the port you need. ss, lsof, fuser, netstat equivalents, and how to free a port safely."
 tags: ["linux", "networking", "troubleshooting", "debugging", "monitoring", "infrastructure"]
 featured: false
@@ -21,6 +21,52 @@ sudo fuser -k -TERM 8080/tcp                  # free port 8080 (stray process on
 ```
 
 That covers most of it. The rest of this page is about reading the output correctly, because the port number is the least interesting column, and about freeing a port without making things worse.
+
+---
+
+## From the lab: nginx can't bind 8080
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01` (systemd 255, nginx 1.24.0 from the Ubuntu archive) and a second box `client` on the same network. Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+nginx was configured with two servers: `listen 8080` for the app and `listen 127.0.0.1:8081` for an admin page. Earlier, a test web server had been started on 8080 with `systemd-run` and forgotten. Starting nginx:
+
+```
+root@lab01:~# systemctl start nginx
+Job for nginx.service failed because the control process exited with error code.
+See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.
+root@lab01:~# journalctl -u nginx --no-pager -o cat | grep -m3 -E 'bind|emerg'
+nginx: [emerg] bind() to 0.0.0.0:8080 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:8080 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:8080 failed (98: Address already in use)
+```
+
+nginx retries the bind a few times before giving up, hence the repeats.
+
+The journal names the address. `ss` names the process, and `systemctl status <PID>` says who manages it:
+
+```
+root@lab01:~# ss -tlnp 'sport = :8080'
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      5            0.0.0.0:8080      0.0.0.0:*    users:(("python3",pid=111,fd=3))
+root@lab01:~# systemctl status 111 --no-pager | head -2
+● stray-http.service - /usr/bin/python3 -m http.server 8080
+     Loaded: loaded (/run/systemd/transient/stray-http.service; transient)
+```
+
+![Terminal on lab01: nginx fails with bind() to 0.0.0.0:8080 failed (98: Address already in use), ss shows python3 pid 111 on 8080, systemctl status 111 names stray-http.service, and nginx starts after the unit is stopped](/images/lab-nginx-port-8080-in-use.jpg)
+
+`ps` alone would have shown a root-owned `python3` with PPID 1, which looks like a stray process you could `fuser -k`. `systemctl status` showed it is a unit, so `systemctl stop stray-http` was the right fix, and nginx then started on both ports.
+
+The second server shows the other half of this page. It is listening and works locally, but only on loopback, so a remote client is refused:
+
+```
+root@client:~# curl -sS http://172.30.0.10:8080/
+app ok
+root@client:~# curl -sS http://172.30.0.10:8081/
+curl: (7) Failed to connect to 172.30.0.10 port 8081 after 0 ms: Couldn't connect to server
+```
+
+`ss -tlnp | grep nginx` on lab01 had already said so: `127.0.0.1:8081`. Reading the Local Address column below is what catches this.
 
 ---
 
@@ -457,32 +503,7 @@ Compare with the `ss -tlnp` output in Read the output above. Things that break s
 - **Wildcard addresses.** For a dual-stack IPv6 socket, current `ss` prints `*:9100`; `netstat` prints `:::9100` with protocol `tcp6`.
 - **Without root,** both hide processes you don't own: `ss` leaves the Process column empty, `netstat` prints `-`.
 
-### What only ss does well
-
-Filters run in the kernel query, not in a pipe:
-
-```bash
-ss -tn state time-wait                            # sockets in TIME-WAIT
-ss -tn state syn-sent                             # connection attempts stuck in handshake
-ss -tn '( sport = :443 ) and ( dst 10.0.0.0/8 )'  # inbound HTTPS from the private range
-```
-
-Per-connection TCP internals, which `netstat` never had:
-
-```bash
-ss -ti dst 10.0.1.50
-# ... cubic wscale:7,7 rto:204 rtt:3.1/1.2 mss:1448 cwnd:10 bytes_acked:52113 ...
-```
-
-`rtt`, `rto`, `cwnd` and retransmit counters per socket are often the fastest way to tell a slow network from a slow application.
-
-### Install either tool
-
-```bash
-sudo apt install iproute2 net-tools    # Debian/Ubuntu
-sudo dnf install iproute net-tools     # RHEL/Rocky/Alma/Fedora (package is "iproute")
-sudo apk add iproute2 net-tools        # Alpine
-```
+If neither is installed: the package is `iproute2` on Debian, Ubuntu and Alpine, `iproute` on the RHEL family. `netstat` is in `net-tools` everywhere.
 
 ---
 
@@ -724,25 +745,6 @@ If a new PID appears, something restarted it: systemd, a container restart polic
 | It's a service | `sudo systemctl stop <unit>` |
 | It's a container | `docker stop <container>` |
 | Force, last resort | `kill -9 <pid>` |
-
----
-
-## lsof for listeners
-
-`lsof` is handy when you want the user column, or when you are already thinking in terms of files:
-
-```bash
-sudo lsof -nP -iTCP -sTCP:LISTEN
-```
-
-```
-COMMAND    PID     USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
-sshd       812     root    3u  IPv4  21431      0t0  TCP *:22 (LISTEN)
-nginx     1190     root    6u  IPv4  24510      0t0  TCP *:80 (LISTEN)
-postgres  1342 postgres    5u  IPv4  25102      0t0  TCP 127.0.0.1:5432 (LISTEN)
-```
-
-Always pass `-nP`. Without them lsof does DNS lookups and turns ports into service names, which is slow and makes `8080` show up as `http-alt`. Note that lsof shows the master process that owns the socket. Worker processes that inherited it appear as separate lines.
 
 ---
 

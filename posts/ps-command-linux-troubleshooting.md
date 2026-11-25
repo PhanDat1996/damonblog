@@ -1,7 +1,7 @@
 ---
 title: "ps Command in Linux: Check Running Processes, Find by Name"
 date: "2026-04-21"
-updated: "2026-11-02"
+updated: "2026-11-25"
 excerpt: "Check if a process is running, find it by name with pgrep, pidof and ps -C, and read ps output: lifetime %CPU, RSS vs VSZ, STAT codes, -o recipes."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure", "monitoring"]
 featured: false
@@ -195,6 +195,47 @@ ssh host "pgrep -f worker.py"
 ```
 
 can match the remote `bash -c "pgrep -f worker.py"` process, because that shell's command line contains `worker.py`. The same happens in cron jobs and `watch`. Make the pattern something the wrapper won't contain, e.g. `pgrep -f '[w]orker.py'` (the regex still matches `worker.py`, but the literal text `[w]orker.py` in the wrapper's command line doesn't).
+
+#### From the lab: a health check that never says "not running"
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01`, procps-ng from the Ubuntu archive. Captured 25 Nov 2026. Output is copied from the terminal without edits; where a long output is shortened, it says so.
+
+A small wrapper script, the kind that ends up in cron or a monitoring agent, checking a `sleep 900` job that systemd ran as `backup-job`:
+
+```
+root@lab01:~# cat /usr/local/bin/is-running
+#!/bin/bash
+# usage: is-running <pattern>
+if pgrep -f "$1" > /dev/null; then echo "$1: running"; else echo "$1: not running"; fi
+root@lab01:~# is-running 'sleep 900'
+sleep 900: running
+root@lab01:~# systemctl stop backup-job
+root@lab01:~# is-running 'sleep 900'
+sleep 900: running
+root@lab01:~# pgrep -x sleep || echo 'no sleep process'
+no sleep process
+```
+
+The job was gone and the check still said "running". The match was the script itself: its command line is `/bin/bash /usr/local/bin/is-running sleep 900`. Running `pgrep -af` from a shell started the same way shows what it finds:
+
+```
+root@lab01:~# /bin/bash -c 'pgrep -af "sleep 900"; :' check
+520 /bin/bash -c pgrep -af "sleep 900"; : check
+root@lab01:~# /bin/bash -c 'pgrep -af "[s]leep 900"; :' check || true
+```
+
+![Terminal on lab01: is-running reports "sleep 900: running" before and after systemctl stop backup-job, pgrep -x sleep finds nothing, and pgrep -af shows it matched its own bash wrapper; the [s]leep pattern returns nothing](/images/lab-pgrep-f-false-positive.jpg)
+
+With the bracket pattern the wrapper no longer matches itself, in both directions:
+
+```
+root@lab01:~# is-running '[s]leep 900'
+[s]leep 900: not running
+root@lab01:~# systemd-run --unit=backup-job sleep 900 >/dev/null 2>&1; is-running '[s]leep 900'
+[s]leep 900: running
+```
+
+For anything systemd runs, `systemctl is-active --quiet backup-job` avoids the problem entirely.
 
 ### pidof
 
@@ -403,6 +444,30 @@ ps -eo stat,pid,wchan:32,args | awk '$1 ~ /^D/'         # tasks in D state
 ```
 
 Match the **first character** of STAT. `awk '$8 == "Z"'` on `ps aux` output misses `Zs` or `Z+`.
+
+A zombie has already exited; it is only an entry waiting for its parent to call `wait()`. You can't kill it, so the PPID is the column that matters. On the same lab box, a Python worker running as a systemd service forked three children and never reaped them:
+
+```
+root@lab01:~# ps -eo pid,ppid,stat,etime,cmd | awk '$3 ~ /^Z/'
+    425     424 Z          00:01 [python3] <defunct>
+    426     424 Z          00:01 [python3] <defunct>
+    427     424 Z          00:01 [python3] <defunct>
+root@lab01:~# ps -o pid,ppid,stat,cmd -p $(ps -eo ppid=,stat= | awk '$2 ~ /^Z/ {print $1; exit}')
+    PID    PPID STAT CMD
+    424       1 Ss   /usr/bin/python3 /opt/worker/worker.py
+root@lab01:~# systemctl status $(ps -eo ppid=,stat= | awk '$2 ~ /^Z/ {print $1; exit}') --no-pager | head -1
+● report-worker.service - /usr/bin/python3 /opt/worker/worker.py
+root@lab01:~# kill -9 $(ps -eo pid=,stat= | awk '$2 ~ /^Z/ {print $1}'); ps -eo pid,stat,cmd | awk '$2 ~ /^Z/'
+    425 Z    [python3] <defunct>
+    426 Z    [python3] <defunct>
+    427 Z    [python3] <defunct>
+root@lab01:~# systemctl stop report-worker; ps -eo pid,stat,cmd | awk '$2 ~ /^Z/' | wc -l
+0
+```
+
+![Terminal on lab01: three python3 defunct processes with PPID 424, the parent is /opt/worker/worker.py in report-worker.service, kill -9 leaves the zombies in place, stopping the service clears them](/images/lab-zombie-processes-parent.jpg)
+
+`kill -9` on the zombies changed nothing. Stopping the parent did: its children were re-parented and reaped straight away. A few zombies cost only a PID each. A count that keeps growing is a bug in the parent, and restarting that service is the fix until the code calls `wait()`.
 
 ### A user's processes, or a service's
 
