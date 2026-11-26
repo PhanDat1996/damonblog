@@ -1,7 +1,7 @@
 ---
 title: "NGINX Rate Limiting: limit_req, burst and nodelay Tested"
 date: "2026-04-22"
-updated: "2026-10-31"
+updated: "2026-11-26"
 excerpt: "Lab-tested NGINX rate limiting: what burst, nodelay and delay=N really do to 15 parallel requests, why return skips limit_req, and how to 429 and dry-run."
 tags: ["nginx", "security", "infrastructure", "production"]
 featured: false
@@ -132,7 +132,7 @@ location = /auth/login {
 }
 ```
 
-with `login_ip` keyed on `$binary_remote_addr` and `login_global` keyed on `$server_name`. The global zone is what catches credential stuffing from many IPs at one request each. The multi-IP case wasn't load tested in the lab, so size the global rate from your own peak login traffic.
+with `login_ip` keyed on `$binary_remote_addr` and `login_global` keyed on `$server_name`. The global zone is what catches credential stuffing from many IPs at one request each. Make sure the server block has a `server_name`: `$server_name` is empty without one, an empty key isn't counted, and the global zone silently does nothing. The re-run on NGINX 1.24 below hit exactly that. Size the global rate from your own peak login traffic.
 
 ---
 
@@ -271,6 +271,62 @@ To scan a whole config for rate-limit gaps along with other baseline items, use 
 
 ---
 
+## Re-run on Ubuntu 24.04 and NGINX 1.24
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01`, NGINX `1.24.0 (Ubuntu)` from the Ubuntu archive, all traffic on loopback. `burst` is a small Python client that opens N connections, waits on a barrier and releases all requests at once, binding round-robin to the source addresses given. Captured 26 Nov 2026. Output is copied from the terminal without edits.
+
+Many servers still run the 1.24 package that ships with Ubuntu 24.04, so I repeated the main tests there and added the multi-IP login case that the first lab skipped. Config, same zones as above:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=login_ip:10m rate=1r/s;
+limit_req_zone $server_name        zone=login_global:10m rate=10r/s;
+server {
+    listen 127.0.0.1:8301;
+    root /var/www/html;
+    limit_req_status 429;
+    location = /auth/login {
+        limit_req zone=login_ip     burst=5  nodelay;
+        limit_req zone=login_global burst=20 nodelay;
+        try_files /index.nginx-debian.html =404;
+    }
+}
+```
+
+(Shortened to the login parts. `/b0/`, `/b5n/` and `/ret/` use the same zone, burst and `return` settings as in the first lab; because this server sets `limit_req_status 429`, `/b0/` sets `503` explicitly. No `server_name` in the first run.)
+
+```
+root@lab01:~# nginx -v
+nginx version: nginx/1.24.0 (Ubuntu)
+root@lab01:~# burst /b0/x 15
+/b0/x x15 from 1 IP(s): 200:1, 503:14
+root@lab01:~# burst /b5n/x 15
+/b5n/x x15 from 1 IP(s): 200:6, 429:9
+root@lab01:~# burst /ret/x 15
+/ret/x x15 from 1 IP(s): 200:15
+root@lab01:~# burst /auth/login 15
+/auth/login x15 from 1 IP(s): 200:6, 429:9
+root@lab01:~# sleep 6; burst /auth/login 30 $(seq -f 127.0.0.%g 10 19)
+/auth/login x30 from 10 IP(s): 200:30
+root@lab01:~# sed -i 's|    listen 127.0.0.1:8301;|    listen 127.0.0.1:8301;\n    server_name api.lab;|' /etc/nginx/conf.d/rl.conf; nginx -t 2>&1 | tail -1; systemctl reload nginx
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+root@lab01:~# sleep 6; burst /auth/login 30 $(seq -f 127.0.0.%g 10 19)
+/auth/login x30 from 10 IP(s): 200:21, 429:9
+```
+
+![Terminal on lab01 with nginx 1.24.0: b0 gives 1 x 200 and 14 x 503, burst=5 nodelay gives 6 x 200 and 9 x 429, the return location passes all 15, the login endpoint allows 30 of 30 requests from 10 IPs until server_name is set, then 21 pass and 9 get 429](/images/lab-nginx-limit-req-global-key.jpg)
+
+The first four lines match the 1.28 results exactly, including `return` skipping the limiter (all 15 `/ret/` lines in the access log had `rl=-`). The login case didn't: 30 requests from 10 addresses, 3 each, all passed. Per IP that's within `burst=5`, so `login_ip` was right not to reject them. `login_global` should have stopped everything past 1 + 20, but the server had no `server_name`, so `$server_name` was empty and no request was counted. After adding `server_name api.lab`, the same burst gave `200:21, 429:9`, and the error log named the zone:
+
+```
+2026/11/26 02:15:39 [error] 2717#2717: *11496 limiting requests, excess: 20.980 by zone "login_global", client: 127.0.0.19, server: api.lab, request: "GET /auth/login HTTP/1.0", host: "lab"
+```
+
+`nginx -t` has no warning for this, and nothing in the error log says a zone is idle. Check `nginx -T` for a `server_name` in every server block that uses a `$server_name`-keyed zone.
+
+Zone state across a reload: a client used its 6 requests, `systemctl reload nginx` ran, and the next 6 got `429:6`. The error log showed one of those rejections coming from a worker PID that only existed after the reload, so the new workers saw the old counters.
+
+---
+
 ## Common mistakes
 
 | Mistake | What happens |
@@ -280,6 +336,7 @@ To scan a whole config for rate-limit gaps along with other baseline items, use 
 | `limit_req` + `return` in one location | Limit never runs |
 | Own `limit_req` in a location | Server-level limits no longer apply there |
 | Rate limiting the load balancer's IP | One shared bucket for everyone |
+| Keying a global zone on `$server_name` with no `server_name` set | Empty key, nothing is counted, the zone never limits |
 | Expecting it to stop a DDoS | Traffic still reaches NGINX; drop single abusive sources earlier, for example [with iptables](/blog/iptables-block-ip-example) |
 
 ---
@@ -296,7 +353,7 @@ To scan a whole config for rate-limit gaps along with other baseline items, use 
 No. Each instance has its own shared memory zone, so three nodes behind a load balancer allow roughly three times the rate per client.
 
 **Do zones survive a reload?**
-Yes, as long as the zone name and size stay the same.
+Yes, as long as the zone name and size stay the same. In the 1.24 re-run, a client that had used up its burst was still rejected by a worker started by the reload.
 
 ---
 

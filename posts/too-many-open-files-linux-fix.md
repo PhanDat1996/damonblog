@@ -1,7 +1,7 @@
 ---
 title: "Too Many Open Files on Linux: Why ulimit Didn't Fix It"
 date: "2026-04-22"
-updated: "2026-10-28"
+updated: "2026-11-26"
 excerpt: "Raised ulimit and still getting EMFILE? Find which limit is actually being hit, fix it for systemd, Docker and NGINX, and tell an FD leak from real load."
 tags: ["linux", "troubleshooting", "infrastructure", "debugging"]
 featured: false
@@ -71,12 +71,12 @@ grep "open files" /proc/$PID/limits
 # Max open files            1024                 524288               files
 
 ls /proc/$PID/fd | wc -l
-# 1021
+# 1024
 ```
 
-Soft limit 1024, 1021 in use: that's your problem, confirmed.
+Soft limit 1024, 1024 in use: that's your problem, confirmed. (Both numbers are from the lab service further down.)
 
-> **Don't count with `lsof -p`.** It also lists memory-mapped libraries, the current directory and the binary itself, none of which count toward the limit. `/proc/<pid>/fd` is the real number.
+> **Don't count with `lsof -p`.** It also lists memory-mapped libraries, the current directory and the binary itself, none of which count toward the limit. On the lab service, `lsof -p` printed 1035 lines for 1024 descriptors. `/proc/<pid>/fd` is the real number.
 
 For the system-wide picture:
 
@@ -209,10 +209,6 @@ To find what is leaking, group open FDs by type:
 ```bash
 ls -l /proc/$PID/fd | awk 'NR>1 {print $NF}' | sed -E 's/\[[0-9]+\]//' \
   | sort | uniq -c | sort -rn | head
-#  14200 socket:
-#     38 /var/log/myapp/app.log
-#     12 pipe:
-#      6 anon_inode:[eventpoll]
 ```
 
 Mostly `socket:`? Check where the connections go and what state they are in:
@@ -221,9 +217,89 @@ Mostly `socket:`? Check where the connections go and what state they are in:
 ss -tanp | grep "pid=$PID," | awk '{print $1, $5}' | sort | uniq -c | sort -rn | head
 ```
 
-Thousands of `CLOSE-WAIT` to the same destination is the classic pattern. The remote side closed the connection, and your application never called `close()`. That is a bug in the code (often an HTTP client or DB connection that isn't returned to the pool), not a tuning problem.
+The lab below shows both on a real leak. Thousands of `CLOSE-WAIT` to the same destination is the classic pattern. The remote side closed the connection, and your application never called `close()`. That is a bug in the code (often an HTTP client or DB connection that isn't returned to the pool), not a tuning problem.
 
 The same log file showing up many times means the app opens it again and again without closing it. That is also a bug.
+
+---
+
+## Lab: a leaking service on Ubuntu 24.04
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01`, systemd 255, Python 3.12, util-linux 2.39.3 (`prlimit`), NGINX 1.24.0 as the local HTTP endpoint. Captured 26 Nov 2026. Output is copied from the terminal without edits.
+
+The test service, `leaky.service`, polls `http://127.0.0.1:8080/` every 5 ms and keeps each socket in a list instead of closing it. NGINX on 8080 has `keepalive_timeout 0`, so it closes its side after every response. The unit file has no limit settings at all.
+
+### ulimit in the shell, EMFILE in the service
+
+```
+root@lab01:~# ulimit -n 65535; ulimit -n; systemctl restart leaky; sleep 12
+65535
+root@lab01:~# journalctl -u leaky -n 2 --no-pager -o cat
+poll failed: [Errno 24] Too many open files
+poll failed: [Errno 24] Too many open files
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); echo $PID; grep "open files" /proc/$PID/limits
+1814
+Max open files            1024                 524288               files     
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); ls /proc/$PID/fd | wc -l; lsof -p $PID 2>/dev/null | wc -l
+1024
+1035
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); ls -l /proc/$PID/fd | awk 'NR>1 {print $NF}' | sed -E 's/\[[0-9]+\]//' | sort | uniq -c | sort -rn | head -4
+   1023 socket:
+      1 /dev/null
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); ss -tanp | grep "pid=$PID," | awk '{print $1, $5}' | sort | uniq -c | sort -rn | head -3
+   1021 CLOSE-WAIT 127.0.0.1:8080
+```
+
+![Terminal on lab01: ulimit -n reports 65535 in the shell, the restarted leaky service logs Errno 24 Too many open files, /proc limits show 1024 soft and 524288 hard, 1024 descriptors open, 1023 of them sockets, 1021 in CLOSE-WAIT to 127.0.0.1:8080](/images/lab-emfile-systemd-service-limit.jpg)
+
+The shell's 65535 never reached the service: systemd started it with the default soft 1024 / hard 524288. Of the 1023 sockets, 1021 are the leaked TCP connections, all in `CLOSE-WAIT` to the same address; the other two are the service's stdout and stderr, which are connected to the journal. I got the PID from `systemctl show -p MainPID`, not `pgrep -f leaky.py`: inside a `bash -c` one-liner, `pgrep -f` also matched the shell running the command.
+
+### Raising the limit on a leak only buys time
+
+`prlimit` worked on the running process, and the count kept going:
+
+```
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); prlimit --pid $PID --nofile=65535:65535; grep "open files" /proc/$PID/limits
+Max open files            65535                65535                files     
+root@lab01:~# PID=$(systemctl show -p MainPID --value leaky); for i in 1 2 3 4; do echo "$(date +%T) $(ls /proc/$PID/fd | wc -l)"; sleep 10; done
+02:05:38 1024
+02:05:48 2823
+02:05:58 4660
+02:06:08 6494
+```
+
+![Terminal on lab01: prlimit raises the leaky service to 65535, then the open descriptor count climbs from 1024 to 2823, 4660 and 6494 in 10-second steps](/images/lab-fd-leak-prlimit-growth.jpg)
+
+About 180 new descriptors a second, never going down. At that rate 65535 lasts around six minutes. This is the "only ever goes up" pattern from the previous section, and the fix is the missing `close()`, not a bigger number.
+
+### Where the permanent limit has to go
+
+A drop-in for the unit, then `daemon-reload` on its own, then a restart:
+
+```
+root@lab01:~# grep "open files" /proc/$(systemctl show -p MainPID --value leaky)/limits
+Max open files            1024                 524288               files     
+root@lab01:~# mkdir -p /etc/systemd/system/leaky.service.d; printf '[Service]\nLimitNOFILE=65535\n' > /etc/systemd/system/leaky.service.d/limits.conf
+root@lab01:~# systemctl daemon-reload; grep "open files" /proc/$(systemctl show -p MainPID --value leaky)/limits
+Max open files            1024                 524288               files     
+root@lab01:~# systemctl restart leaky; grep "open files" /proc/$(systemctl show -p MainPID --value leaky)/limits
+Max open files            65535                65535                files     
+```
+
+And `limits.conf` with a `*` line, checked through a login for a normal user, a login for root, and a systemd unit running as the same normal user:
+
+```
+root@lab01:~# cat /etc/security/limits.d/90-nofile.conf
+*  soft  nofile  4096
+root@lab01:~# su - damon -c 'ulimit -Sn'
+4096
+root@lab01:~# su - root -c 'ulimit -Sn'
+1024
+root@lab01:~# systemd-run --quiet --wait --pipe -p User=damon bash -c 'ulimit -Sn'
+1024
+```
+
+Only the PAM login for `damon` picked it up. Root didn't match `*`, and the systemd unit ignored the file even though it ran as `damon`.
 
 ---
 
