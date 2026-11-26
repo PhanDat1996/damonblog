@@ -1,7 +1,7 @@
 ---
 title: "NGINX Troubleshooting: Fix 502, 504, 403 and Config Errors"
 date: "2026-04-21"
-updated: "2026-10-31"
+updated: "2026-11-26"
 excerpt: "Lab-tested NGINX troubleshooting: map each error-log line to its cause, from 502/504, 403/404 and 499 to startup failures, TLS chain errors and reloads."
 tags: ["nginx", "troubleshooting", "production", "infrastructure"]
 featured: true
@@ -263,7 +263,7 @@ Oct 31 02:57:05 damon systemd[1]: nginx.service: Control process exited, code=ex
 Oct 31 02:57:05 damon systemd[1]: Reload failed for nginx.service - A high performance web server and a reverse proxy server.
 ```
 
-The site kept serving its previous content right after. On this Ubuntu package the failure isn't silent: `systemctl reload` exits `1` and says so, because `nginx -s reload` parses the config before signalling the master. The danger is a deploy script that ignores the exit code. Chain it: `nginx -t && systemctl reload nginx`.
+The site kept serving its previous content right after. On this Ubuntu package the failure isn't silent: `systemctl reload` exits `1` and says so, because `nginx -s reload` parses the config before signalling the master. The danger is a deploy script that ignores the exit code, or one that sends the signal itself: `kill -HUP` on the master returns `0` and the error only lands in the error log (shown in the 1.24 re-run below). Chain it: `nginx -t && systemctl reload nginx`.
 
 ### 2. A different server block handles the request
 
@@ -324,7 +324,7 @@ If `proxy_pass` contains any path, even a single `/`, the matched location prefi
 
 ## Other config traps
 
-**`localhost` in `proxy_pass`.** The usual advice is that `localhost` can resolve to both `::1` and `127.0.0.1`, so an IPv4-only app sees failed attempts on `::1` first. On this VM it didn't reproduce: `getent ahosts localhost` returned only `127.0.0.1`, and `proxy_pass http://localhost:9501` worked with no errors logged. It depends on `/etc/hosts`, so `127.0.0.1` is still the safer choice.
+**`localhost` in `proxy_pass`.** The usual advice is that `localhost` can resolve to both `::1` and `127.0.0.1`, so an IPv4-only app sees failed attempts on `::1` first. On this VM it didn't reproduce: `getent ahosts localhost` returned only `127.0.0.1`, and `proxy_pass http://localhost:9501` worked with no errors logged. The 1.24 re-run had `::1` on `lo` and a `::1 localhost` line in `/etc/hosts`, and it still didn't reproduce: glibc returned only `127.0.0.1`. It depends on the resolver setup, so `127.0.0.1` is still the safer choice.
 
 **Upstream keepalive without its headers.** Before 1.29.7, `keepalive` needs `proxy_http_version 1.1` and `proxy_set_header Connection ""` in the location. In the [keepalive lab](/blog/nginx-upstream-keepalive), the half config still used one connection per request, and with some backends it caused errors that only retries hid.
 
@@ -349,6 +349,44 @@ A reload keeps the master and starts new workers. Old workers finish their in-fl
 - You changed the systemd unit or its limits, such as `LimitNOFILE`.
 - The master process itself is stuck.
 - You need the new binary after an upgrade and the package didn't handle it.
+
+---
+
+## Re-run on Ubuntu 24.04 and NGINX 1.24
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01`, NGINX `1.24.0 (Ubuntu)` from the Ubuntu archive, systemd 255, a Python `http.server` backend on `127.0.0.1:9501`. Captured 26 Nov 2026. Output is copied from the terminal without edits.
+
+The lab above ran NGINX 1.28 on Ubuntu 26.04. Ubuntu 24.04 still ships 1.24, so I repeated the permission 403 and the failed reload there, and tried one way of reloading the earlier run didn't cover: sending `SIGHUP` to the master directly, which is what some deploy scripts and older init scripts do.
+
+```
+root@lab01:~# curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: site.lab' http://127.0.0.1:8501/perm/file.txt
+403
+root@lab01:~# tail -n 1 /var/log/nginx/error.log
+2026/11/26 02:16:25 [error] 2804#2804: *11524 open() "/srv/site/perm/file.txt" failed (13: Permission denied), client: 127.0.0.1, server: site.lab, request: "GET /perm/file.txt HTTP/1.1", host: "site.lab"
+root@lab01:~# runuser -u www-data -- namei -l /srv/site/perm/file.txt
+f: /srv/site/perm/file.txt
+drwxr-xr-x root root /
+drwxr-xr-x root root srv
+drwxr-xr-x root root site
+drwx------ root root perm
+                      file.txt - Permission denied
+root@lab01:~# echo 'proxy_passs http://127.0.0.1:9501;' > /etc/nginx/conf.d/broken.conf
+root@lab01:~# systemctl reload nginx; echo "systemctl reload rc=$?"
+Job for nginx.service failed.
+See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.
+systemctl reload rc=1
+root@lab01:~# kill -HUP $(cat /run/nginx.pid); echo "kill -HUP rc=$?"; sleep 1; tail -n 2 /var/log/nginx/error.log
+kill -HUP rc=0
+2026/11/26 02:16:25 [error] 2804#2804: *11524 open() "/srv/site/perm/file.txt" failed (13: Permission denied), client: 127.0.0.1, server: site.lab, request: "GET /perm/file.txt HTTP/1.1", host: "site.lab"
+2026/11/26 02:16:26 [emerg] 1705#1705: unknown directive "proxy_passs" in /etc/nginx/conf.d/broken.conf:1
+root@lab01:~# systemctl is-active nginx; curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: site.lab' http://127.0.0.1:8501/ip/
+active
+200
+```
+
+![Terminal on lab01 with nginx 1.24.0: a 403 with "(13: Permission denied)" in the error log, namei as www-data stops at the drwx------ perm directory, systemctl reload with a typo exits 1, kill -HUP exits 0 and the emerg line appears only in the error log, nginx stays active and keeps serving](/images/lab-nginx-403-failed-reload.jpg)
+
+The 403 and the `systemctl reload` failure look the same as on 1.28. (`runuser` instead of `sudo -u` because this box has no sudo; the result is the same.) The `SIGHUP` is the one to watch: the shell reports success, the master (PID 1705, the one in `/run/nginx.pid`) logs `[emerg]` and keeps the old configuration, and `systemctl is-active` still says `active`. A script that reloads this way has no exit code to check, so run `nginx -t` first.
 
 ---
 

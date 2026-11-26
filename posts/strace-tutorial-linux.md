@@ -1,7 +1,7 @@
 ---
 title: "strace Tutorial: Trace a Running Linux Process Safely"
 date: "2026-04-21"
-updated: "2026-10-28"
+updated: "2026-11-26"
 excerpt: "Use strace to see why a process hangs, fails or is slow: attach to a PID, filter syscalls, read the output, and know what it costs a production service."
 tags: ["linux", "troubleshooting", "debugging", "infrastructure"]
 featured: false
@@ -102,6 +102,8 @@ Two common beliefs that are wrong:
 - **"`-c` is low overhead."** `-c` prints less, but the process still stops on every syscall. The cost is similar to a full trace.
 - **"`-e trace=` filtering reduces the overhead."** When attaching with `-p`, strace still stops on every syscall and just doesn't print the others. Since strace 5.3, `--seccomp-bpf` can filter in the kernel so unrelated syscalls don't stop at all, but it only works for processes strace **starts** (with `-f`), not for `-p`.
 
+The lab below puts numbers on both: a filtered `-p` attach that printed nothing cut a process's throughput to under 3% of normal.
+
 Practical rules:
 
 - Keep traces short: seconds to a minute, not "leave it running".
@@ -174,7 +176,9 @@ poll([{fd=9, events=POLLOUT}], 1, 5000) = 1 ([{fd=9, revents=POLLOUT|POLLERR|POL
 getsockopt(9, SOL_SOCKET, SO_ERROR, [111], [4]) = 0
 ```
 
-`EINPROGRESS` isn't the error. The real result is the `SO_ERROR` value: `111` is `ECONNREFUSED`, `110` is `ETIMEDOUT` (newer strace versions print the name instead of the number). A `poll` that waits its full timeout (`<5.00...>`) before `SO_ERROR` returns 110 means packets are being dropped somewhere: host down, routing, or a firewall `DROP`. [Test TCP connections](/blog/cannot-connect-to-server-linux-troubleshooting) has the next steps.
+`EINPROGRESS` isn't the error. The real result is the `SO_ERROR` value: `111` is `ECONNREFUSED`, `110` is `ETIMEDOUT` (newer strace versions print the name instead of the number; 6.8 prints `[ECONNREFUSED]`).
+
+When packets are dropped (host down, routing, a firewall `DROP`), what you see depends on whose timeout runs out first. If the application's own timeout is shorter than the kernel's, the `poll` returns `0 (Timeout)` after the full wait and `SO_ERROR` is still `0`: the connect hasn't failed yet, the application just stopped waiting and reports its own "timed out". `110` only appears when the kernel gives up on its SYN retries, which with the default `tcp_syn_retries=6` takes over two minutes (134 s in the lab below). Either way, a `poll` that sits for its whole timeout on a fresh connect means the SYN got no answer. [Test TCP connections](/blog/cannot-connect-to-server-linux-troubleshooting) has the next steps.
 
 Slow DNS looks like this: a `connect` to port 53, then `poll` calls that each take seconds.
 
@@ -233,6 +237,118 @@ grep execve /tmp/exec.txt | grep -v ENOENT
 ```
 
 Every command with its full arguments, including those buried in sourced files. (`ENOENT` lines are the shell searching `PATH`; filter them out.)
+
+---
+
+## Lab: overhead and connect failures, measured
+
+> **Lab environment:** Ubuntu 24.04.5 LTS test box `lab01` (aarch64, 2 vCPUs), strace 6.8, Python 3.12, `kernel.yama.ptrace_scope=1`. Captured 26 Nov 2026. Output is copied from the terminal without edits. On aarch64 there is no `poll` syscall, so the traces show `ppoll`; on x86_64 the same Python code shows `poll`.
+
+### What a filtered attach costs
+
+`dd` copying one byte per syscall, its read rate taken from `/proc/<pid>/io` over 5 seconds (`rate` is a three-line helper that does exactly that). Then the same while strace is attached with `-e trace=openat`, a syscall `dd` doesn't make at that point, so the trace prints nothing:
+
+```
+root@lab01:~# dd if=/dev/zero of=/dev/null bs=1 status=none & echo $! > /tmp/dd.pid
+root@lab01:~# rate $(cat /tmp/dd.pid) 5
+3288253 bytes/s
+root@lab01:~# strace -f -e trace=openat -p $(cat /tmp/dd.pid) -o /dev/null & sleep 1; rate $(cat /tmp/dd.pid) 5; kill -INT %1; wait
+strace: Process 2194 attached
+91167 bytes/s
+strace: Process 2194 detached
+root@lab01:~# rate $(cat /tmp/dd.pid) 5
+3351370 bytes/s
+```
+
+From 3.29 MB/s to 91 KB/s, about 36 times slower, with an empty trace. It recovered as soon as strace detached. Starting the process under strace instead, 500,000 one-byte copies took:
+
+| Command | real |
+|---|---|
+| `dd` alone | 0.154 s |
+| `strace -o /dev/null dd ...` (full trace) | 28.360 s |
+| `strace -c -o /dev/null dd ...` | 22.408 s |
+| `strace -e trace=openat -o /dev/null dd ...` | 21.659 s |
+| `strace --seccomp-bpf -e trace=openat ...` (no `-f`) | 22.523 s |
+| `strace -f --seccomp-bpf -e trace=openat ...` | 0.178 s |
+
+`-c` and `-e trace=` saved little. `--seccomp-bpf` was the only thing that helped, and only with `-f`: without it strace 6.8 printed `--seccomp-bpf cannot be used without -f/--follow-forks, disabling`. On an attached process it is refused outright:
+
+```
+root@lab01:~# time strace -f --seccomp-bpf -e trace=openat -o /dev/null dd if=/dev/zero of=/dev/null bs=1 count=500000 status=none
+
+real	0m0.178s
+user	0m0.050s
+sys	0m0.121s
+root@lab01:~# dd if=/dev/zero of=/dev/null bs=1 count=50000000 status=none & sleep 1; timeout -s INT 5 strace -f --seccomp-bpf -e trace=openat -p $! -o /dev/null; kill $!
+strace: --seccomp-bpf is not enabled for processes attached with -p
+strace: Process 2176 attached
+strace: Process 2176 detached
+```
+
+![Terminal on lab01: dd reads 3288253 bytes/s, drops to 91167 bytes/s while strace -p with -e trace=openat is attached, and recovers after detach; strace -f --seccomp-bpf runs the same dd in 0.178 s, and with -p strace says seccomp-bpf is not enabled for attached processes](/images/lab-strace-attach-overhead.jpg)
+
+### A refused connect and a dropped one
+
+A small Python client doing a non-blocking connect the way event loops do, then `poll` and `SO_ERROR`. First a closed local port, then an address where an `iptables -A OUTPUT ... -j DROP` rule eats the SYN, with a 5-second and a 300-second application timeout:
+
+```
+root@lab01:~# strace -T -e trace=connect,ppoll,poll,getsockopt python3 /root/nbconnect.py 127.0.0.1 9999
+connect(3, {sa_family=AF_INET, sin_port=htons(9999), sin_addr=inet_addr("127.0.0.1")}, 16) = -1 EINPROGRESS (Operation now in progress) <0.000070>
+ppoll([{fd=3, events=POLLOUT}], 1, {tv_sec=3, tv_nsec=0}, NULL, 0) = 1 ([{fd=3, revents=POLLOUT|POLLERR|POLLHUP}], left {tv_sec=2, tv_nsec=999999666}) <0.000002>
+getsockopt(3, SOL_SOCKET, SO_ERROR, [ECONNREFUSED], [4]) = 0 <0.000003>
+SO_ERROR = 111
+root@lab01:~# strace -o /tmp/nb.txt -T -e trace=connect,ppoll,getsockopt python3 /root/nbconnect.py 172.30.0.20 9999 5000; cat /tmp/nb.txt
+SO_ERROR = 0
+connect(3, {sa_family=AF_INET, sin_port=htons(9999), sin_addr=inet_addr("172.30.0.20")}, 16) = -1 EINPROGRESS (Operation now in progress) <0.000045>
+ppoll([{fd=3, events=POLLOUT}], 1, {tv_sec=5, tv_nsec=0}, NULL, 0) = 0 (Timeout) <5.004164>
+getsockopt(3, SOL_SOCKET, SO_ERROR, [0], [4]) = 0 <0.000025>
++++ exited with 0 +++
+root@lab01:~# strace -o /tmp/nb.txt -T -e trace=connect,ppoll,getsockopt python3 /root/nbconnect.py 172.30.0.20 9999 300000; cat /tmp/nb.txt
+SO_ERROR = 110
+connect(3, {sa_family=AF_INET, sin_port=htons(9999), sin_addr=inet_addr("172.30.0.20")}, 16) = -1 EINPROGRESS (Operation now in progress) <0.000044>
+ppoll([{fd=3, events=POLLOUT}], 1, {tv_sec=300, tv_nsec=0}, NULL, 0) = 1 ([{fd=3, revents=POLLOUT|POLLERR|POLLHUP}], left {tv_sec=165, tv_nsec=587634581}) <134.412414>
+getsockopt(3, SOL_SOCKET, SO_ERROR, [ETIMEDOUT], [4]) = 0 <0.000030>
++++ exited with 0 +++
+```
+
+![Terminal on lab01: strace of a non-blocking connect; a closed port gives SO_ERROR ECONNREFUSED immediately, a dropped SYN with a 5 s timeout gives ppoll Timeout and SO_ERROR 0, and with a 300 s timeout the kernel gives up after 134 s with ETIMEDOUT](/images/lab-strace-nonblocking-connect.jpg)
+
+The refused connect was over in microseconds. The dropped one with a 5-second timeout never produced an error code at all. The last two runs wrote the trace to a file with `-o`, which keeps the program's own output from mixing into strace's lines.
+
+### -c against -c -w
+
+Three one-second sleeps, counted both ways:
+
+```
+root@lab01:~# strace -f -c -e trace=clock_nanosleep,write bash -c 'for i in 1 2 3; do sleep 1; echo tick >/dev/null; done' 2>&1 | head -6
+strace: Process 2398 attached
+strace: Process 2399 attached
+strace: Process 2400 attached
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 70.24    0.000059          19         3           clock_nanosleep
+root@lab01:~# strace -f -c -w -e trace=clock_nanosleep,write bash -c 'for i in 1 2 3; do sleep 1; echo tick >/dev/null; done' 2>&1 | head -6
+strace: Process 2412 attached
+strace: Process 2413 attached
+strace: Process 2414 attached
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+100.00    3.001365     1000454         3           clock_nanosleep
+```
+
+Three seconds of sleeping show up as 59 microseconds with plain `-c`.
+
+### Attaching as a normal user
+
+With `ptrace_scope=1`, a user can't attach to their own process unless it's a descendant of the tracer:
+
+```
+root@lab01:~# cat /proc/sys/kernel/yama/ptrace_scope; su - damon -c 'sleep 60 & sleep 0.2; strace -p $! -e trace=none 2>&1 | head -2; kill %1'
+1
+strace: attach: ptrace(PTRACE_SEIZE, 2424): Operation not permitted
+```
+
+The `sleep` belonged to `damon` and was started by the same shell, but it was a sibling of `strace`, not its child.
 
 ---
 
